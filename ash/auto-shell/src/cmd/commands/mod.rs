@@ -1,0 +1,10 @@
+pub mod cd;
+pub mod echo;
+pub mod get;
+pub mod grep;
+pub mod help;
+pub mod ls;
+pub mod pwd;
+pub mod r#where;
+pub mod select;
+pub mod wc;
