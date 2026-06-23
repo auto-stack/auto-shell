@@ -1,0 +1,11 @@
+# Plan 330 Phase 3: ash-gui workspace (the AutoUI version of ash).
+#
+# This is a SEPARATE workspace from ../ash so that its `ui-iced` request on
+# auto-lang does NOT unify into the CLI workspace. Cargo feature isolation is
+# per-workspace, so:
+#   cd ash-gui && cargo build   → compiles auto-lang WITH ui-iced (iced compiles)
+#   cd ash      && cargo build   → compiles auto-lang WITHOUT ui-iced (no iced)
+# The two never cross-contaminate.
+[workspace]
+members = ["ash-gui-bin"]
+resolver = "2"

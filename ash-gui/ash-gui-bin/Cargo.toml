@@ -1,0 +1,16 @@
+[package]
+name = "ash-gui-bin"
+version = "0.1.0"
+edition = "2021"
+description = "ASH GUI — AutoUI (iced) version of ash. Scaffold (Plan 330 Phase 3)."
+
+[[bin]]
+name = "ash-gui"
+path = "src/main.rs"
+
+[dependencies]
+# Shared shell logic (same as the CLI version uses).
+ash-core = { path = "../../ash-core" }
+# auto-lang WITH the ui-iced backend (the whole point of this workspace).
+# Path points back at the auto-lang repo; switch to git/version once published.
+auto-lang = { path = "../../../auto-lang/crates/auto-lang", features = ["ui-iced"] }
