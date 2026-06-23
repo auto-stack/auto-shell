@@ -6,7 +6,6 @@ use nu_ansi_term::Color;
 
 pub struct DirectoryModule {
     style: SegmentStyle,
-    truncation_length: usize,
     home_symbol: String,
 }
 
@@ -18,7 +17,6 @@ impl DirectoryModule {
                 bold: true,
                 ..Default::default()
             },
-            truncation_length: config.module_int("directory", "truncation_length", 3) as usize,
             home_symbol: config
                 .module_string("directory", "home_symbol", "~")
                 .to_string(),
@@ -49,13 +47,6 @@ impl PromptModule for DirectoryModule {
             dir_str = dir_str[4..].to_string();
         }
 
-        // Truncate to N path components from the right
-        let components: Vec<&str> = dir_str.split('/').filter(|s| !s.is_empty()).collect();
-        if components.len() > self.truncation_length {
-            let start = components.len() - self.truncation_length;
-            dir_str = components[start..].join("/");
-        }
-
         Some(PromptSegment::new(
             format!("{} ", dir_str),
             self.style.clone(),
@@ -84,7 +75,8 @@ mod tests {
     }
 
     #[test]
-    fn test_directory_truncation() {
+    fn test_directory_shows_full_path_no_truncation() {
+        // Deep paths must render in full — no last-N-components truncation.
         let ctx = AshContext::new(
             PathBuf::from("/home/user/a/b/c/d"),
             PathBuf::from("/home/user"),
@@ -94,10 +86,6 @@ mod tests {
         );
         let module = DirectoryModule::new(&AshConfig::default());
         let seg = module.render(&ctx).unwrap();
-        // ~/a/b/c/d → split by "/" → ["~", "a", "b", "c", "d"], filter empty → ["~", "a", "b", "c", "d"]
-        // Actually "~" stays, so 5 components → last 3 = "c/d"... but "~" is kept
-        // The actual result depends on how ~ replaces the home prefix
-        // ~/a/b/c/d has components: ["~", "a", "b", "c", "d"] = 5, last 3 = "b/c/d"
-        assert_eq!(seg.content, "b/c/d ");
+        assert_eq!(seg.content, "~/a/b/c/d ");
     }
 }
