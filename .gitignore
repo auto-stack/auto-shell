@@ -1,0 +1,17 @@
+# Rust build artifacts — each workspace (ash/, ash-gui/...) has its own target/
+/target/
+**/target/
+
+# Binaries / build output
+*.exe
+*.pdb
+
+# Editor / OS cruft
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Note: Cargo.lock IS committed — these are binary crates (ash, ash-gui),
+# where lockfiles should be tracked.
