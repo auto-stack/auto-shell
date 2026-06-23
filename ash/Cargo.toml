@@ -1,0 +1,8 @@
+# Plan 330: ash CLI/TUI workspace.
+# Isolated from the auto-lang workspace so that `cargo build` here compiles
+# auto-lang WITHOUT ui-iced (auto-shell/ash-core do not opt in). The future
+# ash-gui version will live in a SEPARATE workspace (../ash-gui) so its
+# ui-iced request doesn't unify into this one.
+[workspace]
+members = ["auto-shell"]
+resolver = "2"

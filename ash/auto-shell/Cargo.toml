@@ -11,16 +11,16 @@ name = "ash"
 path = "src/main.rs"
 
 [dependencies]
-# AutoLang integration
-auto-lang = { path = "../auto-lang" }
-auto-val = { path = "../auto-val" }
+# AutoLang integration (Plan 330: paths point back to the auto-lang repo)
+auto-lang = { path = "../../../auto-lang/crates/auto-lang" }
+auto-val = { path = "../../../auto-lang/crates/auto-val" }
 
-# Plan 325: AI client for F3 AI mode (from auto-ai repo at ../auto-ai)
+# Plan 325: AI client for F3 AI mode (from auto-ai repo at ../../../auto-ai)
 auto-ai-client = { path = "../../../auto-ai/crates/auto-ai-client" }
 tokio = { version = "1", features = ["full"] }
 
 # Ash Core (pure logic, zero terminal deps)
-ash-core = { path = "../ash-core" }
+ash-core = { path = "../../ash-core" }
 
 # Terminal and REPL
 reedline = "0.44.0"

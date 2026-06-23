@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 # AutoLang value system
-auto-val = { path = "../auto-val" }
+auto-val = { path = "../../auto-lang/crates/auto-val" }
 
 # Data structures
 indexmap = "2.0"
