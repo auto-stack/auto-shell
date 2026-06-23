@@ -475,27 +475,7 @@ fn list_recursive(
     Ok(output)
 }
 
-/// Change directory (returns new path if successful)
-pub fn cd_command(path: &Path, current_dir: &Path) -> Result<PathBuf> {
-    let new_dir = if path.is_absolute() {
-        path.to_path_buf()
-    } else if path.starts_with("~") {
-        // Expand ~ to home directory
-        dirs::home_dir().unwrap_or_else(|| current_dir.to_path_buf())
-            .join(path.strip_prefix("~").unwrap_or(Path::new("")))
-    } else {
-        current_dir.join(path)
-    };
 
-    // Try to canonicalize the path
-    let canonical = new_dir.canonicalize().into_diagnostic()?;
-
-    if canonical.is_dir() {
-        Ok(canonical)
-    } else {
-        miette::bail!("cd: {}: Not a directory", path.display());
-    }
-}
 
 /// Make directory
 pub fn mkdir_command(path: &Path, current_dir: &Path, parents: bool) -> Result<String> {
@@ -624,16 +604,6 @@ mod tests {
         let path = Path::new("/nonexistent/path/that/does/not/exist");
         let current = Path::new("/");
         assert!(ls_command(path, current, false, false, false, false, false, false).is_err());
-    }
-
-    #[test]
-    fn test_cd_resolve() {
-        let current = std::env::current_dir().unwrap();
-        let result = cd_command(Path::new("."), &current);
-        assert!(result.is_ok());
-        // cd to current dir should resolve to same location
-        let resolved = result.unwrap();
-        assert!(resolved.exists());
     }
 
     #[test]

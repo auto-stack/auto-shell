@@ -897,8 +897,19 @@ impl Shell {
         } else if path.starts_with('/') {
             PathBuf::from(path)
         } else if path.starts_with('~') {
-            // Expand ~ to home directory
-            dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"))
+            // Expand ~ (and ~/sub) to home directory, preserving any suffix.
+            // NOTE: strip_prefix("~") on "~/foo" yields "/foo" (keeps the
+            // separator). PathBuf::join treats a value with a leading
+            // separator as absolute and would REPLACE home, so we must strip
+            // the leading separator (both '/' and '\') before joining.
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+            let suffix = path.strip_prefix("~").unwrap_or("");
+            let rest = suffix.trim_start_matches(['/', '\\']);
+            if rest.is_empty() {
+                home
+            } else {
+                home.join(rest)
+            }
         } else {
             self.current_dir.join(path)
         };
@@ -1384,6 +1395,14 @@ impl Shell {
             Some(h) => h.to_string_lossy().to_string(),
             None => return input.to_string(),
         };
+        // On Windows the home path uses backslashes (C:\Users\foo). We expand
+        // `~` BEFORE word-splitting/quote-parsing runs, and the quote parser
+        // treats a bare `\` as an escape char — which would strip the
+        // separators out of the expanded path (C:\Users\foo → C:Usersfoo).
+        // Normalizing to forward slashes avoids that, and forward-slash paths
+        // are accepted by std::path on Windows.
+        #[cfg(windows)]
+        let home = home.replace('\\', "/");
 
         let mut result = String::with_capacity(input.len() + 64);
         let mut chars = input.chars().peekable();
@@ -1431,6 +1450,8 @@ impl Shell {
                                 chars.next();
                             }
                             if let Some(user_home) = lookup_user_home(&username) {
+                                #[cfg(windows)]
+                                let user_home = user_home.replace('\\', "/");
                                 result.push_str(&user_home);
                             } else {
                                 // User not found — keep ~username literal.
@@ -4119,5 +4140,74 @@ mod tests {
     fn test_arithmetic_negative() {
         assert_eq!(expand_arithmetic("$((-5+3))"), "-2");
         assert_eq!(expand_arithmetic("$((0-10))"), "-10");
+    }
+
+    // ---- cd ~ expansion ----
+    #[test]
+    fn test_cd_home_tilde() {
+        let mut shell = Shell::new();
+        let home = dirs::home_dir().unwrap();
+        shell.cd("~").unwrap();
+        // Compare via canonicalize to ignore the \\?\ UNC prefix that
+        // canonicalize() adds on Windows.
+        assert_eq!(
+            shell.pwd().canonicalize().unwrap(),
+            home.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_cd_home_subdir_preserves_suffix() {
+        // ~/foo must resolve to home/foo, not silently drop "foo".
+        let mut shell = Shell::new();
+        let home = dirs::home_dir().unwrap();
+        // Create a real subdir under home so cd can succeed.
+        let target = home.join("ash_cd_tilde_test_subdir");
+        std::fs::create_dir_all(&target).unwrap();
+        shell.cd("~/ash_cd_tilde_test_subdir").unwrap();
+        assert_eq!(shell.pwd(), target.canonicalize().unwrap());
+        std::fs::remove_dir(&target).ok();
+    }
+
+    #[test]
+    fn test_cd_home_nonexistent_subdir_errors() {
+        // A nonexistent ~/subdir must NOT silently succeed (regression guard).
+        let mut shell = Shell::new();
+        let before = shell.pwd();
+        let result = shell.cd("~/ash_definitely_does_not_exist_zzz");
+        assert!(result.is_err(), "cd to nonexistent ~/subdir should error");
+        assert_eq!(shell.pwd(), before, "failed cd must not move pwd");
+    }
+
+    // ---- ls ~ : tilde must expand to home for path-taking commands ----
+    #[test]
+    fn test_ls_tilde_lists_home() {
+        let mut shell = Shell::new();
+        let home = dirs::home_dir().unwrap();
+        // Sanity: home must contain at least one entry for the test to be meaningful.
+        let count = std::fs::read_dir(&home).unwrap().count();
+        assert!(count > 0, "home dir must be non-empty for this test");
+
+        let out = shell.execute("ls ~").unwrap_or(None);
+        let listing = out.unwrap_or_default();
+        assert!(
+            !listing.trim().is_empty(),
+            "ls ~ should list home contents, got empty output"
+        );
+    }
+
+    #[test]
+    fn test_execute_cd_tilde_via_full_pipeline() {
+        // cd ~ typed at the prompt goes through expand_tilde (producing an
+        // absolute path) BEFORE Shell::cd sees it. Ensure the full execute()
+        // path still lands in home on Windows (regression guard for absolute
+        // path recognition in Shell::cd).
+        let mut shell = Shell::new();
+        let home = dirs::home_dir().unwrap();
+        shell.execute("cd ~").unwrap();
+        assert_eq!(
+            shell.pwd().canonicalize().unwrap(),
+            home.canonicalize().unwrap()
+        );
     }
 }
