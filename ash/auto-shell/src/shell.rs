@@ -148,6 +148,7 @@ impl Shell {
             reg.register(Box::new(commands::mkdir::MkdirCommand));
             // Batch 1: File operations
             reg.register(Box::new(commands::cat::CatCommand));
+            reg.register(Box::new(commands::open::OpenCommand));
             reg.register(Box::new(commands::head::HeadCommand));
             reg.register(Box::new(commands::tail::TailCommand));
             reg.register(Box::new(commands::touch::TouchCommand));

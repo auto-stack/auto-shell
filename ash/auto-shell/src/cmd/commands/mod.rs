@@ -37,6 +37,7 @@ pub mod math_round;
 pub mod math_sum;
 pub mod mkdir;
 pub mod mv;
+pub mod open;
 pub mod paste;
 pub mod ps;
 pub mod pwd;
