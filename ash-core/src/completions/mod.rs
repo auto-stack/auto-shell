@@ -338,6 +338,7 @@ mod tests {
                     required: false,
                     is_flag: true,
                     short: Some('a'),
+                    is_option: false,
                 },
                 CompletionArgument {
                     name: "long".into(),
@@ -345,6 +346,7 @@ mod tests {
                     required: false,
                     is_flag: true,
                     short: Some('l'),
+                    is_option: false,
                 },
             ],
         }];

@@ -27,7 +27,10 @@ pub fn complete_flags(
     let is_short = !is_long && prefix.starts_with('-');
 
     for arg in &sig.arguments {
-        if !arg.is_flag {
+        // Skip pure positional args; flags AND options are completable here.
+        // (Plan 005: options were previously skipped, so -w/-k/--with never
+        //  appeared. Their *values* are not completed in this phase.)
+        if !arg.is_flag && !arg.is_option {
             continue;
         }
 
@@ -99,6 +102,7 @@ mod tests {
                     required: false,
                     is_flag: true,
                     short: Some('a'),
+                    is_option: false,
                 },
                 CompletionArgument {
                     name: "long".into(),
@@ -106,6 +110,7 @@ mod tests {
                     required: false,
                     is_flag: true,
                     short: Some('l'),
+                    is_option: false,
                 },
                 CompletionArgument {
                     name: "recursive".into(),
@@ -113,6 +118,7 @@ mod tests {
                     required: false,
                     is_flag: true,
                     short: Some('R'),
+                    is_option: false,
                 },
                 CompletionArgument {
                     name: "path".into(),
@@ -120,6 +126,7 @@ mod tests {
                     required: false,
                     is_flag: false,
                     short: None,
+                    is_option: false,
                 },
             ],
         }
@@ -167,5 +174,63 @@ mod tests {
         let sigs = vec![ls_sig()];
         let result = complete_flags("--", "nonexistent", &sigs, &[]);
         assert!(result.is_empty());
+    }
+
+    // ---- Plan 005: option name completion ----
+
+    fn sort_sig() -> CompletionSignature {
+        CompletionSignature {
+            name: "sort".into(),
+            description: "Sort lines or records".into(),
+            arguments: vec![
+                CompletionArgument {
+                    name: "reverse".into(),
+                    description: "Reverse".into(),
+                    required: false,
+                    is_flag: true,
+                    short: Some('r'),
+                    is_option: false,
+                },
+                CompletionArgument {
+                    name: "with".into(),
+                    description: "Sort by FIELD".into(),
+                    required: false,
+                    is_flag: false,
+                    short: Some('w'),
+                    is_option: true,
+                },
+                CompletionArgument {
+                    name: "key".into(),
+                    description: "Sort by column".into(),
+                    required: false,
+                    is_flag: false,
+                    short: Some('k'),
+                    is_option: true,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn complete_option_short_and_long() {
+        let sigs = vec![sort_sig()];
+        let result = complete_flags("-", "sort", &sigs, &[]);
+        let values: Vec<&str> = result.iter().map(|c| c.replacement.as_str()).collect();
+        // flags and options both appear
+        assert!(values.contains(&"-r"), "flag -r should appear: {values:?}");
+        assert!(values.contains(&"-w"), "option -w should appear: {values:?}");
+        assert!(values.contains(&"-k"), "option -k should appear: {values:?}");
+        assert!(
+            values.contains(&"--with"),
+            "option long --with should appear: {values:?}"
+        );
+    }
+
+    #[test]
+    fn complete_option_long_prefix() {
+        let sigs = vec![sort_sig()];
+        let result = complete_flags("--w", "sort", &sigs, &[]);
+        let values: Vec<&str> = result.iter().map(|c| c.replacement.as_str()).collect();
+        assert_eq!(values, vec!["--with"]);
     }
 }

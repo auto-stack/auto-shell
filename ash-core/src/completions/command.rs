@@ -80,6 +80,7 @@ mod tests {
                     required: false,
                     is_flag: true,
                     short: Some('a'),
+                    is_option: false,
                 }],
             },
             CompletionSignature {

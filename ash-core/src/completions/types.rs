@@ -20,4 +20,8 @@ pub struct CompletionArgument {
     pub required: bool,
     pub is_flag: bool,
     pub short: Option<char>,
+    /// Named option taking a value (--name VALUE), distinct from a boolean
+    /// flag. Both flags and options are offered by flag completion; only
+    /// options have a completable value (phase 2).
+    pub is_option: bool,
 }

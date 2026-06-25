@@ -59,6 +59,7 @@ impl From<Argument> for crate::completions::CompletionArgument {
             required: arg.required,
             is_flag: arg.is_flag,
             short: arg.short,
+            is_option: arg.is_option,
         }
     }
 }
