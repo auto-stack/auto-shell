@@ -120,14 +120,11 @@ impl ShellCompleter {
     /// Convert our Completion to reedline Suggestion
     fn completion_to_suggestion(completion: Completion) -> Suggestion {
         let value = completion.replacement.clone();
-        let description = completion.display.clone();
-
-        // Only show description if it differs from the value
-        let description = if value == description {
-            None
-        } else {
-            Some(description)
-        };
+        // Use the real per-item description (e.g. "Reverse sort order" for
+        // -r). Previously this used `completion.display`, which equals the
+        // replacement, so descriptions were always dropped — flags/options
+        // showed up as a bare list with no explanation.
+        let description = completion.description.filter(|d| !d.is_empty() && d != &value);
 
         // Pass metadata via extra field:
         //   extra[0] = CompletionKind tag (for AshMenu coloring)

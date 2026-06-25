@@ -50,7 +50,8 @@ pub fn complete_flags(
                 ));
             }
         } else if is_short {
-            // Suggest -s (short flag)
+            // Suggest -s (short flag). A leading `-` shows only short forms;
+            // users type `--` to get long forms (the two don't mix).
             if let Some(short) = arg.short {
                 let short_flag = format!("-{}", short);
                 if short_flag.starts_with(prefix)
@@ -60,21 +61,6 @@ pub fn complete_flags(
                     completions.push(Completion::with_description(
                         short_flag.clone(),
                         short_flag,
-                        &arg.description,
-                        CompletionKind::Flag,
-                    ));
-                }
-            }
-            // Also suggest --long when user typed `-`
-            if prefix == "-" {
-                let long = &arg.name;
-                let long_flag = format!("--{}", long);
-                if !already_set.contains(&long_flag)
-                    && !already_set.contains(long)
-                {
-                    completions.push(Completion::with_description(
-                        long_flag.clone(),
-                        long_flag,
                         &arg.description,
                         CompletionKind::Flag,
                     ));
@@ -153,12 +139,12 @@ mod tests {
     fn test_complete_dash_shows_all() {
         let sigs = vec![ls_sig()];
         let result = complete_flags("-", "ls", &sigs, &[]);
-        // Should include all 3 short flags + 3 long flags = 6
-        assert!(result.len() >= 3);
+        // `-` shows only short forms (long forms need `--`)
         let values: Vec<&str> = result.iter().map(|c| c.replacement.as_str()).collect();
         assert!(values.contains(&"-a"));
         assert!(values.contains(&"-l"));
         assert!(values.contains(&"-R"));
+        assert!(!values.contains(&"--all"), "long form must not appear under `-`");
     }
 
     #[test]
@@ -214,16 +200,22 @@ mod tests {
     #[test]
     fn complete_option_short_and_long() {
         let sigs = vec![sort_sig()];
+        // `-` shows only short forms (flags and options together)
         let result = complete_flags("-", "sort", &sigs, &[]);
         let values: Vec<&str> = result.iter().map(|c| c.replacement.as_str()).collect();
-        // flags and options both appear
         assert!(values.contains(&"-r"), "flag -r should appear: {values:?}");
         assert!(values.contains(&"-w"), "option -w should appear: {values:?}");
         assert!(values.contains(&"-k"), "option -k should appear: {values:?}");
         assert!(
-            values.contains(&"--with"),
-            "option long --with should appear: {values:?}"
+            !values.contains(&"--with"),
+            "long form must NOT appear under `-`: {values:?}"
         );
+        // `--` shows only long forms
+        let result = complete_flags("--", "sort", &sigs, &[]);
+        let values: Vec<&str> = result.iter().map(|c| c.replacement.as_str()).collect();
+        assert!(values.contains(&"--reverse"));
+        assert!(values.contains(&"--with"));
+        assert!(!values.contains(&"-r"));
     }
 
     #[test]
