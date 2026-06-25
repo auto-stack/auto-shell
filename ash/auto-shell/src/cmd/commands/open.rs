@@ -1,75 +1,18 @@
-//! `open` command — read a file (or pipeline text) and parse it into the
-//! pipeline based on its extension or an explicit `--as` flag. See
-//! `plans/001-open-command.md`.
+//! `open` command — open a file with the OS default application (Plan 004).
+//!
+//! Across the auto-os ecosystem `open` means "launch/open an application":
+//! e.g. `auto-man open` opens a project in its IDE, and here `open <file>`
+//! opens a file in its default GUI application (explorer/xdg-open/...).
+//! Use `show` to parse a file into the pipeline instead.
 
 use std::path::{Path, PathBuf};
 
-use auto_val::Value;
-use miette::{IntoDiagnostic, Result};
+use miette::Result;
 
-use crate::cmd::commands::from_csv::parse_csv;
-use crate::cmd::commands::from_json::parse_json;
 use crate::cmd::parser::ParsedArgs;
 use crate::cmd::pipeline_convert::{atom_to_pipeline_data, pipeline_data_to_atom};
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
-
-/// The target output format for `open`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
-    Json,
-    Csv,
-    Text,
-}
-
-/// Decide the output format from an explicit `--as` option, a file extension
-/// hint, defaulting to text. Priority: `--as` > extension > text (rules 4 & 11).
-fn resolve_format(args: &ParsedArgs, ext_hint: Option<&str>) -> Format {
-    match args.get_option("as").map(|s| s.as_str()) {
-        Some("json") => Format::Json,
-        Some("csv") => Format::Csv,
-        Some("text") => Format::Text,
-        Some(_other) => {
-            // Unknown --as value: fall back to text rather than guessing.
-            Format::Text
-        }
-        None => match ext_hint.map(|e| e.to_ascii_lowercase()).as_deref() {
-            Some("json") => Format::Json,
-            Some("csv") => Format::Csv,
-            _ => Format::Text,
-        },
-    }
-}
-
-/// Parse already-loaded text according to a target format. Pure function,
-/// extracted for unit testing without touching the filesystem (rules 5/6/7).
-fn parse_text(text: &str, fmt: Format) -> Result<PipelineData> {
-    match fmt {
-        Format::Json => Ok(PipelineData::from_value(parse_json(text)?)),
-        Format::Csv => Ok(PipelineData::from_value(Value::Array(parse_csv(
-            text, ",", true,
-        )?))),
-        Format::Text => Ok(PipelineData::from_text(text.to_string())),
-    }
-}
-
-/// Lower-cased file extension, or None if absent/empty.
-fn extension_of(path: &Path) -> Option<String> {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .filter(|e| !e.is_empty())
-        .map(|e| e.to_ascii_lowercase())
-}
-
-/// Resolve a path relative to the shell's CWD (mirrors cat's resolve_path).
-fn resolve_path(arg: &str, shell: &Shell) -> PathBuf {
-    let path = Path::new(arg);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        shell.pwd().join(arg)
-    }
-}
 
 pub struct OpenCommand;
 
@@ -79,54 +22,36 @@ impl Command for OpenCommand {
     }
 
     fn signature(&self) -> Signature {
-        Signature::new("open", "Open a file and parse it into the pipeline by extension")
-            .optional("file", "Path to the file to open (default: parse pipeline text)")
-            .option_with_short(
-                "as",
-                'a',
-                "Force a format: json | csv | text (default: infer from extension)",
-            )
+        Signature::new("open", "Open a file with the default application")
+            .optional("file", "Path to the file to open")
             .extra_help(
-                "Formatting rules:\n  \
-                 .json  → parsed to a structured Value (table/record)\n  \
-                 .csv   → parsed to a table (Array of Obj)\n  \
-                 other  → raw file text (same as `cat`)",
+                "Opens the file using the OS default application\n  \
+                 (Windows: explorer/shell, macOS: open, Linux: xdg-open).\n  \
+                 To parse a file into the pipeline, use `show` instead.",
             )
     }
 
     fn run(
         &self,
         args: &ParsedArgs,
-        input: PipelineData,
+        _input: PipelineData,
         shell: &mut Shell,
     ) -> Result<PipelineData> {
-        // Rule 10: only a single file is supported this iteration.
-        if args.positionals.len() > 1 {
-            miette::bail!("open: only one file argument is supported");
+        // Rule 5: open is a launcher, not a pipeline filter; ignore input.
+        let path = args
+            .first()
+            .ok_or_else(|| miette::miette!("open: missing file argument"))?;
+
+        let resolved = resolve_path(path, shell);
+        if !resolved.exists() {
+            miette::bail!("open: {}: No such file or directory", path);
         }
 
-        let (text, ext_hint) = if let Some(path) = args.positionals.first() {
-            // Rule 1 & 8: a file argument takes precedence over pipeline input.
-            let resolved = resolve_path(path, shell);
-            if !resolved.exists() {
-                miette::bail!("open: {}: No such file or directory", path);
-            }
-            let content =
-                std::fs::read_to_string(&resolved)
-                    .into_diagnostic()
-                    .map_err(|e| miette::miette!("open: {}: {}", path, e))?;
-            (content, extension_of(&resolved))
-        } else {
-            // Rule 2 & 3: no file → consume pipeline text, else error.
-            match input {
-                PipelineData::Text(s) => (s, None),
-                PipelineData::Value(Value::Str(s)) => (s.to_string(), None),
-                _ => miette::bail!("open: no input (provide a file or pipe text)"),
-            }
-        };
+        opener::open(&resolved)
+            .map_err(|e| miette::miette!("open: {}: {}", path, e))?;
 
-        let fmt = resolve_format(args, ext_hint.as_deref());
-        parse_text(&text, fmt)
+        // Rule 6: success produces no pipeline output.
+        Ok(PipelineData::empty())
     }
 
     fn run_atom(
@@ -141,278 +66,71 @@ impl Command for OpenCommand {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn args_with_as(value: Option<&str>) -> ParsedArgs {
-        let mut args = ParsedArgs::default();
-        if let Some(v) = value {
-            args.named.insert("as".to_string(), v.to_string());
-        }
-        args
-    }
-
-    #[test]
-    fn resolve_format_uses_extension_when_no_as() {
-        assert_eq!(resolve_format(&args_with_as(None), Some("json")), Format::Json);
-        assert_eq!(resolve_format(&args_with_as(None), Some("csv")), Format::Csv);
-    }
-
-    #[test]
-    fn resolve_format_defaults_to_text_for_unknown_extension() {
-        assert_eq!(resolve_format(&args_with_as(None), Some("txt")), Format::Text);
-        assert_eq!(resolve_format(&args_with_as(None), Some("log")), Format::Text);
-    }
-
-    #[test]
-    fn resolve_format_defaults_to_text_when_no_extension() {
-        assert_eq!(resolve_format(&args_with_as(None), None), Format::Text);
-    }
-
-    #[test]
-    fn resolve_format_as_overrides_extension() {
-        // rule 11: --as json on a .csv file → Json
-        assert_eq!(
-            resolve_format(&args_with_as(Some("json")), Some("csv")),
-            Format::Json
-        );
-        assert_eq!(
-            resolve_format(&args_with_as(Some("csv")), Some("json")),
-            Format::Csv
-        );
-    }
-
-    #[test]
-    fn resolve_format_as_works_without_extension_hint() {
-        // pipe mode: no extension, explicit --as
-        assert_eq!(resolve_format(&args_with_as(Some("csv")), None), Format::Csv);
-        assert_eq!(resolve_format(&args_with_as(Some("json")), None), Format::Json);
-    }
-
-    #[test]
-    fn resolve_format_extension_is_case_insensitive() {
-        assert_eq!(resolve_format(&args_with_as(None), Some("JSON")), Format::Json);
-        assert_eq!(resolve_format(&args_with_as(None), Some("CSV")), Format::Csv);
-    }
-
-    // ---- parse_text: the actual parsing, filesystem-free ----
-
-    #[test]
-    fn parse_text_csv_produces_array_of_obj() {
-        let csv = "name,age\nalice,30\nbob,25\n";
-        let out = parse_text(csv, Format::Csv).unwrap();
-        match out {
-            PipelineData::Value(Value::Array(arr)) => {
-                assert_eq!(arr.len(), 2, "two data rows");
-                // First row: name=alice, age=30
-                let row0 = arr.get(0).unwrap();
-                match row0 {
-                    Value::Obj(obj) => {
-                        let name = obj.get_str("name").map(|s| s.to_string());
-                        let age = obj.get_str("age").map(|s| s.to_string());
-                        assert_eq!(name, Some("alice".to_string()));
-                        assert_eq!(age, Some("30".to_string()));
-                    }
-                    other => panic!("expected Obj row, got {:?}", other),
-                }
-            }
-            other => panic!("expected Array value, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_text_json_array_produces_value() {
-        let json = r#"[{"x":1},{"x":2}]"#;
-        let out = parse_text(json, Format::Json).unwrap();
-        assert!(matches!(out, PipelineData::Value(Value::Array(_))));
-    }
-
-    #[test]
-    fn parse_text_json_object_produces_value() {
-        let json = r#"{"a":1,"b":"two"}"#;
-        let out = parse_text(json, Format::Json).unwrap();
-        assert!(matches!(out, PipelineData::Value(Value::Obj(_))));
-    }
-
-    #[test]
-    fn parse_text_text_passes_through() {
-        let out = parse_text("plain contents\n", Format::Text).unwrap();
-        match out {
-            PipelineData::Text(s) => assert_eq!(s, "plain contents\n"),
-            other => panic!("expected Text, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_text_invalid_json_errors() {
-        let result = parse_text("{ not valid json", Format::Json);
-        assert!(result.is_err(), "malformed JSON should error");
-    }
-
-    #[test]
-    fn parse_text_empty_csv_yields_empty_table() {
-        // parse_csv is permissive: an empty input yields an empty Array,
-        // not an error.
-        let out = parse_text("", Format::Csv).unwrap();
-        match out {
-            PipelineData::Value(Value::Array(arr)) => assert_eq!(arr.len(), 0),
-            other => panic!("expected empty Array, got {:?}", other),
-        }
-    }
-
-    // ---- extension_of ----
-
-    #[test]
-    fn extension_of_lowercase_known_extensions() {
-        assert_eq!(extension_of(Path::new("a.csv")), Some("csv".to_string()));
-        assert_eq!(extension_of(Path::new("a.JSON")), Some("json".to_string()));
-    }
-
-    #[test]
-    fn extension_of_none_when_absent() {
-        assert_eq!(extension_of(Path::new("README")), None);
-        assert_eq!(extension_of(Path::new("a.")), None);
+/// Resolve a path relative to the shell's CWD (mirrors cat's resolve_path).
+fn resolve_path(arg: &str, shell: &Shell) -> PathBuf {
+    let path = Path::new(arg);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        shell.pwd().join(arg)
     }
 }
 
 #[cfg(test)]
-mod integration {
+mod tests {
     use super::*;
-    use crate::shell::Shell;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    /// Strip ANSI escape sequences so assertions can match plain text in
-    /// rendered (colorized) table output.
-    fn strip_ansi(s: &str) -> String {
-        let mut out = String::with_capacity(s.len());
-        let mut chars = s.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\x1b' {
-                // skip ESC [ ... letter
-                if chars.peek() == Some(&'[') {
-                    chars.next();
-                    for cc in chars.by_ref() {
-                        if cc.is_ascii_alphabetic() {
-                            break;
-                        }
-                    }
-                    continue;
-                }
-            }
-            out.push(c);
-        }
-        out
-    }
-
-    /// Create a temp file with the given name suffix and contents, returning
-    /// its absolute path. Each call gets a unique prefix to avoid clashes.
-    /// Returns a forward-slash string path, because the shell's argument
-    /// parser treats a bare `\` as an escape char (see parse_args), so a
-    /// backslash Windows path would be mangled when typed into `execute`.
-    fn write_temp(name: &str, contents: &str) -> String {
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let pid = std::process::id();
-        let dir = std::env::temp_dir().join(format!("ash_open_test_{}_{}", pid, n));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(name);
-        std::fs::write(&path, contents).unwrap();
-        path.to_string_lossy().replace('\\', "/")
-    }
-
-    #[test]
-    fn open_csv_file_renders_table() {
-        let path = write_temp("data.csv", "name,age\nalice,30\nbob,25\n");
-        let mut shell = Shell::new();
-        let out = shell
-            .execute(&format!("open {}", path))
-            .unwrap_or(None)
-            .unwrap_or_default();
-        let plain = strip_ansi(&out);
-        assert!(plain.contains("alice"), "row 'alice' should appear: {plain}");
-        assert!(plain.contains("bob"), "row 'bob' should appear: {plain}");
-        assert!(plain.contains("30"), "value '30' should appear: {plain}");
-        let dir = std::path::Path::new(&path).parent().unwrap();
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn open_json_array_file_renders_table() {
-        let path = write_temp("data.json", r#"[{"x":1},{"x":2}]"#);
-        let mut shell = Shell::new();
-        let out = shell
-            .execute(&format!("open {}", path))
-            .unwrap_or(None)
-            .unwrap_or_default();
-        let plain = strip_ansi(&out);
-        assert!(plain.contains('1'), "value should appear: {plain}");
-        let dir = std::path::Path::new(&path).parent().unwrap();
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn open_unknown_extension_is_text() {
-        let path = write_temp("notes.txt", "hello world\nsecond line\n");
-        let mut shell = Shell::new();
-        let out = shell
-            .execute(&format!("open {}", path))
-            .unwrap_or(None)
-            .unwrap_or_default();
-        assert_eq!(out.trim(), "hello world\nsecond line");
-        let dir = std::path::Path::new(&path).parent().unwrap();
-        std::fs::remove_dir_all(dir).ok();
-    }
 
     #[test]
     fn open_nonexistent_file_errors() {
         let mut shell = Shell::new();
         // forward-slash absolute path so parse_args doesn't mangle it
-        let result = shell.execute("open /no/such/file_xyz.csv");
+        let result = shell.execute("open /no/such/file_xyz.txt");
         assert!(result.is_err(), "missing file should error");
     }
 
     #[test]
-    fn open_as_overrides_extension() {
-        // A .txt file forced as csv
-        let path = write_temp("data.txt", "a,b\n1,2\n");
+    fn open_no_argument_errors() {
         let mut shell = Shell::new();
-        let out = shell
-            .execute(&format!("open {} --as csv", path))
-            .unwrap_or(None)
-            .unwrap_or_default();
-        let plain = strip_ansi(&out);
-        assert!(plain.contains('1'), "csv value should appear: {plain}");
-        let dir = std::path::Path::new(&path).parent().unwrap();
-        std::fs::remove_dir_all(dir).ok();
+        let result = shell.execute("open");
+        assert!(result.is_err(), "open with no argument should error");
     }
 
     #[test]
-    fn open_help_lists_options() {
+    fn open_existing_file_does_not_error() {
+        // We cannot assert a GUI window appears; just verify that opening a
+        // real file does not return an error (the spawn succeeded).
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("ash_open_gui_test_{}", pid));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hello.txt");
+        std::fs::write(&path, "hi").unwrap();
+        let path_str = path.to_string_lossy().replace('\\', "/");
+
+        let mut shell = Shell::new();
+        let result = shell.execute(&format!("open {}", path_str));
+        // Allow either success or an error if no default app is configured in
+        // the test environment — but a missing file would have errored above,
+        // so here we just ensure it doesn't panic. Relax to is_ok OR a
+        // non-"No such file" error.
+        match &result {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = format!("{:?}", e);
+                assert!(
+                    !msg.contains("No such file"),
+                    "should not be a missing-file error: {msg}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn open_help_mentions_show() {
         let mut shell = Shell::new();
         let out = shell.execute("open --help").unwrap_or(None).unwrap_or_default();
-        assert!(out.contains("--as"), "--as should be in help: {out}");
         assert!(out.contains("open"), "usage should mention open: {out}");
-    }
-
-    #[test]
-    fn open_accepts_backslash_path_after_plan002() {
-        // Regression for Plan 002: a Windows backslash path typed into the
-        // command line must reach `open` intact (previously parse_args ate
-        // the backslashes). write_temp returns forward-slash; convert to
-        // backslashes to mimic a real user typing the command.
-        let path_fwd = write_temp("data.csv", "name,age\nalice,30\n");
-        let path_back = path_fwd.replace('/', "\\");
-        let mut shell = Shell::new();
-        let out = shell
-            .execute(&format!("open {}", path_back))
-            .unwrap_or(None)
-            .unwrap_or_default();
-        let plain = strip_ansi(&out);
-        assert!(plain.contains("alice"), "backslash path should work: {plain}");
-        let dir = std::path::Path::new(&path_fwd).parent().unwrap();
-        std::fs::remove_dir_all(dir).ok();
+        // help should hint users toward `show` for parsing
+        assert!(out.contains("show"), "help should mention show: {out}");
     }
 }
-

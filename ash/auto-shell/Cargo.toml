@@ -38,6 +38,8 @@ indexmap = "2.0"
 dirs = "5.0"
 # 系统信息（来自 nushell）
 sysinfo = "0.33"
+# 用系统默认程序打开文件（Plan 004: open 命令的 GUI 打开）
+opener = "0.8"
 
 # File system utilities
 uucore = "0.0.27"

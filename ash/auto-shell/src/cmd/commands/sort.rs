@@ -457,7 +457,7 @@ mod integration {
         );
         let mut shell = Shell::new();
         let out = shell
-            .execute(&format!("open {} | sort -w age", path))
+            .execute(&format!("show {} | sort -w age", path))
             .unwrap_or(None)
             .unwrap_or_default();
         let plain = strip_ansi(&out);
@@ -480,7 +480,7 @@ mod integration {
         );
         let mut shell = Shell::new();
         let out = shell
-            .execute(&format!("open {} | sort -w age -r", path))
+            .execute(&format!("show {} | sort -w age -r", path))
             .unwrap_or(None)
             .unwrap_or_default();
         let plain = strip_ansi(&out);

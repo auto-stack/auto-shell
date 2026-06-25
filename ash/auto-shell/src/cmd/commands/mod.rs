@@ -46,6 +46,7 @@ pub mod rm;
 pub mod run;
 pub mod r#where;
 pub mod select;
+pub mod show;
 pub mod sleep;
 pub mod sort;
 pub mod split;
