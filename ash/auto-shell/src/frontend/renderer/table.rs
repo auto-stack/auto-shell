@@ -169,25 +169,15 @@ pub fn render_table_with(
     Some(buffer_to_ansi(&buf))
 }
 
-/// Column display names (capitalize known columns)
+/// Column display names.
+///
+/// Field names are shown verbatim so the displayed header matches the real
+/// field key (what `sort -w`, `get`, etc. operate on) — no capitalization.
+/// The only special case is the icon column, which has no text header.
 fn column_display_name(col: &str) -> String {
     match col {
-        // The icon column has no text header (icons are self-explanatory).
         "icon" => String::new(),
-        "permissions" => "Permissions".to_string(),
-        "owner" => "Owner".to_string(),
-        "size" => "Size".to_string(),
-        "modified" => "Modified".to_string(),
-        "name" => "Name".to_string(),
-        "type" => "Type".to_string(),
-        _ => {
-            // Capitalize first letter
-            let mut c = col.chars();
-            match c.next() {
-                None => String::new(),
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-            }
-        }
+        _ => col.to_string(),
     }
 }
 
@@ -418,10 +408,15 @@ mod tests {
 
     #[test]
     fn test_column_display_name() {
-        assert_eq!(column_display_name("name"), "Name");
-        assert_eq!(column_display_name("size"), "Size");
-        assert_eq!(column_display_name("modified"), "Modified");
-        assert_eq!(column_display_name("custom_field"), "Custom_field");
+        // Field names are shown verbatim (no capitalization), so the
+        // displayed header matches the real field key used by sort -w etc.
+        // Only the icon column is special (no text header).
+        assert_eq!(column_display_name("name"), "name");
+        assert_eq!(column_display_name("size"), "size");
+        assert_eq!(column_display_name("modified"), "modified");
+        assert_eq!(column_display_name("age"), "age");
+        assert_eq!(column_display_name("custom_field"), "custom_field");
+        assert_eq!(column_display_name("icon"), "");
     }
 
     #[test]
@@ -479,8 +474,8 @@ mod tests {
         // Should contain data (strip ANSI: text is per-cell styled, not contiguous)
         assert!(plain.contains("file.txt"));
         assert!(plain.contains("src/"));
-        // Should contain header
-        assert!(plain.contains("Name"));
+        // Should contain header (field names are shown verbatim, lowercase)
+        assert!(plain.contains("name"));
     }
 
     #[test]
@@ -559,13 +554,14 @@ mod tests {
         let out = render_table(&Value::Array(arr), 120).unwrap();
         let plain = strip_ansi(&out);
 
-        // Header line contains both "Name" and "Permissions"; Name must come first.
+        // Header line contains both "name" and "permissions"; name must come first.
+        // (field names shown verbatim — lowercase)
         let header = plain
             .lines()
-            .find(|l| l.contains("Name") && l.contains("Permissions"))
-            .expect("header with Name+Permissions not found");
-        let name_pos = header.find("Name").unwrap();
-        let perm_pos = header.find("Permissions").unwrap();
+            .find(|l| l.contains("name") && l.contains("permissions"))
+            .expect("header with name+permissions not found");
+        let name_pos = header.find("name").unwrap();
+        let perm_pos = header.find("permissions").unwrap();
         assert!(
             name_pos < perm_pos,
             "Name should precede Permissions in header:\n{header}"

@@ -58,6 +58,8 @@ impl Command for SortCommand {
 
         if let Some(field) = with {
             // Rule 1 & 4: structured field sort. Input must be a Value::Array.
+            // Accept `.field` (Auto-style field access) as equivalent to `field`.
+            let field = field.strip_prefix('.').unwrap_or(field);
             let arr = match &input {
                 PipelineData::Value(Value::Array(a)) => a.clone(),
                 _ => miette::bail!("sort -w requires a list of records"),
@@ -469,6 +471,28 @@ mod integration {
         assert!(bob_pos < david_pos, "Bob(25) before David(28): {plain}");
         assert!(david_pos < alice_pos, "David(28) before Alice(30): {plain}");
         assert!(alice_pos < carol_pos, "Alice(30) before Carol(35): {plain}");
+        std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn open_pipe_sort_w_dotted_field_equivalent() {
+        // `.age` (Auto-style field access) must work the same as `age`.
+        let path = write_temp_csv(
+            "data.csv",
+            "name,age\nAlice,30\nBob,25\nCarol,35\n",
+        );
+        let mut shell = Shell::new();
+        let out = shell
+            .execute(&format!("show {} | sort -w .age", path))
+            .unwrap_or(None)
+            .unwrap_or_default();
+        let plain = strip_ansi(&out);
+        // age ascending: Bob(25), Alice(30), Carol(35)
+        let bob_pos = plain.find("Bob").unwrap_or(usize::MAX);
+        let alice_pos = plain.find("Alice").unwrap_or(usize::MAX);
+        let carol_pos = plain.find("Carol").unwrap_or(usize::MAX);
+        assert!(bob_pos < alice_pos, ".age: Bob(25) before Alice(30): {plain}");
+        assert!(alice_pos < carol_pos, ".age: Alice(30) before Carol(35): {plain}");
         std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap()).ok();
     }
 
