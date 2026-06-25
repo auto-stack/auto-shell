@@ -18,3 +18,6 @@
 # Exception: ash-core/Cargo.lock is NOT tracked — ash-core is consumed as
 # a path dependency (a library), so the lockfile is a build-time artifact.
 /ash-core/Cargo.lock
+
+# Local scratch/scratch files for manual testing
+**/tmp/
