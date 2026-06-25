@@ -21,3 +21,6 @@
 
 # Local scratch/scratch files for manual testing
 **/tmp/
+
+# Git worktrees (isolated workspaces for feature branches)
+/.worktrees/
