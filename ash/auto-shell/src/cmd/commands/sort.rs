@@ -158,66 +158,91 @@ pub fn sort_lines(
     lines.join("\n")
 }
 
+/// Sort key derived from a field value.
+enum FieldKey {
+    /// A numeric value (Int/Uint/Float/Double/Byte, or a numeric-flag string).
+    Number(f64),
+    /// A plain string value.
+    Text(String),
+    /// The field is absent (or the record isn't an object).
+    Missing,
+}
+
+/// Extract a comparable key from a record's field. Numeric Value variants
+/// are always treated as numbers (so `size` as Value::Int sorts numerically
+/// without needing -n); strings are text unless `numeric` asks to parse them.
+fn field_key(v: &Value, field: &str, numeric: bool) -> FieldKey {
+    let Some(obj_val) = v.as_obj().get(field) else {
+        return FieldKey::Missing;
+    };
+    match &obj_val {
+        Value::Int(n) => FieldKey::Number(*n as f64),
+        Value::Uint(n) => FieldKey::Number(*n as f64),
+        Value::Double(n) => FieldKey::Number(*n),
+        Value::Float(n) => FieldKey::Number(*n as f64),
+        Value::Byte(n) => FieldKey::Number(*n as f64),
+        Value::Str(_) | Value::String(_) => {
+            let s = obj_val.as_str().to_string();
+            if numeric {
+                if let Some(n) = extract_leading_number(&s) {
+                    return FieldKey::Number(n);
+                }
+            }
+            FieldKey::Text(s)
+        }
+        // Fallback: render to string for a stable, total order.
+        other => FieldKey::Text(format!("{other}")),
+    }
+}
+
+/// Compare two field keys: Number < Text < Missing; numbers by value;
+/// text lexicographically.
+fn compare_field_keys(a: &FieldKey, b: &FieldKey) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (FieldKey::Missing, FieldKey::Missing) => Ordering::Equal,
+        (FieldKey::Missing, _) => Ordering::Greater,
+        (_, FieldKey::Missing) => Ordering::Less,
+        (FieldKey::Number(x), FieldKey::Number(y)) => {
+            x.partial_cmp(y).unwrap_or(Ordering::Equal)
+        }
+        (FieldKey::Number(_), FieldKey::Text(_)) => Ordering::Less,
+        (FieldKey::Text(_), FieldKey::Number(_)) => Ordering::Greater,
+        (FieldKey::Text(x), FieldKey::Text(y)) => x.cmp(y),
+    }
+}
+
 /// Sort an Array of records (Obj) by a named field (Plan 003, -w mode).
 ///
-/// Records missing the field sort last (stable). When `numeric` is true,
-/// field values are compared as numbers (leading numeric prefix); otherwise
-/// as strings.
+/// Numeric Value fields (e.g. ls's `size` as Value::Int) sort by their numeric
+/// value directly; string fields sort lexically (or numerically when `numeric`
+/// is set). Records missing the field sort last (stable).
 pub fn sort_array_by_field(
     arr: &Array,
     field: &str,
     reverse: bool,
     numeric: bool,
 ) -> Result<Array> {
-    // Pair each value with a sort key; None (missing field) sorts last.
-    let mut keyed: Vec<(Option<f64>, String, Value)> = arr
+    let mut keyed: Vec<(FieldKey, Value)> = arr
         .iter()
-        .map(|v| {
-            let s = match v {
-                Value::Obj(obj) => obj.get_str(field).map(|s| s.to_string()),
-                _ => None,
-            };
-            let num = s.as_deref().and_then(extract_leading_number);
-            (num, s.unwrap_or_default(), v.clone())
-        })
+        .map(|v| (field_key(v, field, numeric), v.clone()))
         .collect();
 
-    keyed.sort_by(|a, b| {
-        let ord = match (numeric, &a.0, &b.0) {
-            (true, Some(na), Some(nb)) => na.partial_cmp(nb).unwrap_or(std::cmp::Ordering::Equal),
-            _ => a.1.cmp(&b.1),
-        };
-        // Missing-field handling: a record with a present field always sorts
-        // before one without. We encode presence via the numeric/str pair:
-        // if both have a key string, normal compare; if a has key but b
-        // doesn't, a first. We detect "has key" by checking the original.
-        ord
-    });
-
-    // Separate correction for missing-field ordering (stable, sorts last).
-    // Re-sort stably so that missing-field entries move to the end while
-    // preserving the field-based order of the rest.
-    keyed.sort_by(|a, b| {
-        let a_has = has_field(&a.2, field);
-        let b_has = has_field(&b.2, field);
-        match (a_has, b_has) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => std::cmp::Ordering::Equal,
-        }
-    });
+    keyed.sort_by(|a, b| compare_field_keys(&a.0, &b.0));
 
     if reverse {
-        keyed.reverse();
+        // Reverse only the value ordering, but keep missing-field records last
+        // (reverse the non-missing segment, then append missing).
+        let split = keyed.iter().position(|(k, _)| matches!(k, FieldKey::Missing));
+        if let Some(idx) = split {
+            keyed[..idx].reverse();
+        } else {
+            keyed.reverse();
+        }
     }
 
-    let values: Vec<Value> = keyed.into_iter().map(|(_, _, v)| v).collect();
+    let values: Vec<Value> = keyed.into_iter().map(|(_, v)| v).collect();
     Ok(Array::from(values))
-}
-
-/// Whether a Value is an Obj containing the given field.
-fn has_field(v: &Value, field: &str) -> bool {
-    matches!(v, Value::Obj(obj) if obj.get_str(field).is_some())
 }
 
 /// Sort text lines by a 1-based column number (Plan 003, -k mode).
@@ -340,6 +365,33 @@ mod tests {
             o.set(*k, Value::str(*v));
         }
         Value::Obj(o)
+    }
+
+    fn rec_with_size(name: &str, size: i32) -> Value {
+        let mut o = Obj::new();
+        o.set("name", Value::str(name));
+        o.set("size", Value::Int(size));
+        Value::Obj(o)
+    }
+
+    #[test]
+    fn sort_by_field_int_value_sorts_numerically() {
+        // Regression: ls produces size as Value::Int. Previously get_str()
+        // returned None for non-string fields, so every record counted as
+        // "missing field" and sorting was a no-op. Int fields must sort by
+        // their numeric value (without needing -n).
+        let arr = Array::from(vec![
+            rec_with_size("Cargo.lock", 96386),
+            rec_with_size("Cargo.toml", 358),
+            rec_with_size("dir", 0),
+        ]);
+        let sorted = sort_array_by_field(&arr, "size", false, false).unwrap();
+        let names: Vec<String> = sorted
+            .iter()
+            .map(|v| v.as_obj().get_str("name").unwrap().to_string())
+            .collect();
+        // numeric ascending: dir(0), Cargo.toml(358), Cargo.lock(96386)
+        assert_eq!(names, vec!["dir", "Cargo.toml", "Cargo.lock"]);
     }
 
     #[test]
