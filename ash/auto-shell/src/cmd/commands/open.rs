@@ -395,5 +395,24 @@ mod integration {
         assert!(out.contains("--as"), "--as should be in help: {out}");
         assert!(out.contains("open"), "usage should mention open: {out}");
     }
+
+    #[test]
+    fn open_accepts_backslash_path_after_plan002() {
+        // Regression for Plan 002: a Windows backslash path typed into the
+        // command line must reach `open` intact (previously parse_args ate
+        // the backslashes). write_temp returns forward-slash; convert to
+        // backslashes to mimic a real user typing the command.
+        let path_fwd = write_temp("data.csv", "name,age\nalice,30\n");
+        let path_back = path_fwd.replace('/', "\\");
+        let mut shell = Shell::new();
+        let out = shell
+            .execute(&format!("open {}", path_back))
+            .unwrap_or(None)
+            .unwrap_or_default();
+        let plain = strip_ansi(&out);
+        assert!(plain.contains("alice"), "backslash path should work: {plain}");
+        let dir = std::path::Path::new(&path_fwd).parent().unwrap();
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
 

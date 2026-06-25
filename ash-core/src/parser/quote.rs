@@ -40,16 +40,21 @@ pub fn parse_args(input: &str) -> Vec<String> {
             });
             escape_next = false;
         } else if c == '\\' {
-            // Start escape sequence
+            // Backslash handling depends on quote context (Plan 002):
+            //  - single quotes: literal (except \')
+            //  - double quotes: escape sequence (keeps \n, \\, \" etc.)
+            //  - bare text:     literal — preserved verbatim so Windows-style
+            //                    paths (C:\Users\foo) reach commands intact.
             if in_single_quote {
-                // In single quotes, backslash is literal (unless escaping ')
                 if let Some(&'\'') = chars.peek() {
                     escape_next = true;
                 } else {
                     current.push(c);
                 }
-            } else {
+            } else if in_double_quote {
                 escape_next = true;
+            } else {
+                current.push(c);
             }
         } else if in_single_quote {
             match c {
@@ -304,5 +309,53 @@ mod tests {
     fn test_quote_after_text() {
         assert_eq!(parse_args("echo\"test\""), vec!["echo\"test\""]);
         assert_eq!(parse_args("echo'test'"), vec!["echo'test'"]);
+    }
+
+    // ---- bare-text backslash is literal (Plan 002) ----
+    // Outside quotes, `\` must be preserved verbatim so Windows-style
+    // paths (C:\Users\foo) reach commands intact.
+
+    #[test]
+    fn bare_backslash_is_literal() {
+        assert_eq!(
+            parse_args(r"open C:\Users\zhaop\data.csv"),
+            vec!["open", r"C:\Users\zhaop\data.csv"]
+        );
+    }
+
+    #[test]
+    fn bare_backslash_in_drive_path() {
+        assert_eq!(
+            parse_args(r"cd D:\a\b\c"),
+            vec!["cd", r"D:\a\b\c"]
+        );
+    }
+
+    #[test]
+    fn bare_single_backslash_preserved() {
+        assert_eq!(parse_args(r"echo a\b"), vec!["echo", r"a\b"]);
+    }
+
+    // Regression guards: escape semantics must remain inside double quotes.
+
+    #[test]
+    fn double_quote_escape_newline_still_works() {
+        assert_eq!(parse_args(r#"echo "a\nb""#), vec!["echo", "a\nb"]);
+    }
+
+    #[test]
+    fn double_quote_escape_backslash_still_works() {
+        // \\ inside double quotes → single \
+        assert_eq!(parse_args(r#"echo "x\\y""#), vec!["echo", r"x\y"]);
+    }
+
+    #[test]
+    fn double_quote_escape_quote_still_works() {
+        assert_eq!(parse_args(r#"echo "x\"y""#), vec!["echo", r#"x"y"#]);
+    }
+
+    #[test]
+    fn single_quote_backslash_literal_unchanged() {
+        assert_eq!(parse_args(r"echo 'a\b'"), vec!["echo", r"a\b"]);
     }
 }
