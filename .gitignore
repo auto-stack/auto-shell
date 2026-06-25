@@ -15,3 +15,6 @@
 
 # Note: Cargo.lock IS committed — these are binary crates (ash, ash-gui),
 # where lockfiles should be tracked.
+# Exception: ash-core/Cargo.lock is NOT tracked — ash-core is consumed as
+# a path dependency (a library), so the lockfile is a build-time artifact.
+/ash-core/Cargo.lock
