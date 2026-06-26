@@ -219,7 +219,14 @@ fn pwd_command(current_dir: &Path) -> String {
 
 /// Echo arguments
 fn echo_command(args: &[String]) -> String {
-    args.join(" ")
+    // POSIX: default appends a newline; -n suppresses it. (Plan 006)
+    let no_newline = args.iter().any(|a| a == "-n" || a == "--no-newline");
+    let positionals: Vec<String> = args
+        .iter()
+        .filter(|a| !matches!(a.as_str(), "-n" | "--no-newline"))
+        .cloned()
+        .collect();
+    crate::cmd::commands::echo::echo_text(&positionals, no_newline)
 }
 
 /// Clear screen (platform-specific)
@@ -351,14 +358,21 @@ mod tests {
 
     #[test]
     fn test_echo_command() {
+        // Plan 006: echo appends a trailing newline (POSIX default)
         let output = echo_command(&["hello".to_string(), "world".to_string()]);
-        assert_eq!(output, "hello world");
+        assert_eq!(output, "hello world\n");
     }
 
     #[test]
     fn test_echo_empty() {
         let output = echo_command(&[]);
-        assert_eq!(output, "");
+        assert_eq!(output, "\n");
+    }
+
+    #[test]
+    fn test_echo_n_suppresses_newline() {
+        let output = echo_command(&["-n".to_string(), "hi".to_string()]);
+        assert_eq!(output, "hi");
     }
 
     #[test]
