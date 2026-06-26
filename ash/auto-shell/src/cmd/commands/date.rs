@@ -21,7 +21,7 @@ impl Command for DateCommand {
     fn signature(&self) -> Signature {
         Signature::new("date", "Display current date and time")
             .flag("format", "strftime format string (default: \"%Y-%m-%d %H:%M:%S\")")
-            .flag("utc", "Use UTC time instead of local")
+            .flag_with_short("utc", 'u', "Use UTC time instead of local")
             .flag("unix", "Show unix timestamp")
     }
 
@@ -56,10 +56,12 @@ fn build_date_value(args: &ParsedArgs) -> Value {
         return Value::I64(ts);
     }
 
+    // Format precedence: explicit --format wins, else POSIX +format operand.
     let fmt = args
         .named
         .get("format")
         .map(|s| s.as_str())
+        .or_else(|| args.positionals.iter().find_map(|p| p.strip_prefix('+')))
         .unwrap_or("%Y-%m-%d %H:%M:%S");
 
     let formatted = if args.has_flag("utc") {
@@ -121,5 +123,29 @@ mod tests {
     fn test_unix_timestamp_is_i64() {
         let ts = Local::now().timestamp();
         assert!(ts > 1_700_000_000); // Sometime after 2023
+    }
+
+    // ---- Plan 006 P0-2: POSIX -u short form + +format operand ----
+
+    #[test]
+    fn date_short_u_flag_parses() {
+        use crate::cmd::parser::parse_args;
+        let sig = DateCommand.signature();
+        let parsed = parse_args(&sig, &["-u".to_string()]).expect("-u should parse");
+        assert!(parsed.has_flag("utc"));
+    }
+
+    #[test]
+    fn date_plus_format_operand_uses_year() {
+        use crate::cmd::parser::parse_args;
+        let sig = DateCommand.signature();
+        let parsed = parse_args(&sig, &["+%Y".to_string()]).expect("+format should parse");
+        let val = build_date_value(&parsed);
+        let s = match &val {
+            Value::Str(s) => s.to_string(),
+            other => panic!("expected string, got {:?}", other),
+        };
+        let year = chrono::Local::now().format("%Y").to_string();
+        assert_eq!(s, year);
     }
 }

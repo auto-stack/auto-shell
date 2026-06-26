@@ -24,6 +24,12 @@ impl Command for GrepCommand {
             .flag_with_short("files-with-matches", 'l', "Only show filenames with matches")
             .flag_with_short("recursive", 'r', "Search recursively in directories")
             .flag("hidden", "Search hidden files (requires -r)")
+            // Plan 006 P0-4: POSIX flags
+            .flag_with_short("extended-regexp", 'E', "Interpret pattern as extended regex (default)")
+            .flag_with_short("fixed-strings", 'F', "Interpret pattern as a fixed string (literal)")
+            .flag_with_short("quiet", 'q', "Quiet: suppress output, only set exit status")
+            .flag_with_short("line-regexp", 'x', "Match whole lines only")
+            .flag_with_short("word-regexp", 'w', "Match whole words only")
     }
 
     fn run(
@@ -48,15 +54,26 @@ impl Command for GrepCommand {
         let files_with_matches = args.has_flag("files-with-matches");
         let recursive = args.has_flag("recursive");
         let hidden = args.has_flag("hidden");
+        let quiet = args.has_flag("quiet");
 
-        // Create regex
-        let re = if ignore_case {
-            Regex::new(&format!("(?i){}", pattern))
-                .into_diagnostic()?
-        } else {
-            Regex::new(pattern)
-                .into_diagnostic()?
-        };
+        // Create regex (Plan 006: honors -F/-x/-w)
+        let re = build_regex(
+            pattern,
+            ignore_case,
+            args.has_flag("fixed-strings"),
+            args.has_flag("line-regexp"),
+            args.has_flag("word-regexp"),
+        )?;
+
+        // -q: only set exit status; return empty on match, error on no match.
+        if quiet {
+            let matched = quiet_has_match(path_arg, &input, &re, recursive, hidden)?;
+            return if matched {
+                Ok(PipelineData::from_value(Value::Array(Array { values: vec![] })))
+            } else {
+                miette::bail!("grep: no matches")
+            };
+        }
 
         // Handle input based on whether path is provided
         if let Some(path_str) = path_arg {
@@ -163,11 +180,13 @@ impl GrepCommand {
         let count_only = args.has_flag("count");
         let show_line_number = args.has_flag("line-number");
 
-        let re = if ignore_case {
-            Regex::new(&format!("(?i){}", pattern)).into_diagnostic()?
-        } else {
-            Regex::new(pattern).into_diagnostic()?
-        };
+        let re = build_regex(
+            pattern,
+            ignore_case,
+            args.has_flag("fixed-strings"),
+            args.has_flag("line-regexp"),
+            args.has_flag("word-regexp"),
+        )?;
 
         let mut results = Vec::new();
         let mut match_count = 0;
@@ -201,6 +220,68 @@ impl GrepCommand {
             Value::Array(Array::from(results)),
             AtomType::MatchList,
         )))
+    }
+}
+
+/// Build a regex honoring -F (fixed string), -x (whole line), -w (word),
+/// and -i (ignore case). -E is a no-op (the regex crate is ERE-flavored).
+fn build_regex(
+    pattern: &str,
+    ignore_case: bool,
+    fixed_strings: bool,
+    line_regexp: bool,
+    word_regexp: bool,
+) -> Result<Regex> {
+    let mut p = if fixed_strings {
+        regex::escape(pattern)
+    } else {
+        pattern.to_string()
+    };
+    if word_regexp {
+        p = format!(r"\b{}\b", p);
+    }
+    if line_regexp {
+        p = format!("^{}$", p);
+    }
+    if ignore_case {
+        p = format!("(?i){}", p);
+    }
+    Regex::new(&p).into_diagnostic()
+}
+
+/// For -q (quiet) mode: determine whether any match exists without
+/// producing output rows.
+fn quiet_has_match(
+    path_arg: Option<&str>,
+    input: &PipelineData,
+    re: &Regex,
+    recursive: bool,
+    hidden: bool,
+) -> Result<bool> {
+    if let Some(path_str) = path_arg {
+        let path = Path::new(path_str);
+        if path.is_dir() {
+            // Reuse the directory search; any result means a match.
+            let results = if recursive {
+                search_directory_recursive(path, re, false, false, false, false, hidden)?
+            } else {
+                search_directory(path, re, false, false, false, false)?
+            };
+            Ok(!results.is_empty())
+        } else {
+            let content = std::fs::read_to_string(path).into_diagnostic()?;
+            Ok(re.is_match(&content))
+        }
+    } else {
+        match input {
+            PipelineData::Text(s) => Ok(re.is_match(s)),
+            PipelineData::Value(Value::Str(s)) => Ok(re.is_match(s.as_ref())),
+            PipelineData::Value(Value::Array(a)) => Ok(a.iter().any(|v| match v {
+                Value::Str(s) => re.is_match(s.as_str()),
+                _ => re.is_match(&format!("{v}")),
+            })),
+            _ => Ok(false),
+        }
     }
 }
 
@@ -530,5 +611,43 @@ mod tests {
         if let Value::Obj(obj) = &results[0] {
             assert_eq!(obj.get("name"), Some(&Value::str("other_file.txt")).cloned());
         }
+    }
+
+    // ---- Plan 006 P0-4: POSIX flags -E/-F/-q/-x/-w ----
+
+    #[test]
+    fn test_fixed_strings_literal() {
+        let re = build_regex("a.b", false, true, false, false).unwrap();
+        assert!(re.is_match("xa.by"), "literal 'a.b' present");
+        assert!(!re.is_match("axby"), "'.' is NOT a wildcard under -F");
+    }
+
+    #[test]
+    fn test_line_regexp_whole_line() {
+        let re = build_regex("abc", false, false, true, false).unwrap();
+        assert!(re.is_match("abc"));
+        assert!(!re.is_match("abcd"), "must match whole line under -x");
+    }
+
+    #[test]
+    fn test_word_regexp() {
+        let re = build_regex("cat", false, false, false, true).unwrap();
+        assert!(re.is_match("the cat sat"));
+        assert!(!re.is_match("catalog"), "must be a whole word under -w");
+    }
+
+    #[test]
+    fn test_fixed_and_word_combo() {
+        // -F -w: escape first, then wrap in \b
+        let re = build_regex("a.b", false, true, false, true).unwrap();
+        assert!(re.is_match("a.b is here"));
+        assert!(!re.is_match("xa.bx"), "not bounded by word edges");
+    }
+
+    #[test]
+    fn test_extended_regexp_noop() {
+        // -E is a no-op alias (regex crate is already ERE-flavored)
+        let re = build_regex("a+", false, false, false, false).unwrap();
+        assert!(re.is_match("aaa"));
     }
 }
