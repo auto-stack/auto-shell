@@ -55,7 +55,8 @@ fn test_sys_produces_output() {
 fn test_echo_produces_text() {
     let mut shell = Shell::new();
     let output = exec(&mut shell, "echo hello world");
-    assert_eq!(output, Some("hello world".to_string()));
+    // Plan 006: echo appends a trailing newline (POSIX default)
+    assert_eq!(output, Some("hello world\n".to_string()));
 }
 
 #[test]

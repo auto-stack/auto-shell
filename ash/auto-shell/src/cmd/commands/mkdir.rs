@@ -22,6 +22,7 @@ impl Command for MkdirCommand {
             .required("path", "Directory path to create")
             .flag_with_short("parents", 'p', "Create parent directories as needed")
             .flag_with_short("verbose", 'v', "Print a message for each created directory")
+            .option_with_short("mode", 'm', "Set file mode (e.g., 755; Unix only, best-effort)")
     }
 
     fn run(
@@ -36,6 +37,7 @@ impl Command for MkdirCommand {
 
         let parents = args.has_flag("parents");
         let verbose = args.has_flag("verbose");
+        let mode = args.get_option("mode").map(|s| s.as_str());
 
         let mut created_count = 0;
         let mut errors = Vec::new();
@@ -52,6 +54,11 @@ impl Command for MkdirCommand {
             } else {
                 create_dir(&target_path, verbose)
             };
+
+            // Apply -m mode after creation (Unix only; no-op elsewhere).
+            if let Some(m) = mode {
+                let _ = apply_mode(&target_path, m);
+            }
 
             match result {
                 Ok(count) => created_count += count,
@@ -89,6 +96,24 @@ impl Command for MkdirCommand {
         let legacy = self.run(args, PipelineData::empty(), shell)?;
         Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy))
     }
+}
+
+/// Apply a -m mode string (e.g., "755") to a directory.
+/// Unix only; no-op on platforms without POSIX permissions. Best-effort:
+/// ignores invalid mode strings.
+fn apply_mode(path: &Path, mode_str: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(mode) = u32::from_str_radix(mode_str.trim(), 8) {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode_str); // no-op on non-Unix
+    }
+    Ok(())
 }
 
 /// Create a single directory

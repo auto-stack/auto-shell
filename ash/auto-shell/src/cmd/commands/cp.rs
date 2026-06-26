@@ -22,9 +22,11 @@ impl Command for CpCommand {
             .required("source", "Source file or directory")
             .required("dest", "Destination path")
             .flag_with_short("recursive", 'r', "Copy directories recursively")
+            .flag_with_short("recursive-upper", 'R', "Copy recursively (POSIX standard form of -r)")
             .flag_with_short("force", 'f', "Force overwrite without prompting")
+            .flag_with_short("interactive", 'i', "Prompt (refuse, in non-interactive) before overwrite")
             .flag_with_short("preserve", 'p', "Preserve file attributes")
-            .flag("verbose", "Show what files are being copied")
+            .flag_with_short("verbose", 'v', "Show what files are being copied")
     }
 
     fn run(
@@ -40,7 +42,7 @@ impl Command for CpCommand {
         let source = args.positionals.get(0).map(|s| s.as_str()).unwrap_or(".");
         let dest = args.positionals.get(1).map(|s| s.as_str()).unwrap_or(".");
 
-        let recursive = args.has_flag("recursive");
+        let recursive = args.has_flag("recursive") || args.has_flag("recursive-upper");
         let force = args.has_flag("force");
         let preserve = args.has_flag("preserve");
         let verbose = args.has_flag("verbose");

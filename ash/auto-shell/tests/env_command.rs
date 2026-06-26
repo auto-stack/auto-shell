@@ -123,7 +123,7 @@ fn env_prefix_visible_then_restored() {
 
     // The prefix var is visible during the command.
     let out = shell.execute("ASH_IT_PREFIX=hello echo $ASH_IT_PREFIX").unwrap();
-    assert_eq!(out.as_deref(), Some("hello"));
+    assert_eq!(out.as_deref(), Some("hello\n"));
 
     // After the scoped command, the var is gone (restored to absent).
     let after = shell.execute("env ASH_IT_PREFIX").unwrap();
@@ -137,7 +137,7 @@ fn env_prefix_multiple() {
     let out = shell
         .execute("ASH_IT_A=1 ASH_IT_B=2 echo $ASH_IT_A $ASH_IT_B")
         .unwrap();
-    assert_eq!(out.as_deref(), Some("1 2"));
+    assert_eq!(out.as_deref(), Some("1 2\n"));
     std::env::remove_var("ASH_IT_A");
     std::env::remove_var("ASH_IT_B");
 }
@@ -163,7 +163,7 @@ fn env_prefix_quoted_value() {
     let out = shell
         .execute("ASH_IT_Q=\"hi there\" echo $ASH_IT_Q")
         .unwrap();
-    assert_eq!(out.as_deref(), Some("hi there"));
+    assert_eq!(out.as_deref(), Some("hi there\n"));
     std::env::remove_var("ASH_IT_Q");
 }
 

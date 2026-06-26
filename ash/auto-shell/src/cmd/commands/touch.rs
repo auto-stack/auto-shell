@@ -21,6 +21,10 @@ impl Command for TouchCommand {
         Signature::new("touch", "Create empty files or update timestamps")
             .required("file", "File(s) to create or update")
             .flag_with_short("no-create", 'c', "Do not create files, only update timestamps")
+            // Plan 006 P0-5: POSIX flags
+            .flag_with_short("access", 'a', "Change only the access time")
+            .flag_with_short("modification", 'm', "Change only the modification time")
+            .option_with_short("reference", 'r', "Use the times of REFERENCE file instead of now")
     }
 
     fn run(
@@ -34,6 +38,21 @@ impl Command for TouchCommand {
         }
 
         let no_create = args.has_flag("no-create");
+        // POSIX: default changes both atime and mtime. -a or -m restricts it.
+        let touch_atime = args.has_flag("access") || !args.has_flag("modification");
+        let touch_mtime = args.has_flag("modification") || !args.has_flag("access");
+
+        // -r reference: read times from another file (best-effort).
+        let ref_time: Option<std::time::SystemTime> = if let Some(ref_path) = args.get_option("reference") {
+            let resolved = resolve_touch_path(ref_path, shell);
+            let meta = std::fs::metadata(&resolved)
+                .into_diagnostic()
+                .map_err(|e| miette::miette!("touch -r: {}: {}", ref_path, e))?;
+            Some(meta.modified().unwrap_or(std::time::SystemTime::now()))
+        } else {
+            None
+        };
+
         let mut created = 0;
         let mut updated = 0;
 
@@ -42,11 +61,17 @@ impl Command for TouchCommand {
 
             if path.exists() {
                 // Update timestamp
-                let _time = std::fs::File::open(&path)
+                let _ = std::fs::File::open(&path)
                     .into_diagnostic()
                     .map_err(|e| miette::miette!("touch: {}: {}", arg, e))?;
-                // Set modification time to now
-                set_file_mtime(&path)?;
+                if touch_mtime {
+                    set_file_mtime(&path, ref_time)?;
+                }
+                if touch_atime {
+                    // atime setting is best-effort: the shim only bumps via flush,
+                    // so -a is effectively a no-op here (documented limitation).
+                    set_file_atime(&path, ref_time)?;
+                }
                 updated += 1;
             } else if !no_create {
                 // Create the file
@@ -57,6 +82,7 @@ impl Command for TouchCommand {
             }
         }
 
+        let _ = (created, updated);
         Ok(PipelineData::empty())
     }
 
@@ -81,11 +107,20 @@ fn resolve_touch_path(arg: &str, shell: &Shell) -> PathBuf {
     }
 }
 
-/// Set a file's modification time to now (cross-platform).
-fn set_file_mtime(path: &std::path::Path) -> Result<()> {
-    let now = std::time::SystemTime::now();
+/// Set a file's modification time (cross-platform, best-effort).
+/// If `ref_time` is given, use it instead of now (for -r).
+fn set_file_mtime(path: &std::path::Path, ref_time: Option<std::time::SystemTime>) -> Result<()> {
+    let now = ref_time.unwrap_or_else(std::time::SystemTime::now);
     let ft = filetime::FileTime::from_system_time(now);
     filetime::set_file_mtime(path, ft).into_diagnostic()
+}
+
+/// Set a file's access time. Best-effort: the shim only bumps via flush,
+/// so on most platforms this is effectively a no-op for atime specifically.
+fn set_file_atime(path: &std::path::Path, _ref_time: Option<std::time::SystemTime>) -> Result<()> {
+    // No portable atime API; re-flush to bump timestamps generally.
+    filetime::set_file_atime(path, filetime::FileTime::from_system_time(std::time::SystemTime::now()))
+        .into_diagnostic()
 }
 
 // Since filetime may not be in Cargo.toml, provide a fallback.
@@ -120,6 +155,15 @@ mod filetime {
         f.flush()?;
         Ok(())
     }
+
+    /// Set file access time. Portable fallback (same flush); atime support
+    /// is platform-dependent and this is effectively best-effort/no-op.
+    pub fn set_file_atime(path: &Path, _ft: FileTime) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
+        f.flush()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -138,5 +182,50 @@ mod tests {
         let sig = cmd.signature();
         assert_eq!(sig.name, "touch");
         assert!(sig.arguments.iter().any(|a| a.name == "file" && a.required));
+    }
+
+    // ---- Plan 006 P0-5: POSIX -a/-m/-r ----
+
+    #[test]
+    fn touch_flags_parse() {
+        use crate::cmd::parser::parse_args;
+        let sig = TouchCommand.signature();
+        // -a and -m are recognized flags
+        let parsed = parse_args(&sig, &["-a".to_string(), "f.txt".to_string()]).unwrap();
+        assert!(parsed.has_flag("access"));
+        assert!(!parsed.has_flag("modification"));
+        let parsed = parse_args(&sig, &["-m".to_string(), "f.txt".to_string()]).unwrap();
+        assert!(parsed.has_flag("modification"));
+    }
+
+    #[test]
+    fn touch_reference_option_parses() {
+        use crate::cmd::parser::parse_args;
+        let sig = TouchCommand.signature();
+        let parsed = parse_args(
+            &sig,
+            &["-r".to_string(), "ref.txt".to_string(), "target.txt".to_string()],
+        )
+        .expect("-r should parse");
+        assert_eq!(parsed.get_option("reference").map(|s| s.as_str()), Some("ref.txt"));
+        // target is the positional file operand
+        assert!(parsed.positionals.iter().any(|p| p == "target.txt"));
+    }
+
+    #[test]
+    fn touch_a_does_not_panic() {
+        // Best-effort: -a on a real temp file must not error/panic (atime is
+        // best-effort in the shim).
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("ash_touch_test_{}", pid));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.txt");
+        std::fs::write(&path, "x").unwrap();
+        let path_str = path.to_string_lossy().replace('\\', "/");
+
+        let mut shell = Shell::new();
+        let result = shell.execute(&format!("touch -a {}", path_str));
+        assert!(result.is_ok(), "touch -a should not error: {:?}", result);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

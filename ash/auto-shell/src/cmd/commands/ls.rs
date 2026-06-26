@@ -15,6 +15,7 @@ impl Command for LsCommand {
         Signature::new("ls", "List directory contents")
             .optional("path", "Path to list")
             .flag_with_short("all", 'a', "Show all files including hidden (starts with .)")
+            .flag_with_short("almost-all", 'A', "Show hidden files except . and ..")
             .flag_with_short("long", 'l', "Long listing format (permissions, owner, size, time)")
             .flag_with_short("human-readable", 'h', "Human-readable file sizes (1K, 234M, 2G)")
             .flag_with_short("time", 't', "Sort by modification time (newest first)")
@@ -31,7 +32,7 @@ impl Command for LsCommand {
         let path_arg = args.positionals.get(0).map(|s| s.as_str()).unwrap_or(".");
         let path = Path::new(path_arg);
 
-        let all = args.has_flag("all");
+        let all = args.has_flag("all") || args.has_flag("almost-all");
         let long = args.has_flag("long");
         let time = args.has_flag("time");
         let reverse = args.has_flag("reverse");
@@ -52,7 +53,7 @@ impl Command for LsCommand {
         let path_arg = args.positionals.get(0).map(|s| s.as_str()).unwrap_or(".");
         let path = Path::new(path_arg);
 
-        let all = args.has_flag("all");
+        let all = args.has_flag("all") || args.has_flag("almost-all");
         let long = args.has_flag("long");
         let time = args.has_flag("time");
         let reverse = args.has_flag("reverse");
