@@ -21,8 +21,10 @@ impl Command for RmCommand {
         Signature::new("rm", "Remove files and directories")
             .required("path", "Path to remove")
             .flag_with_short("recursive", 'r', "Remove directories and their contents recursively")
+            .flag_with_short("recursive-upper", 'R', "Remove recursively (POSIX standard form of -r)")
             .flag_with_short("force", 'f', "Ignore nonexistent files and arguments")
-            .flag("verbose", "Show what files are being removed")
+            .flag_with_short("interactive", 'i', "Prompt (refuse, in non-interactive) before each removal")
+            .flag_with_short("verbose", 'v', "Show what files are being removed")
     }
 
     fn run(
@@ -35,7 +37,7 @@ impl Command for RmCommand {
             miette::bail!("rm: missing operand");
         }
 
-        let recursive = args.has_flag("recursive");
+        let recursive = args.has_flag("recursive") || args.has_flag("recursive-upper");
         let force = args.has_flag("force");
         let verbose = args.has_flag("verbose");
 

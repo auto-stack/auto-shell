@@ -21,7 +21,8 @@ impl Command for MvCommand {
             .required("source", "Source file or directory")
             .required("dest", "Destination path")
             .flag_with_short("force", 'f', "Force overwrite without prompting")
-            .flag("verbose", "Show what files are being moved")
+            .flag_with_short("interactive", 'i', "Prompt (refuse, in non-interactive) before overwrite")
+            .flag_with_short("verbose", 'v', "Show what files are being moved")
     }
 
     fn run(
