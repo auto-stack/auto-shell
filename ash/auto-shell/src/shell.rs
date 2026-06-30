@@ -118,6 +118,8 @@ pub struct Shell {
     ls_icons: crate::config::IconStyle,
     /// Plan 322: Locked input mode (None = auto-detect, Some = force this mode).
     locked_mode: Option<crate::repl_mode::InputMode>,
+    /// Plan 007: when true, format_output serializes to JSON (for `ash -c --json`).
+    json_output: bool,
 }
 
 impl Shell {
@@ -233,6 +235,7 @@ impl Shell {
             temp_files_for_cleanup: Vec::new(),
             ls_icons: crate::config::AshShellConfig::load().ls_icons,
             locked_mode: None,
+            json_output: false,
         }
     }
 
@@ -680,6 +683,12 @@ impl Shell {
     /// Structured data (file lists, etc.) gets rendered as a ratatui table
     /// with borders. Everything else falls back to plain text.
     fn format_output(&self, pipeline: AtomPipeline) -> String {
+        // Plan 007: agent mode (--json) serializes the terminal pipeline
+        // to JSON instead of the human-readable table.
+        if self.json_output {
+            return self.pipeline_to_json(pipeline);
+        }
+
         // Try ratatui table rendering for structured Atom data
         if let AtomPipeline::Atom(ref atom) = pipeline {
             if atom.is_structured() {
@@ -698,6 +707,31 @@ impl Shell {
 
         // Fallback: plain text
         pipeline.into_text()
+    }
+
+    /// Serialize the terminal pipeline result to JSON (Plan 007 / MS1 --json).
+    ///
+    /// Structured Atoms reuse the hand-written `value_to_json`; plain text is
+    /// emitted as a JSON string; empty output becomes `null`.
+    fn pipeline_to_json(&self, pipeline: AtomPipeline) -> String {
+        use crate::cmd::commands::to_json::value_to_json;
+        match pipeline {
+            AtomPipeline::Atom(atom) => value_to_json(&atom.value, 0, 0),
+            AtomPipeline::Text(s) => json_string_escape(&s),
+            AtomPipeline::Empty => "null".to_string(),
+            // Streams/external: materialize to text then JSON-encode.
+            other => json_string_escape(&other.into_text()),
+        }
+    }
+
+    /// Execute a command and return output formatted for an agent caller
+    /// (Plan 007 / MS1). When `json_mode` is true, the terminal pipeline
+    /// result is serialized to JSON instead of the human-readable table.
+    pub fn execute_for_agent(&mut self, input: &str, json_mode: bool) -> Result<Option<String>> {
+        self.json_output = json_mode;
+        let result = self.execute(input);
+        self.json_output = false; // always reset (interactive default)
+        result
     }
 
     /// Execute a command chain with short-circuit `&&` / `||` evaluation.
@@ -3552,6 +3586,25 @@ fn lookup_user_home(username: &str) -> Option<String> {
 // ── Plan 309 Task 2.4: Brace expansion ──────────────────────────────────
 
 /// Expand `{a,b,c}` brace expressions. Simple single-level (no nesting).
+/// Escape a string as a JSON string literal (Plan 007 --json output).
+fn json_string_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// `file.{txt,md}` → `file.txt file.md`
 /// `a{b,c}d` → `abd acd`
 fn expand_braces(input: &str) -> String {
@@ -4211,5 +4264,51 @@ mod tests {
             shell.pwd().canonicalize().unwrap(),
             home.canonicalize().unwrap()
         );
+    }
+
+    // ---- Plan 007 / MS1: --json agent output ----
+
+    #[test]
+    fn json_string_escape_basic() {
+        assert_eq!(json_string_escape("hi"), r#""hi""#);
+        assert_eq!(json_string_escape("a\"b"), r#""a\"b""#);
+        assert_eq!(json_string_escape("line1\nline2"), r#""line1\nline2""#);
+        assert_eq!(json_string_escape("\t"), r#""\t""#);
+    }
+
+    #[test]
+    fn execute_for_agent_json_text_output() {
+        // echo hi → Text("hi\n"); --json → JSON string
+        let mut shell = Shell::new();
+        let out = shell.execute_for_agent("echo hi", true).unwrap_or(None);
+        assert_eq!(out.as_deref(), Some(r#""hi\n""#));
+    }
+
+    #[test]
+    fn execute_for_agent_non_json_is_table_text() {
+        // Without --json, echo output is the plain text (no JSON quotes).
+        let mut shell = Shell::new();
+        let out = shell.execute_for_agent("echo hi", false).unwrap_or(None);
+        assert_eq!(out.as_deref(), Some("hi\n"));
+    }
+
+    #[test]
+    fn execute_for_agent_json_resets_flag() {
+        // json_output must be reset after execute_for_agent, so a subsequent
+        // plain execute() renders normally.
+        let mut shell = Shell::new();
+        let _ = shell.execute_for_agent("echo a", true);
+        assert!(!shell.json_output, "json_output must be reset after agent exec");
+        let out = shell.execute("echo b").unwrap_or(None);
+        assert_eq!(out.as_deref(), Some("b\n"));
+    }
+
+    #[test]
+    fn execute_for_agent_json_structured_is_json_array() {
+        // ls output is structured (FileList); --json should yield a JSON array
+        // (starts with '['), not a rendered table.
+        let mut shell = Shell::new();
+        let out = shell.execute_for_agent("ls", true).unwrap_or(None).unwrap_or_default();
+        assert!(out.starts_with('['), "ls --json should be a JSON array: {out}");
     }
 }

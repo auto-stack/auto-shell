@@ -25,28 +25,35 @@ fn main() -> Result<()> {
 
     let mut i = 1;
     let mut login_mode = false;
+    let mut json_mode = false; // Plan 007: --json agent output
 
     while i < args.len() {
         let arg = &args[i];
         match arg.as_str() {
+            "--json" => {
+                json_mode = true;
+                i += 1;
+                continue;
+            }
             "-c" => {
-                // Execute a single command string
+                // Execute a single command string (Plan 007: --json for agent)
                 if i + 1 >= args.len() {
                     eprintln!("ash -c: option requires an argument");
-                    std::process::exit(1);
+                    std::process::exit(2); // usage error
                 }
                 let command = &args[i + 1];
                 let mut shell = auto_shell::Shell::new();
                 shell.load_env_persistence(); // Plan 309 Task 1.2 P4: apply ~/.config/ash/env.at
-                match shell.execute(command) {
+                match shell.execute_for_agent(command, json_mode) {
                     Ok(output) => {
                         if let Some(s) = output {
                             println!("{}", s);
                         }
                     }
                     Err(e) => {
+                        // Diagnostics to stderr; stdout stays clean for agent JSON parsing.
                         eprintln!("Error: {}", e);
-                        std::process::exit(1);
+                        std::process::exit(1); // command error
                     }
                 }
                 return Ok(());
@@ -77,6 +84,7 @@ fn main() -> Result<()> {
                 println!("  ash -c <cmd>      Execute a single command");
                 println!("  ash -s            Read script from stdin");
                 println!("  ash -l, --login   Start as login shell");
+                println!("  ash -c <cmd> --json  Output pipeline result as JSON (agent mode)");
                 println!("  ash -h, --help    Show this help");
                 println!("  ash -v, --version Show version");
                 return Ok(());
