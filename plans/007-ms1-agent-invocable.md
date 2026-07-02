@@ -1,7 +1,7 @@
 # Plan 007: MS1 — Agent 可调用（非交互 + 稳定 + JSON 输出）
 
 - **日期**: 2026-06-26
-- **状态**: 待实施
+- **状态**: ✅ 已完成（2026-07-02）
 - **RoadMap**: MS1（`docs/roadmap.md`）
 - **目标**: 让 AI 能 `ash -c "ls | sort -w size" --json` 一次性执行并拿到结构化 JSON 结果。
 
@@ -109,25 +109,25 @@ pub fn execute_for_agent(&mut self, input: &str, json_mode: bool) -> Result<Opti
 
 ## 5. 实施步骤
 
-1. **确认 execute_inner 末端格式化接缝**（line 682 format_output 的调用点），设计"末端返回 AtomPipeline"的最小改动。
-2. **TDD: atom_to_json**（复用 value_to_json）。
-3. **TDD: execute_for_agent**（execute_inner 末端可配置）。
-4. **TDD: main.rs --json flag + 退出码**。
-5. **健壮性**：审计 -c 路径的高频 unwrap（main.rs + execute 路径）。
-6. **全量回归**：cargo test（含现有交互测试不破坏）。
-7. **手动验证**：`ash -c "ls | sort -w size" --json` 输出合法 JSON。
-8. 提交 + push。
+1. ✅ **确认 execute_inner 末端格式化接缝**（line 682 format_output 的调用点），设计"末端返回 AtomPipeline"的最小改动。
+2. ✅ **TDD: atom_to_json**（复用 value_to_json）。
+3. ✅ **TDD: execute_for_agent**（execute_inner 末端可配置）。
+4. ✅ **TDD: main.rs --json flag + 退出码**。
+5. ✅ **健壮性**：审计 -c 路径的高频 unwrap（main.rs + execute 路径）。
+6. ✅ **全量回归**：cargo test（含现有交互测试不破坏）。
+7. ✅ **手动验证**：`ash -c "ls | sort -w size" --json` 输出合法 JSON。
+8. ✅ 提交 + push（commits `cd90d3a`、`8af40cb`）。
 
 ## 6. 验收标准
 
-- [ ] `ash -c "echo hi" --json` → 输出 `"hi\n"`（JSON 字符串）
-- [ ] `ash -c "ls" --json` → 输出 JSON 数组（文件列表）
-- [ ] `ash -c "ls | sort -w size" --json` → 结构化 JSON，含 name/size 字段
-- [ ] `ash -c "ls"`（无 --json）→ 渲染表格（向后兼容）
-- [ ] `ash -c "ls /no/such"` → 退出码非 0，stderr 有诊断，stdout 空
-- [ ] `ash -c "show data.csv | grep alice" --json` → JSON 匹配结果
-- [ ] 全量 cargo test 通过，无回归
-- [ ] -c 高频路径无 panic（边界输入验证）
+- [x] `ash -c "echo hi" --json` → 输出 `"hi\n"`（JSON 字符串）
+- [x] `ash -c "ls" --json` → 输出 JSON 数组（文件列表）
+- [x] `ash -c "ls | sort -w size" --json` → 结构化 JSON，含 name/size 字段
+- [x] `ash -c "ls"`（无 --json）→ 渲染表格（向后兼容）
+- [x] `ash -c "ls /no/such"` → 退出码非 0（exit=1），stderr 有诊断，stdout 空
+- [x] `ash -c "show data.csv | grep alice" --json` → JSON 匹配结果
+- [x] 全量 cargo test 通过，无回归（563 单测 + 全部集成测试）
+- [x] -c 高频路径无 panic（0 个 unwrap/expect/panic/unreachable）
 
 ## 7. 风险
 
@@ -135,3 +135,18 @@ pub fn execute_for_agent(&mut self, input: &str, json_mode: bool) -> Result<Opti
 - **JSON 序列化保真**：to_json 的 value_to_json 是手写的，需确认它覆盖 Atom.value 的所有变体（特别是 Int/Float/Bool/Null/嵌套）。
 - **退出码映射的简化**：本期不区分 126/127 的精确语义（"不可执行"vs"未找到"难区分），先用 2/1 两档，127/126 标注为"后续完善"。
 - **stdout/stderr 纪律**：现有命令可能把诊断信息 println 到 stdout（而非 eprintln stderr）。本期聚焦 -c 路径的诊断走 stderr，全量清理 stdout 污染留后续。
+
+## 8. 完成总结（2026-07-02）
+
+MS1 全部验收通过，落地提交 `cd90d3a`、`8af40cb`：
+
+- `--json` 支持 `-c` / `-s` / 脚本文件 三种入口；脚本模式下每条命令输出一行 NDJSON。
+- `--json` 修复为**全局 flag**（可在命令行任意位置出现），原实现因 `-c` 分支提前 return 导致 `ash -c "x" --json` 不生效。
+- Panic 审计：`-c` 全路径（main → execute_for_agent → execute → execute_inner → format_output/pipeline_to_json → value_to_json）**0 个 unwrap/expect/panic/unreachable**，无需加固。
+
+### 已显式延后（YAGNI / §7 风险已声明）
+| 项 | 原因 | 落点 |
+|---|---|---|
+| 退出码 126（不可执行）/ 127（未找到） | §7：与"未找到"难区分，本期用 1/2 两档 | 后续完善 |
+| 全量 stdout 诊断清理 | §7：本期仅 -c 路径诊断走 stderr | 后续 |
+| `--format csv/table/text` | §2 YAGNI | 后续 |
