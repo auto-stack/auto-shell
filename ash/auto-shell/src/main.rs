@@ -25,13 +25,18 @@ fn main() -> Result<()> {
 
     let mut i = 1;
     let mut login_mode = false;
-    let mut json_mode = false; // Plan 007: --json agent output
+    // Plan 007: `--json` is a global flag that may appear anywhere on the
+    // command line (`ash --json -c "ls"` or `ash -c "ls" --json`), so we
+    // pre-scan it out before the positional `-c` / script parsing below.
+    // (`-c` consumes its argument and returns, so a `--json` *after* it would
+    // otherwise never be seen.)
+    let json_mode = args.iter().any(|a| a == "--json");
 
     while i < args.len() {
         let arg = &args[i];
         match arg.as_str() {
             "--json" => {
-                json_mode = true;
+                // Already handled by the global pre-scan; skip here.
                 i += 1;
                 continue;
             }
@@ -67,6 +72,9 @@ fn main() -> Result<()> {
                 }
                 let mut shell = auto_shell::Shell::new();
                 shell.load_env_persistence();
+                // Plan 007: --json serializes each command's output as a JSON
+                // line (NDJSON) for agent consumers.
+                shell.set_json_output(json_mode);
                 shell.execute_script_content(&input)?;
                 return Ok(());
             }
@@ -85,6 +93,8 @@ fn main() -> Result<()> {
                 println!("  ash -s            Read script from stdin");
                 println!("  ash -l, --login   Start as login shell");
                 println!("  ash -c <cmd> --json  Output pipeline result as JSON (agent mode)");
+                println!("  ash -s --json        Output each command's result as JSON (NDJSON)");
+                println!("  ash <script.at> --json  Script output as NDJSON");
                 println!("  ash -h, --help    Show this help");
                 println!("  ash -v, --version Show version");
                 return Ok(());
@@ -114,6 +124,9 @@ fn main() -> Result<()> {
 
         let mut shell = auto_shell::Shell::new();
         shell.load_env_persistence();
+        // Plan 007: --json serializes each command's output as a JSON
+        // line (NDJSON) for agent consumers.
+        shell.set_json_output(json_mode);
         shell.execute_script_file(path)?;
         return Ok(());
     }

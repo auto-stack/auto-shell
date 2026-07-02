@@ -734,6 +734,14 @@ impl Shell {
         result
     }
 
+    /// Enable/disable JSON output for non-interactive script execution
+    /// (Plan 007: `ash -s --json` / `ash script.ash --json`). Each command's
+    /// output is serialized to a JSON line (NDJSON), since format_output
+    /// honors `self.json_output`.
+    pub fn set_json_output(&mut self, on: bool) {
+        self.json_output = on;
+    }
+
     /// Execute a command chain with short-circuit `&&` / `||` evaluation.
     ///
     /// Each element is a `(pipe_commands, next_operator)` pair:
@@ -4310,5 +4318,26 @@ mod tests {
         let mut shell = Shell::new();
         let out = shell.execute_for_agent("ls", true).unwrap_or(None).unwrap_or_default();
         assert!(out.starts_with('['), "ls --json should be a JSON array: {out}");
+    }
+
+    #[test]
+    fn set_json_output_persists_across_execute_calls() {
+        // Plan 007: `ash -s --json` / `ash script.at --json` set the flag once
+        // via set_json_output, and every subsequent execute() honors it (NDJSON
+        // per command). Unlike execute_for_agent, the flag is NOT reset.
+        let mut shell = Shell::new();
+        shell.set_json_output(true);
+        assert!(shell.json_output, "set_json_output(true) must stick");
+        let out1 = shell.execute("echo a").unwrap_or(None);
+        let out2 = shell.execute("echo b").unwrap_or(None);
+        assert_eq!(out1.as_deref(), Some(r#""a\n""#), "first execute should be JSON");
+        assert_eq!(out2.as_deref(), Some(r#""b\n""#), "second execute should still be JSON");
+        assert!(shell.json_output, "flag must persist until caller resets it");
+
+        // Reset path: caller can turn it back off for non-JSON runs.
+        shell.set_json_output(false);
+        assert!(!shell.json_output);
+        let out3 = shell.execute("echo c").unwrap_or(None);
+        assert_eq!(out3.as_deref(), Some("c\n"), "after reset, plain text again");
     }
 }
