@@ -425,6 +425,11 @@ impl Repl {
         Ok(content.trim().to_string())
     }
 
+    /// Plan 008 (MS2-A): apply a security policy to the underlying shell.
+    pub fn set_policy(&mut self, policy: ash_core::security::SecurityPolicy) {
+        self.shell.set_policy(policy);
+    }
+
     /// Run the REPL loop
     pub fn run(&mut self) -> Result<()> {
         // One-time Ctrl+C handler init (protects ASH during commands)

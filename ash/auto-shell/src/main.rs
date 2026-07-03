@@ -1,4 +1,5 @@
 use miette::Result;
+use std::path::PathBuf;
 
 fn main() -> Result<()> {
     // Set up miette for beautiful error reporting
@@ -32,11 +33,25 @@ fn main() -> Result<()> {
     // otherwise never be seen.)
     let json_mode = args.iter().any(|a| a == "--json");
 
+    // Plan 008 (MS2-A): parse security flags anywhere on the command line.
+    // They augment the policy loaded from config (`[security]` section).
+    let mut policy = parse_security_flags(&args);
+
     while i < args.len() {
         let arg = &args[i];
         match arg.as_str() {
             "--json" => {
                 // Already handled by the global pre-scan; skip here.
+                i += 1;
+                continue;
+            }
+            "--allow" | "--deny" | "--audit" => {
+                // Consumed by parse_security_flags; skip value here.
+                i += 2;
+                continue;
+            }
+            "--no-exec" | "--no-network" | "--dry-run" | "--read-only" => {
+                // Consumed by parse_security_flags.
                 i += 1;
                 continue;
             }
@@ -49,10 +64,19 @@ fn main() -> Result<()> {
                 let command = &args[i + 1];
                 let mut shell = auto_shell::Shell::new();
                 shell.load_env_persistence(); // Plan 309 Task 1.2 P4: apply ~/.config/ash/env.at
+                // Plan 008: apply CLI security policy.
+                shell.set_policy(std::mem::take(&mut policy));
                 match shell.execute_for_agent(command, json_mode) {
                     Ok(output) => {
                         if let Some(s) = output {
                             println!("{}", s);
+                        }
+                        // Plan 008: a security denial or command that set a
+                        // non-zero exit code must propagate to the process
+                        // exit code (agents rely on it).
+                        let code = shell.last_exit_code();
+                        if code != 0 {
+                            std::process::exit(code);
                         }
                     }
                     Err(e) => {
@@ -75,6 +99,8 @@ fn main() -> Result<()> {
                 // Plan 007: --json serializes each command's output as a JSON
                 // line (NDJSON) for agent consumers.
                 shell.set_json_output(json_mode);
+                // Plan 008: apply CLI security policy.
+                shell.set_policy(std::mem::take(&mut policy));
                 shell.execute_script_content(&input)?;
                 return Ok(());
             }
@@ -92,9 +118,21 @@ fn main() -> Result<()> {
                 println!("  ash -c <cmd>      Execute a single command");
                 println!("  ash -s            Read script from stdin");
                 println!("  ash -l, --login   Start as login shell");
-                println!("  ash -c <cmd> --json  Output pipeline result as JSON (agent mode)");
-                println!("  ash -s --json        Output each command's result as JSON (NDJSON)");
+                println!();
+                println!("  --json            Output as JSON (agent mode; may appear anywhere)");
+                println!("  ash -c <cmd> --json      Pipeline result as JSON");
+                println!("  ash -s --json           Each command as NDJSON");
                 println!("  ash <script.at> --json  Script output as NDJSON");
+                println!();
+                println!("  SECURITY (Plan 008):");
+                println!("  --allow <cmd>     Only allow listed commands (default-deny)");
+                println!("  --deny <cmd>      Deny a command (repeatable)");
+                println!("  --no-exec         Block all external commands");
+                println!("  --no-network      Block network commands (http_*, curl, wget, ssh...)");
+                println!("  --read-only       Block write commands (rm/mv/cp/mkdir/touch...)");
+                println!("  --dry-run         Print what would run, don't execute writes/spawns");
+                println!("  --audit <file>    Append each command to a JSON-lines audit log");
+                println!();
                 println!("  ash -h, --help    Show this help");
                 println!("  ash -v, --version Show version");
                 return Ok(());
@@ -127,6 +165,8 @@ fn main() -> Result<()> {
         // Plan 007: --json serializes each command's output as a JSON
         // line (NDJSON) for agent consumers.
         shell.set_json_output(json_mode);
+        // Plan 008: apply CLI security policy.
+        shell.set_policy(std::mem::take(&mut policy));
         shell.execute_script_file(path)?;
         return Ok(());
     }
@@ -153,7 +193,61 @@ fn main() -> Result<()> {
     println!();
 
     let mut repl = auto_shell::Repl::new()?;
+    // Plan 008: apply CLI security policy to the REPL shell too.
+    if policy.active() {
+        repl.set_policy(policy);
+    }
     repl.run()?;
 
     Ok(())
 }
+
+/// Plan 008 (MS2-A): Pre-scan command-line args for security flags and build
+/// a policy that augments the config-loaded policy. Returns a default (no-op)
+/// policy when no security flags are present.
+fn parse_security_flags(args: &[String]) -> ash_core::security::SecurityPolicy {
+    // Start from the config-loaded policy so config `[security]` settings form
+    // the base; CLI flags then turn additional restrictions on.
+    let cfg = auto_shell::config::AshShellConfig::load();
+    let mut policy = cfg.security.to_policy();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--allow" => {
+                if let Some(val) = args.get(i + 1) {
+                    // CLI --allow replaces the config allow-list (more specific).
+                    if !policy.allow.iter().any(|a| a == val) {
+                        policy.allow.push(val.clone());
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+            "--deny" => {
+                if let Some(val) = args.get(i + 1) {
+                    if !policy.deny.iter().any(|d| d == val) {
+                        policy.deny.push(val.clone());
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+            "--audit" => {
+                if let Some(val) = args.get(i + 1) {
+                    policy.audit_file = Some(PathBuf::from(val));
+                    i += 2;
+                    continue;
+                }
+            }
+            "--no-exec" => policy.no_exec = true,
+            "--no-network" => policy.no_network = true,
+            "--read-only" => policy.read_only = true,
+            "--dry-run" => policy.dry_run = true,
+            _ => {}
+        }
+        i += 1;
+    }
+    policy
+}
+

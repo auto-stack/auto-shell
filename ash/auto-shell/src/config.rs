@@ -35,6 +35,16 @@ use std::path::PathBuf;
 ///     // icons : "off"      // no icon column
 /// }
 /// ```
+
+/// Split a comma-separated config value into trimmed, non-empty entries.
+/// Used for `[security] allow`/`deny` lists (Plan 008).
+fn split_csv(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IconStyle {
     /// Single-width geometric glyphs (■/□). Renders correctly everywhere.
@@ -79,6 +89,38 @@ pub struct AshShellConfig {
     pub completion_case_sensitive: bool,
     /// `ls` icon column style (from `~/.config/ash.at`)
     pub ls_icons: IconStyle,
+    /// Plan 008 (MS2-A): security policy from `[security]` config section.
+    pub security: SecurityConfig,
+}
+
+/// Plan 008 (MS2-A): security policy fields read from `[security]` config.
+/// CLI flags override these at runtime.
+#[derive(Debug, Clone, Default)]
+pub struct SecurityConfig {
+    /// Comma-separated command allow-list (empty = no default-deny).
+    pub allow: Vec<String>,
+    /// Comma-separated command deny-list.
+    pub deny: Vec<String>,
+    pub no_exec: bool,
+    pub no_network: bool,
+    pub read_only: bool,
+    pub dry_run: bool,
+    pub audit_file: Option<PathBuf>,
+}
+
+impl SecurityConfig {
+    /// Build a `SecurityPolicy` from config values.
+    pub fn to_policy(&self) -> ash_core::security::SecurityPolicy {
+        ash_core::security::SecurityPolicy {
+            allow: self.allow.clone(),
+            deny: self.deny.clone(),
+            no_exec: self.no_exec,
+            no_network: self.no_network,
+            read_only: self.read_only,
+            dry_run: self.dry_run,
+            audit_file: self.audit_file.clone(),
+        }
+    }
 }
 
 impl Default for AshShellConfig {
@@ -92,6 +134,7 @@ impl Default for AshShellConfig {
             aliases: HashMap::new(),
             completion_case_sensitive: false,
             ls_icons: IconStyle::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -150,6 +193,31 @@ impl AshShellConfig {
         if let Some(v) = get_str(cfg, "ls", "icons") {
             config.ls_icons = IconStyle::from_str(&v);
         }
+        // Plan 008: [security] section
+        if cfg.contains_key("security") {
+            let sc = &mut config.security;
+            if let Some(v) = get_str(cfg, "security", "allow") {
+                sc.allow = split_csv(&v);
+            }
+            if let Some(v) = get_str(cfg, "security", "deny") {
+                sc.deny = split_csv(&v);
+            }
+            if let Some(v) = get_bool(cfg, "security", "no_exec") {
+                sc.no_exec = v;
+            }
+            if let Some(v) = get_bool(cfg, "security", "no_network") {
+                sc.no_network = v;
+            }
+            if let Some(v) = get_bool(cfg, "security", "read_only") {
+                sc.read_only = v;
+            }
+            if let Some(v) = get_bool(cfg, "security", "dry_run") {
+                sc.dry_run = v;
+            }
+            if let Some(v) = get_str(cfg, "security", "audit") {
+                sc.audit_file = Some(PathBuf::from(v));
+            }
+        }
         config
     }
 
@@ -194,6 +262,32 @@ impl AshShellConfig {
         if let Some(completion) = value.get("completion").and_then(|v| v.as_table()) {
             if let Some(v) = completion.get("case_sensitive").and_then(|v| v.as_bool()) {
                 config.completion_case_sensitive = v;
+            }
+        }
+
+        // Plan 008: [security] section
+        if let Some(sec) = value.get("security").and_then(|v| v.as_table()) {
+            let sc = &mut config.security;
+            if let Some(v) = sec.get("allow").and_then(|v| v.as_str()) {
+                sc.allow = split_csv(v);
+            }
+            if let Some(v) = sec.get("deny").and_then(|v| v.as_str()) {
+                sc.deny = split_csv(v);
+            }
+            if let Some(v) = sec.get("no_exec").and_then(|v| v.as_bool()) {
+                sc.no_exec = v;
+            }
+            if let Some(v) = sec.get("no_network").and_then(|v| v.as_bool()) {
+                sc.no_network = v;
+            }
+            if let Some(v) = sec.get("read_only").and_then(|v| v.as_bool()) {
+                sc.read_only = v;
+            }
+            if let Some(v) = sec.get("dry_run").and_then(|v| v.as_bool()) {
+                sc.dry_run = v;
+            }
+            if let Some(v) = sec.get("audit").and_then(|v| v.as_str()) {
+                sc.audit_file = Some(PathBuf::from(v));
             }
         }
 

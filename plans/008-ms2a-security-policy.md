@@ -1,7 +1,7 @@
 # Plan 008: MS2-A — 安全策略框架（allow/deny + 能力开关 + 危险模式 + dry-run + 审计）
 
 - **日期**: 2026-07-02
-- **状态**: 待实施
+- **状态**: ✅ 已完成（2026-07-03）
 - **RoadMap**: MS2（`docs/roadmap.md` §Milestone 2）
 - **目标**: 给 ash 加一个集中的"命令执行前拦截层"，让 Agent 调用 `ash -c "..." --read-only` / `--no-exec` / `--deny rm` / `--dry-run` / `--audit log.jsonl` 时，命令在 spawn 之前被策略检查，可审计、可预演、可拒绝。
 
@@ -254,16 +254,16 @@ pub fn execute_external(
 
 ## 6. 验收标准
 
-- [ ] `ash -c "rm -rf /"` 被危险模式拦截（退出码非 0，stderr 有诊断）
-- [ ] `ash -c "ls" --deny ls` 被拒绝；`--deny rm` 时 ls 放行
-- [ ] `ash -c "ls" --allow ls` 放行；`--allow cat` 时 ls 被拒（默认拒绝）
-- [ ] `ash -c "curl http://x" --no-network` 被拒绝
-- [ ] `ash -c "grep foo file" --no-exec` 放行（grep 是内置）；`ash -c "git status" --no-exec` 被拒（git 是外部）
-- [ ] `ash -c "touch f" --dry-run` 打印意图但不创建文件
-- [ ] `ash -c "echo hi" --audit log.jsonl` 在 log.jsonl 写入合法 JSON 行
-- [ ] `ash -c "touch f" --read-only` 被拒（命令名级拦截，本期）
-- [ ] 无任何安全 flag 时，全量 cargo test 通过，行为零变化（向后兼容）
-- [ ] config `[security]` 段生效（allow/deny 从配置读取）
+- [x] `ash -c "rm -rf /"` 被危险模式拦截（退出码 1，stderr 有诊断）
+- [x] `ash -c "ls" --deny ls` 被拒绝；`--deny rm` 时 ls 放行
+- [x] `ash -c "ls" --allow ls` 放行；`--allow cat` 时 ls 被拒（默认拒绝）
+- [x] `ash -c "curl http://x" --no-network` 被拒绝
+- [x] `ash -c "grep foo file" --no-exec` 放行（grep 是内置）；`ash -c "git status" --no-exec` 被拒（git 是外部）
+- [x] `ash -c "touch f" --dry-run` 打印意图但不创建文件
+- [x] `ash -c "echo hi" --audit log.jsonl` 在 log.jsonl 写入合法 JSON 行
+- [x] `ash -c "touch f" --read-only` 被拒（命令名级拦截，本期）
+- [x] 无任何安全 flag 时，全量 cargo test 通过，行为零变化（向后兼容）
+- [ ] config `[security]` 段生效（allow/deny 从配置读取）——代码已实现（config.rs），运行时验证留 Plan 009 一起做
 
 ## 7. 风险
 

@@ -120,6 +120,10 @@ pub struct Shell {
     locked_mode: Option<crate::repl_mode::InputMode>,
     /// Plan 007: when true, format_output serializes to JSON (for `ash -c --json`).
     json_output: bool,
+    /// Plan 008 (MS2-A): centralized security policy. Intercepts commands
+    /// before spawn/dispatch (allow/deny, capability switches, dry-run, audit,
+    /// dangerous-pattern detection). Default is a no-op (full pass-through).
+    pub policy: ash_core::security::SecurityPolicy,
 }
 
 impl Shell {
@@ -214,6 +218,13 @@ impl Shell {
             reg
         };
 
+        // Plan 008: load config once, derive both ls_icons and the base
+        // security policy. CLI flags override the policy at runtime via
+        // `Shell::set_policy`.
+        let cfg = crate::config::AshShellConfig::load();
+        let ls_icons = cfg.ls_icons;
+        let policy = cfg.security.to_policy();
+
         Self {
             current_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             vars: ShellVars::new(),
@@ -233,9 +244,10 @@ impl Shell {
             last_command_args: Vec::new(),
             last_command_last_arg: None,
             temp_files_for_cleanup: Vec::new(),
-            ls_icons: crate::config::AshShellConfig::load().ls_icons,
+            ls_icons,
             locked_mode: None,
             json_output: false,
+            policy,
         }
     }
 
@@ -328,6 +340,28 @@ impl Shell {
     /// update last_auto for mode restore after AI mode).
     pub fn is_auto_expression_pub(&self, input: &str) -> bool {
         self.is_auto_expression(input)
+    }
+
+    /// Plan 008 (MS2-A): Replace the security policy (used by CLI flags).
+    pub fn set_policy(&mut self, policy: ash_core::security::SecurityPolicy) {
+        self.policy = policy;
+    }
+
+    /// Plan 008: Classify whether a command name will resolve to an external
+    /// process (i.e. not a registry command, legacy builtin, or Auto function).
+    /// Used by the security policy to decide if `--no-exec` / `--no-network`
+    /// apply.
+    fn classify_is_external(&self, cmd_name: &str) -> bool {
+        if self.registry.get(cmd_name).is_some() {
+            return false;
+        }
+        if crate::cmd::builtin::is_legacy_builtin(cmd_name) {
+            return false;
+        }
+        if self.has_auto_function(cmd_name) {
+            return false;
+        }
+        true
     }
 
     /// Internal: actual command dispatch.
@@ -488,6 +522,48 @@ impl Shell {
 
         let cmd_name = &parts[0];
         let args = &parts[1..];
+
+        // Plan 008 (MS2-A): centralized security policy check.
+        // Decide *before* dispatch whether this command will be an external
+        // process (not in registry / builtins / Auto functions), since
+        // --no-exec / --no-network depend on that classification.
+        let is_external = self.classify_is_external(cmd_name);
+        let args_vec: Vec<String> = args.to_vec();
+        match self.policy.check(cmd_name, &args_vec, is_external) {
+            Ok(ash_core::security::Decision::Allow) => {
+                // Audit: record that the command was permitted to run.
+                self.policy.audit(&ash_core::security::AuditRecord {
+                    command: input.trim().to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    decision: "allowed".into(),
+                    exit_code: Some(self.last_exit_code),
+                    reason: None,
+                });
+            }
+            Ok(ash_core::security::Decision::DryRun) => {
+                eprintln!("[dry-run] would execute: {}", input.trim());
+                self.policy.audit(&ash_core::security::AuditRecord {
+                    command: input.trim().to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    decision: "dry-run".into(),
+                    exit_code: Some(0),
+                    reason: None,
+                });
+                return Ok(None);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                self.last_exit_code = 1;
+                self.policy.audit(&ash_core::security::AuditRecord {
+                    command: input.trim().to_string(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    decision: "denied".into(),
+                    exit_code: Some(1),
+                    reason: Some(format!("{}", e)),
+                });
+                return Ok(None);
+            }
+        }
 
         // If there are redirects AND it's an external command, use redirect-aware execution
         if let Some(ref redir) = redirect {
@@ -819,6 +895,23 @@ impl Shell {
 
             let cmd_name = &parts[0];
             let args = &parts[1..];
+
+            // Plan 008 (MS2-A): security policy check for each pipeline stage.
+            // Pipe-stages (filter/sort/...) are internal data ops — skip them.
+            let args_vec: Vec<String> = args.to_vec();
+            let is_external = self.classify_is_external(cmd_name);
+            match self.policy.check(cmd_name, &args_vec, is_external) {
+                Ok(ash_core::security::Decision::Allow) => {}
+                Ok(ash_core::security::Decision::DryRun) => {
+                    eprintln!("[dry-run] would execute: {}", cmd.trim());
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    self.last_exit_code = 1;
+                    return Ok(None);
+                }
+            }
 
             // ── Phase 1: Registered command (uses AtomPipeline via run_atom) ──
             if let Some(registered_cmd) = self.registry.get(cmd_name) {
@@ -3330,8 +3423,28 @@ impl Shell {
     /// Execute a command in the background (`cmd &`).
     fn execute_background(&mut self, input: &str) -> Result<Option<String>> {
         use crate::cmd::external;
+        use crate::core::cmd::external as core_external;
 
         let expanded = self.expand_variables(input);
+
+        // Plan 008 (MS2-A): security check before backgrounding an external
+        // command (the `cmd &` path bypasses execute_single_command).
+        let parts = core_external::parse_command(&expanded);
+        if let Some(cmd_name) = parts.first() {
+            let args_vec: Vec<String> = parts[1..].to_vec();
+            match self.policy.check(cmd_name, &args_vec, true) {
+                Ok(ash_core::security::Decision::Allow) => {}
+                Ok(ash_core::security::Decision::DryRun) => {
+                    eprintln!("[dry-run] would background: {}", expanded.trim());
+                    return Ok(None);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    self.last_exit_code = 1;
+                    return Ok(None);
+                }
+            }
+        }
 
         let child = external::spawn_external_background(&expanded, &self.current_dir)?;
         let id = self.jobs.add(expanded, child);
@@ -4339,5 +4452,90 @@ mod tests {
         assert!(!shell.json_output);
         let out3 = shell.execute("echo c").unwrap_or(None);
         assert_eq!(out3.as_deref(), Some("c\n"), "after reset, plain text again");
+    }
+
+    // ---- Plan 008 (MS2-A): security policy integration ----
+
+    #[test]
+    fn security_deny_blocks_command_via_execute() {
+        // `--deny rm` blocks rm at the execute_single_command gate.
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            deny: vec!["rm".into()],
+            ..Default::default()
+        });
+        // rm is denied → execute returns Ok(None), exit code 1, no file removed.
+        let dir = std::env::temp_dir().join(format!("ash-sec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"x").unwrap();
+        let _ = shell.execute(&format!("rm {}", victim.display()));
+        assert!(victim.exists(), "denied rm must not delete the file");
+        assert_eq!(shell.last_exit_code(), 1, "denied command sets exit code 1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn security_dry_run_skips_write() {
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            dry_run: true,
+            ..Default::default()
+        });
+        let dir = std::env::temp_dir().join(format!("ash-dry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("new.txt");
+        let _ = shell.execute(&format!("touch {}", target.display()));
+        assert!(
+            !target.exists(),
+            "dry-run touch must not create the file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn security_no_policy_is_backward_compatible() {
+        // Default policy = no-op; echo still works normally.
+        let mut shell = Shell::new();
+        let out = shell.execute("echo hi").unwrap_or(None);
+        assert_eq!(out.as_deref(), Some("hi\n"));
+    }
+
+    #[test]
+    fn security_read_only_blocks_touch() {
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            read_only: true,
+            ..Default::default()
+        });
+        let dir = std::env::temp_dir().join(format!("ash-ro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("blocked.txt");
+        let _ = shell.execute(&format!("touch {}", target.display()));
+        assert!(
+            !target.exists(),
+            "--read-only must block touch (command-name level)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn security_audit_logs_allowed_command() {
+        let dir = std::env::temp_dir().join(format!("ash-audit-int-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("audit.jsonl");
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            audit_file: Some(log.clone()),
+            ..Default::default()
+        });
+        let _ = shell.execute("echo audited");
+        let content = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            content.contains(r#""cmd":"echo audited""#),
+            "audit log should record the command: {content}"
+        );
+        assert!(content.contains(r#""decision":"allowed""#));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
