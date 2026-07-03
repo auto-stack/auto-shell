@@ -45,7 +45,7 @@ fn main() -> Result<()> {
                 i += 1;
                 continue;
             }
-            "--allow" | "--deny" | "--audit" => {
+            "--allow" | "--deny" | "--audit" | "--sandbox" => {
                 // Consumed by parse_security_flags; skip value here.
                 i += 2;
                 continue;
@@ -130,6 +130,7 @@ fn main() -> Result<()> {
                 println!("  --no-exec         Block all external commands");
                 println!("  --no-network      Block network commands (http_*, curl, wget, ssh...)");
                 println!("  --read-only       Block write commands (rm/mv/cp/mkdir/touch...)");
+                println!("  --sandbox <dir>   Confine all file operations to <dir> (Plan 009)");
                 println!("  --dry-run         Print what would run, don't execute writes/spawns");
                 println!("  --audit <file>    Append each command to a JSON-lines audit log");
                 println!();
@@ -236,6 +237,13 @@ fn parse_security_flags(args: &[String]) -> ash_core::security::SecurityPolicy {
             "--audit" => {
                 if let Some(val) = args.get(i + 1) {
                     policy.audit_file = Some(PathBuf::from(val));
+                    i += 2;
+                    continue;
+                }
+            }
+            "--sandbox" => {
+                if let Some(val) = args.get(i + 1) {
+                    policy.sandbox_dir = Some(PathBuf::from(val));
                     i += 2;
                     continue;
                 }

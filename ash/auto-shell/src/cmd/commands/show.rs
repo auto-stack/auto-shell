@@ -4,7 +4,7 @@
 //! Formerly `open` (Plan 001); renamed in Plan 004 because `open` now means
 //! "launch with the OS default application" across the auto-os ecosystem.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -63,16 +63,6 @@ fn extension_of(path: &Path) -> Option<String> {
         .map(|e| e.to_ascii_lowercase())
 }
 
-/// Resolve a path relative to the shell's CWD (mirrors cat's resolve_path).
-fn resolve_path(arg: &str, shell: &Shell) -> PathBuf {
-    let path = Path::new(arg);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        shell.pwd().join(arg)
-    }
-}
-
 pub struct ShowCommand;
 
 impl Command for ShowCommand {
@@ -109,7 +99,8 @@ impl Command for ShowCommand {
 
         let (text, ext_hint) = if let Some(path) = args.positionals.first() {
             // Rule 1 & 8: a file argument takes precedence over pipeline input.
-            let resolved = resolve_path(path, shell);
+            // Plan 009: resolve via shell (honors --sandbox).
+            let resolved = shell.resolve_path(path, false)?;
             if !resolved.exists() {
                 miette::bail!("show: {}: No such file or directory", path);
             }

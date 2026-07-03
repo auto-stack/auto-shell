@@ -43,10 +43,13 @@ impl Command for MkdirCommand {
         let mut errors = Vec::new();
 
         for arg in &args.positionals {
-            let target_path = if Path::new(arg).is_absolute() {
-                PathBuf::from(arg.as_str())
-            } else {
-                shell.pwd().join(arg.as_str())
+            // Plan 009: resolve via shell (honors --sandbox / --read-only).
+            let target_path = match shell.resolve_path(arg, true) {
+                Ok(p) => p,
+                Err(e) => {
+                    errors.push(format!("{}: {}", arg, e));
+                    continue;
+                }
             };
 
             let result = if parents {

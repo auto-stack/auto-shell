@@ -126,6 +126,46 @@ pub struct Shell {
     pub policy: ash_core::security::SecurityPolicy,
 }
 
+/// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
+/// itself doesn't exist (e.g. a file about to be created), canonicalize the
+/// nearest existing ancestor and append the remaining components. This lets
+/// the sandbox check "would this new path land inside the sandbox?".
+fn canonicalize_or_parent(path: &std::path::Path) -> Result<PathBuf> {
+    // Fast path: the target exists → canonicalize directly.
+    if let Ok(c) = path.canonicalize() {
+        return Ok(c);
+    }
+    // Walk up until we find an existing ancestor, then re-append the
+    // non-existent tail components.
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if cur.as_os_str().is_empty() {
+            break;
+        }
+        match cur.canonicalize() {
+            Ok(canon) => {
+                let mut result = canon;
+                for component in tail.into_iter().rev() {
+                    result.push(component);
+                }
+                return Ok(result);
+            }
+            Err(_) => {
+                // Push current tail component and move to parent.
+                if let Some(file_name) = cur.file_name() {
+                    tail.push(file_name.to_os_string());
+                }
+                if !cur.pop() {
+                    // Reached root without finding an existing ancestor.
+                    return Ok(path.to_path_buf());
+                }
+            }
+        }
+    }
+    Ok(path.to_path_buf())
+}
+
 impl Shell {
     /// Create a new shell instance
     pub fn new() -> Self {
@@ -659,14 +699,16 @@ impl Shell {
         use std::io::Write;
 
         if let Some(ref path) = redirect.stdout {
+            // Plan 009: resolve redirect target via sandbox/read-only policy.
+            let resolved = self.resolve_path(path, true)?;
             let file = if redirect.append_stdout {
                 std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
-                    .open(path)
+                    .open(&resolved)
                     .into_diagnostic()?
             } else {
-                File::create(path).into_diagnostic()?
+                File::create(&resolved).into_diagnostic()?
             };
             let mut writer = std::io::BufWriter::new(file);
             writer.write_all(output.as_bytes()).into_diagnostic()?;
@@ -1021,6 +1063,56 @@ impl Shell {
         self.current_dir.clone()
     }
 
+    /// Plan 009 (MS2-B): Unified path resolution + sandbox/read-only check.
+    ///
+    /// - Relative paths are joined to the shell cwd.
+    /// - The result is canonicalized (resolving symlinks) so that links
+    ///   pointing outside the sandbox are detected.
+    /// - When `--sandbox <dir>` is active, the canonical path must be inside
+    ///   the sandbox root or the call is refused.
+    /// - When `for_write` is true and `--read-only` is active, the call is
+    ///   refused (path-level write interception).
+    ///
+    /// `arg` may be a relative or absolute path (NOT yet `~`-expanded —
+    /// callers should expand `~` first if needed). Returns the canonicalized
+    /// absolute path.
+    pub fn resolve_path(&self, arg: &str, for_write: bool) -> Result<PathBuf> {
+        use std::path::Path;
+        let p = Path::new(arg);
+        let joined = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.current_dir.join(p)
+        };
+        // Plan 008 read-only: refuse path-level writes (supplements the
+        // command-name level check — this catches commands that write via
+        // std::fs internally).
+        if for_write && self.policy.read_only {
+            miette::bail!(
+                "security: write to '{}' blocked by --read-only",
+                joined.display()
+            );
+        }
+        // Canonicalize, resolving symlinks. For paths that don't yet exist
+        // (e.g. `touch newfile`), fall back to canonicalizing the parent and
+        // appending the file name.
+        let canonical = canonicalize_or_parent(&joined)?;
+        if let Some(ref sandbox) = self.policy.sandbox_dir {
+            let sandbox_canon = sandbox
+                .canonicalize()
+                .into_diagnostic()
+                .map_err(|e| miette::miette!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e))?;
+            if !canonical.starts_with(&sandbox_canon) {
+                miette::bail!(
+                    "sandbox: {} is outside sandbox {}",
+                    canonical.display(),
+                    sandbox_canon.display()
+                );
+            }
+        }
+        Ok(canonical)
+    }
+
     /// Change the current directory
     pub fn cd(&mut self, path: &str) -> Result<()> {
         let new_dir = if path == "-" {
@@ -1053,6 +1145,21 @@ impl Shell {
 
         // Try to canonicalize the path
         let canonical = new_dir.canonicalize().into_diagnostic()?;
+
+        // Plan 009: sandbox check — cd must not escape the sandbox root.
+        if let Some(ref sandbox) = self.policy.sandbox_dir {
+            let sandbox_canon = sandbox
+                .canonicalize()
+                .into_diagnostic()
+                .map_err(|e| miette::miette!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e))?;
+            if !canonical.starts_with(&sandbox_canon) {
+                miette::bail!(
+                    "sandbox: cd to {} is outside sandbox {}",
+                    canonical.display(),
+                    sandbox_canon.display()
+                );
+            }
+        }
 
         if canonical.is_dir() {
             // Update internal state
@@ -4536,6 +4643,142 @@ mod tests {
             "audit log should record the command: {content}"
         );
         assert!(content.contains(r#""decision":"allowed""#));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Plan 009 (MS2-B): path sandbox + resolve_path ----
+
+    /// Helper: create a fresh temp dir unique to this test process.
+    fn sandbox_tmp(prefix: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), rand_u32()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn rand_u32() -> u32 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        nanos.wrapping_mul(2654435761)
+    }
+
+    #[test]
+    fn resolve_path_relative_joins_cwd() {
+        // No sandbox: relative path resolves under cwd, canonicalized.
+        let mut shell = Shell::new();
+        let dir = sandbox_tmp("resolve-rel");
+        shell.current_dir = dir.clone();
+        let f = dir.join("hello.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let resolved = shell.resolve_path("hello.txt", false).unwrap();
+        // Canonical form may differ in prefix (\\?\ on Windows) but must end
+        // at the same file.
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            f.canonicalize().unwrap()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_path_nonexistent_uses_parent() {
+        // touch newfile: file doesn't exist yet — resolve via parent.
+        let mut shell = Shell::new();
+        let dir = sandbox_tmp("resolve-new");
+        shell.current_dir = dir.clone();
+        let resolved = shell.resolve_path("brand_new_file.txt", true).unwrap();
+        // Parent (dir) is canonicalized; file name appended.
+        assert_eq!(resolved.file_name().unwrap(), "brand_new_file.txt");
+        assert_eq!(resolved.parent().unwrap(), &dir.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_path_sandbox_allows_inside() {
+        let mut shell = Shell::new();
+        let sandbox = sandbox_tmp("sandbox-in");
+        shell.current_dir = sandbox.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            sandbox_dir: Some(sandbox.clone()),
+            ..Default::default()
+        });
+        // A file inside the sandbox resolves fine.
+        let inside = sandbox.join("inner.txt");
+        std::fs::write(&inside, b"x").unwrap();
+        let resolved = shell.resolve_path("inner.txt", false).unwrap();
+        assert_eq!(resolved, inside.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn resolve_path_sandbox_rejects_outside() {
+        let mut shell = Shell::new();
+        let sandbox = sandbox_tmp("sandbox-out");
+        let outside = sandbox_tmp("outside-target");
+        shell.current_dir = outside.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            sandbox_dir: Some(sandbox.clone()),
+            ..Default::default()
+        });
+        // cwd is outside the sandbox → any relative path resolves outside.
+        let result = shell.resolve_path("any.txt", false);
+        assert!(result.is_err(), "path outside sandbox must be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("outside sandbox"), "msg: {msg}");
+        let _ = std::fs::remove_dir_all(&sandbox);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn resolve_path_read_only_blocks_write() {
+        let mut shell = Shell::new();
+        let dir = sandbox_tmp("resolve-ro");
+        shell.current_dir = dir.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            read_only: true,
+            ..Default::default()
+        });
+        // for_write=true under --read-only → rejected.
+        let result = shell.resolve_path("writable.txt", true);
+        assert!(result.is_err(), "write under --read-only must be blocked");
+        // Read (for_write=false) is fine.
+        let _ = shell.resolve_path("readable.txt", false).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_path_no_policy_is_pass_through() {
+        // Default policy: any path resolves (canonicalized), no restrictions.
+        let mut shell = Shell::new();
+        let dir = sandbox_tmp("resolve-nopolicy");
+        shell.current_dir = dir.clone();
+        let f = dir.join("free.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let resolved = shell.resolve_path("free.txt", false).unwrap();
+        assert_eq!(resolved, f.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn canonicalize_or_parent_existing() {
+        let dir = sandbox_tmp("canon-exist");
+        let f = dir.join("exists.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let c = canonicalize_or_parent(&f).unwrap();
+        assert_eq!(c, f.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn canonicalize_or_parent_nonexistent() {
+        let dir = sandbox_tmp("canon-new");
+        let f = dir.join("does_not_exist.txt");
+        let c = canonicalize_or_parent(&f).unwrap();
+        assert_eq!(c.file_name().unwrap(), "does_not_exist.txt");
+        // parent is canonicalized dir
+        assert_eq!(c.parent().unwrap(), &dir.canonicalize().unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

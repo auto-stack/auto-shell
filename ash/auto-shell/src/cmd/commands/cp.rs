@@ -47,17 +47,10 @@ impl Command for CpCommand {
         let preserve = args.has_flag("preserve");
         let verbose = args.has_flag("verbose");
 
-        let source_path = if Path::new(source).is_absolute() {
-            PathBuf::from(source)
-        } else {
-            shell.pwd().join(source)
-        };
-
-        let dest_path = if Path::new(dest).is_absolute() {
-            PathBuf::from(dest)
-        } else {
-            shell.pwd().join(dest)
-        };
+        // Plan 009: resolve via shell (honors --sandbox / --read-only).
+        // Source is read, dest is write — both must be in-sandbox.
+        let source_path = shell.resolve_path(source, false)?;
+        let dest_path = shell.resolve_path(dest, true)?;
 
         if !source_path.exists() {
             miette::bail!("cp: cannot stat '{}': No such file or directory", source);

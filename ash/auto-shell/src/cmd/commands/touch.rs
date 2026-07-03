@@ -44,7 +44,7 @@ impl Command for TouchCommand {
 
         // -r reference: read times from another file (best-effort).
         let ref_time: Option<std::time::SystemTime> = if let Some(ref_path) = args.get_option("reference") {
-            let resolved = resolve_touch_path(ref_path, shell);
+            let resolved = resolve_touch_path(ref_path, shell)?;
             let meta = std::fs::metadata(&resolved)
                 .into_diagnostic()
                 .map_err(|e| miette::miette!("touch -r: {}: {}", ref_path, e))?;
@@ -57,7 +57,7 @@ impl Command for TouchCommand {
         let mut updated = 0;
 
         for arg in &args.positionals {
-            let path = resolve_touch_path(arg, shell);
+            let path = resolve_touch_path(arg, shell)?;
 
             if path.exists() {
                 // Update timestamp
@@ -97,14 +97,10 @@ impl Command for TouchCommand {
     }
 }
 
-/// Resolve path relative to shell CWD.
-fn resolve_touch_path(arg: &str, shell: &Shell) -> PathBuf {
-    let path = std::path::Path::new(arg);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        shell.pwd().join(arg)
-    }
+/// Resolve path relative to shell CWD, honoring the security policy
+/// (Plan 009: --sandbox / --read-only). touch writes, so for_write=true.
+fn resolve_touch_path(arg: &str, shell: &mut Shell) -> Result<PathBuf> {
+    shell.resolve_path(arg, true)
 }
 
 /// Set a file's modification time (cross-platform, best-effort).

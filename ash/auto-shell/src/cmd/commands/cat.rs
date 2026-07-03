@@ -9,7 +9,6 @@ use crate::shell::Shell;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
-use std::path::PathBuf;
 
 pub struct CatCommand;
 
@@ -40,7 +39,8 @@ impl Command for CatCommand {
             // Read from files
             let mut combined = String::new();
             for arg in &args.positionals {
-                let path = resolve_path(arg, shell);
+                // Plan 009: resolve via shell (honors --sandbox).
+                let path = shell.resolve_path(arg, false)?;
                 let text = std::fs::read_to_string(&path)
                     .into_diagnostic()
                     .map_err(|e| miette::miette!("cat: {}: {}", arg, e))?;
@@ -75,16 +75,6 @@ impl Command for CatCommand {
         let legacy_out = self.run(args, legacy_in, shell)?;
         let text = legacy_out.into_text();
         Ok(AtomPipeline::from_atom(Atom::text(text)))
-    }
-}
-
-/// Resolve a path relative to the shell's CWD.
-fn resolve_path(arg: &str, shell: &Shell) -> PathBuf {
-    let path = std::path::Path::new(arg);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        shell.pwd().join(arg)
     }
 }
 

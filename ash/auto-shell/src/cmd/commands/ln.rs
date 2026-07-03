@@ -40,17 +40,9 @@ impl Command for LnCommand {
         let symbolic = args.has_flag("symbolic");
         let force = args.has_flag("force");
 
-        let target = if std::path::Path::new(target_arg).is_absolute() {
-            PathBuf::from(target_arg)
-        } else {
-            shell.pwd().join(target_arg)
-        };
-
-        let link = if std::path::Path::new(link_arg).is_absolute() {
-            PathBuf::from(link_arg)
-        } else {
-            shell.pwd().join(link_arg)
-        };
+        // Plan 009: resolve via shell (honors --sandbox / --read-only).
+        let target = shell.resolve_path(target_arg, false)?;
+        let link = shell.resolve_path(link_arg, true)?;
 
         // Check target exists
         if !target.exists() && !symbolic {

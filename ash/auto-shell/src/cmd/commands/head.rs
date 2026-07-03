@@ -8,7 +8,6 @@ use crate::shell::Shell;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
-use std::path::PathBuf;
 
 pub struct HeadCommand;
 
@@ -84,11 +83,8 @@ fn read_content(args: &ParsedArgs, input: &PipelineData, shell: &mut Shell) -> R
     });
 
     if let Some(path_str) = file_arg {
-        let path = if std::path::Path::new(path_str).is_absolute() {
-            PathBuf::from(path_str)
-        } else {
-            shell.pwd().join(path_str)
-        };
+        // Plan 009: resolve via shell (honors --sandbox).
+        let path = shell.resolve_path(path_str, false)?;
         std::fs::read_to_string(&path)
             .into_diagnostic()
             .map_err(|e| miette::miette!("head: {}: {}", path_str, e))

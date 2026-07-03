@@ -36,7 +36,7 @@ impl Command for GrepCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        shell: &mut Shell,
     ) -> Result<PipelineData> {
         // Extract pattern
         let pattern = args.positionals.get(0)
@@ -77,7 +77,10 @@ impl Command for GrepCommand {
 
         // Handle input based on whether path is provided
         if let Some(path_str) = path_arg {
-            let path = Path::new(path_str);
+            // Plan 009: resolve via shell (honors --sandbox). grep reads, so
+            // for_write=false. The path may be a file or directory.
+            let path = shell.resolve_path(path_str, false)?;
+            let path = path.as_path();
             if path.is_dir() {
                 // Search directory
                 let results = if recursive {

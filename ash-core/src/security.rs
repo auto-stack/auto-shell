@@ -62,7 +62,10 @@ pub struct SecurityPolicy {
     /// Audit log destination. When set, every checked command is appended as a
     /// JSON line (`--audit <file>`).
     pub audit_file: Option<PathBuf>,
-    // Plan 009 will extend: sandbox_dir.
+    /// Plan 009: path sandbox root. When set, all file operations (read/write/
+    /// cd) are confined to this directory (after canonicalization). Symlinks
+    /// that resolve outside the sandbox are refused. CLI `--sandbox <dir>`.
+    pub sandbox_dir: Option<PathBuf>,
 }
 
 /// The outcome of a policy check for a single command.

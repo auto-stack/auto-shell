@@ -106,6 +106,8 @@ pub struct SecurityConfig {
     pub read_only: bool,
     pub dry_run: bool,
     pub audit_file: Option<PathBuf>,
+    /// Plan 009: path sandbox root (`--sandbox <dir>`).
+    pub sandbox_dir: Option<PathBuf>,
 }
 
 impl SecurityConfig {
@@ -119,6 +121,7 @@ impl SecurityConfig {
             read_only: self.read_only,
             dry_run: self.dry_run,
             audit_file: self.audit_file.clone(),
+            sandbox_dir: self.sandbox_dir.clone(),
         }
     }
 }
@@ -217,6 +220,9 @@ impl AshShellConfig {
             if let Some(v) = get_str(cfg, "security", "audit") {
                 sc.audit_file = Some(PathBuf::from(v));
             }
+            if let Some(v) = get_str(cfg, "security", "sandbox") {
+                sc.sandbox_dir = Some(PathBuf::from(v));
+            }
         }
         config
     }
@@ -288,6 +294,9 @@ impl AshShellConfig {
             }
             if let Some(v) = sec.get("audit").and_then(|v| v.as_str()) {
                 sc.audit_file = Some(PathBuf::from(v));
+            }
+            if let Some(v) = sec.get("sandbox").and_then(|v| v.as_str()) {
+                sc.sandbox_dir = Some(PathBuf::from(v));
             }
         }
 

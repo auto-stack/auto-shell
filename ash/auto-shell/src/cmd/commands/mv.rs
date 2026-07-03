@@ -41,8 +41,9 @@ impl Command for MvCommand {
         let force = args.has_flag("force");
         let verbose = args.has_flag("verbose");
 
-        let source_path = shell.pwd().join(source);
-        let dest_path = shell.pwd().join(dest);
+        // Plan 009: resolve via shell (honors --sandbox / --read-only).
+        let source_path = shell.resolve_path(source, true)?;
+        let dest_path = shell.resolve_path(dest, true)?;
 
         if !source_path.exists() {
             miette::bail!("mv: cannot stat '{}': No such file or directory", source);

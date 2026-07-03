@@ -8,7 +8,7 @@ use ash_core::pipeline::AtomPipeline;
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct RmCommand;
 
@@ -45,10 +45,15 @@ impl Command for RmCommand {
         let mut errors = Vec::new();
 
         for arg in &args.positionals {
-            let target_path = if Path::new(arg).is_absolute() {
-                PathBuf::from(arg.as_str())
-            } else {
-                shell.pwd().join(arg.as_str())
+            // Plan 009: resolve via shell (honors --sandbox / --read-only).
+            let target_path = match shell.resolve_path(arg, true) {
+                Ok(p) => p,
+                Err(e) => {
+                    if !force {
+                        errors.push(format!("{}: {}", arg, e));
+                    }
+                    continue;
+                }
             };
 
             let result = if target_path.is_dir() {
