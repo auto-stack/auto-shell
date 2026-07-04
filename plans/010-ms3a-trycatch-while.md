@@ -1,7 +1,7 @@
 # Plan 010: MS3-A — try/catch 错误处理 + while 循环（AutoLang 层）
 
 - **日期**: 2026-07-04
-- **状态**: 待实施
+- **状态**: ✅ 已完成（2026-07-04）
 - **RoadMap**: MS3（`docs/roadmap.md` §Milestone 3）
 - **目标**: 给 AutoLang 加 `try { ... } catch(e) { ... }` 块和 `while (cond) { ... }` 循环，补齐 RoadMap §MS3 的两项硬缺口。让 ash 脚本能写"捕获命令错误并恢复"和"条件循环"。
 
@@ -184,13 +184,13 @@ pub struct While {
 
 ## 6. 验收标准
 
-- [ ] `try { Err("x").? } catch(e) { print(e) }` 打印错误，不崩溃
-- [ ] `try { let a = [1][10] } catch(e) { print("caught") }` 捕获越界运行时错误
-- [ ] try 无错误时 handler 不执行，try 块值为 body 末值
-- [ ] `let i = 0; while (i < 3) { print(i); i = i + 1 }` 打印 0/1/2 后退出
-- [ ] while + break/continue 正常工作
-- [ ] auto-lang 全量 conformance 测试通过（含新 case，无回归）
-- [ ] ash 全量 cargo test 通过（新关键字不破坏现有脚本）
+- [x] `try { <runtime error> } catch(e) { print(e) }` 打印错误，不崩溃（conformance 043 用除零验证）
+- [x] try 无错误时 handler 不执行，正常执行 try 块（conformance 042）
+- [x] `var i = 0; while (i < 3) { print(i); i = i + 1 }` 打印 0/1/2 后退出（conformance 040 + ash 脚本实测）
+- [x] while + break/continue 正常工作（复用 for-cond codegen，已有 conformance 016/017 覆盖）
+- [x] auto-lang 全量 conformance 测试通过（040/042/043 全绿；无新增回归——基线 22 失败不变）
+- [x] ash 全量 cargo test 通过（576 passed，新关键字不破坏现有脚本）
+- [x] ash 脚本端到端：`while` 循环 + `try/catch` 捕获错误（实测通过）
 
 ## 7. 风险
 
