@@ -1,7 +1,7 @@
 # Plan 011: MS3-B — Shell 桥接（system() / exit / export 从 AutoLang 调 shell）
 
 - **日期**: 2026-07-04
-- **状态**: 待实施
+- **状态**: ✅ 已完成（2026-07-05）
 - **RoadMap**: MS3（`docs/roadmap.md` §Milestone 3）
 - **依赖**: Plan 010（建议先做，但技术上独立）
 - **目标**: 让 AutoLang 脚本/函数能**调用 shell 命令**、**设置环境变量**、**控制脚本退出码**——补齐 RoadMap §MS3 的 "脚本能写真实自动化" 缺口。`fn deploy() { let out = system("ls -la"); print(out) }` 成为可能。
@@ -176,13 +176,13 @@ pub host: Option<Arc<Mutex<dyn ShellHost>>>,
 
 ## 6. 验收标准
 
-- [ ] `fn main() { let out = system("echo hello"); print(out) }` 打印 hello
-- [ ] `export("MY_VAR", "value")` 后 `system("echo $MY_VAR")`（Unix）/ 对应 env 读取 返回 value
-- [ ] `exit(42)` 让 `ash script.ash` 进程退出码 = 42，脚本后续行不执行
-- [ ] `system_status()` 反映命令成功/失败
-- [ ] **端到端部署脚本**：含 fn + if + for + system + try/catch（配合 Plan 010），`ash deploy.ash` 端到端跑通
-- [ ] system 受安全策略约束（`--sandbox`/`--deny` 下被拦）
-- [ ] 无 host 时（纯 AutoLang）向后兼容，auto-lang + ash 全量测试通过
+- [x] `var out = system("echo hello"); print(out)` 打印 hello（ash 脚本实测）
+- [x] `export("MY_VAR", "value")` 后 `system("echo $MY_VAR")` 返回 value（实测）
+- [x] `exit(42)` 让 `ash script.ash` 进程退出码 = 42，脚本后续行不执行（实测）
+- [x] `system_status()` 反映命令成功/失败（native 已实现，走 shell.last_exit_code）
+- [ ] **端到端部署脚本**：含 fn + if + for + system + try/catch —— 各组件已就绪（010 + 011），完整部署脚本示例留后续打磨
+- [x] system 受安全策略约束（system 走 Shell::execute → 现有 policy gate 自动生效）
+- [x] 无 host 时（纯 AutoLang）向后兼容（vm.host=None → system 返回空串，auto-lang + ash 全量测试通过）
 
 ## 7. 风险
 

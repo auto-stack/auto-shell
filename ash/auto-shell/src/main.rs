@@ -102,6 +102,10 @@ fn main() -> Result<()> {
                 // Plan 008: apply CLI security policy.
                 shell.set_policy(std::mem::take(&mut policy));
                 shell.execute_script_content(&input)?;
+                // Plan 011: honor AutoLang `exit(code)`.
+                if shell.script_exit_requested() {
+                    std::process::exit(shell.script_exit_code());
+                }
                 return Ok(());
             }
             "-l" | "--login" => {
@@ -169,6 +173,10 @@ fn main() -> Result<()> {
         // Plan 008: apply CLI security policy.
         shell.set_policy(std::mem::take(&mut policy));
         shell.execute_script_file(path)?;
+        // Plan 011: honor AutoLang `exit(code)`.
+        if shell.script_exit_requested() {
+            std::process::exit(shell.script_exit_code());
+        }
         return Ok(());
     }
 

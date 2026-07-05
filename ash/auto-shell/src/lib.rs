@@ -21,6 +21,7 @@ pub mod cmd;
 pub mod completions;
 pub mod config;
 pub mod data;
+pub mod host;
 pub mod job;
 pub mod menu;
 pub mod prompt;
