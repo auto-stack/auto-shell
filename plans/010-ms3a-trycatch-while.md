@@ -199,3 +199,14 @@ pub struct While {
 - **catch 的错误值类型**：AutoLang 的运行时错误是 `VMError`，不是 `auto_val::Value`。catch 参数绑定需要把 VMError 转成 Value（如 `Obj{ kind: "error", message: "..." }`）。→ 定义一个 `vmerror_to_value` 映射。
 - **try/catch 与并发/任务系统交互**：AutoLang 有 task/spawn（Plan 121）。跨任务的 try/catch 边界？→ 本期只支持同任务内捕获（handler_stack 是 per-task），跨任务错误留后续。
 - **跨仓库提交顺序**：auto-lang 必须先 push（ash 依赖它）。若 auto-lang 是 path 依赖而非 git 版本，ash 端只需本地 rebuild，但 CI/他人 clone 需两个 repo 同步。→ 文档说明双 repo 依赖。
+
+## 8. 已知限制（留后续，auto-lang 仓库）
+
+实测发现一个 **预存 VM bug**（在 Plan 010 之前的 auto-lang master 上同样复现，**非本 plan 引入**）：
+
+- **循环（`while` / `for`）嵌套在 `fn` 内 → 栈溢出**。auto-lang 的持久 REPL session（`AutovmReplSession`）增量编译 `fn` 时，循环 codegen 与 session 状态交互导致 OS 栈溢出。直接运行器（`run_file`，整文件编译为单元）**不受影响**。
+- 同一根因波及 **`try/catch` 嵌套在 `fn` 或 `{ }` block 内 → 栈溢出**。
+
+**影响**：ash 脚本里不能写 `fn f() { while/for/try ... }`。**规避**：把循环和 try/catch 放在脚本顶层，`fn` 只做直线辅助。`examples/deploy.ash` 演示了这种布局。
+
+**根因待查**（auto-lang 仓库）：可能是持久 session 的 `jump_placeholders`/`jump_targets` 跨多次 `session.run` 累积，与函数 FN_PROLOG 插入后的跳转移位逻辑冲突，导致循环回跳地址错误 → 无限递归。修复需在 auto-lang 仓库调试 persistent session 的 codegen 状态隔离。**优先级**：中（ash 顶层脚本不受限，deploy demo 可用；复杂脚本待修）。
