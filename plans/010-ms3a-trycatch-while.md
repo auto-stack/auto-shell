@@ -208,4 +208,4 @@ pub struct While {
 
 **已修复**：auto-lang 仓库 Plan 355（commit `add04447`）——把整个 parse+compile+execute 包在单个 runtime 调用里，避免栈累积。ash 重建后 `fn` 内的 `while`/`for`/`if`/`try` 全部正常。
 
-**残留**：跨 `session.run` 的函数调用返回值偶有错位（persistent session 的导出地址偏移问题），但不 panic。`examples/deploy.ash` 现在可以把循环放回 `fn` 内（不再需要顶层规避），但脚本内 source + 跨 block 调用仍有返回值问题，留后续。
+**残留**：~~跨 `session.run` 的函数调用返回值偶有错位~~ → ✅ **已修复**（auto-lang commit `8938f727`，Plan 355 follow-up：export 地址被 prologue shift 重复调整，导致跨 run 函数调用地址错误。修复：只调整本次新定义的 export）。`examples/deploy.ash` 现在可以把循环放回 `fn` 内，`.ashrc` 里定义的函数在 REPL 中跨调用也返回正确值。
