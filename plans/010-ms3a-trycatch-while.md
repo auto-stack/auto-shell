@@ -200,13 +200,12 @@ pub struct While {
 - **try/catch 与并发/任务系统交互**：AutoLang 有 task/spawn（Plan 121）。跨任务的 try/catch 边界？→ 本期只支持同任务内捕获（handler_stack 是 per-task），跨任务错误留后续。
 - **跨仓库提交顺序**：auto-lang 必须先 push（ash 依赖它）。若 auto-lang 是 path 依赖而非 git 版本，ash 端只需本地 rebuild，但 CI/他人 clone 需两个 repo 同步。→ 文档说明双 repo 依赖。
 
-## 8. 已知限制（留后续，auto-lang 仓库）
+## 8. 已知限制（fn 内复合语句）—— ✅ 已修复（Plan 355）
 
 实测发现一个 **预存 VM bug**（在 Plan 010 之前的 auto-lang master 上同样复现，**非本 plan 引入**）：
 
-- **循环（`while` / `for`）嵌套在 `fn` 内 → 栈溢出**。auto-lang 的持久 REPL session（`AutovmReplSession`）增量编译 `fn` 时，循环 codegen 与 session 状态交互导致 OS 栈溢出。直接运行器（`run_file`，整文件编译为单元）**不受影响**。
-- 同一根因波及 **`try/catch` 嵌套在 `fn` 或 `{ }` block 内 → 栈溢出**。
+- **循环（`while` / `for`）/ `try` / `if` 嵌套在 `fn` 内 → 栈溢出**。根因：持久 REPL session 每次 `session.run` 创建 `tokio::runtime::Runtime::new()` + `block_on()`，消耗调用线程 ~2MB 栈用于 worker metadata，累积后解析 fn body 的深层递归树时栈耗尽。
 
-**影响**：ash 脚本里不能写 `fn f() { while/for/try ... }`。**规避**：把循环和 try/catch 放在脚本顶层，`fn` 只做直线辅助。`examples/deploy.ash` 演示了这种布局。
+**已修复**：auto-lang 仓库 Plan 355（commit `add04447`）——把整个 parse+compile+execute 包在单个 runtime 调用里，避免栈累积。ash 重建后 `fn` 内的 `while`/`for`/`if`/`try` 全部正常。
 
-**根因待查**（auto-lang 仓库）：可能是持久 session 的 `jump_placeholders`/`jump_targets` 跨多次 `session.run` 累积，与函数 FN_PROLOG 插入后的跳转移位逻辑冲突，导致循环回跳地址错误 → 无限递归。修复需在 auto-lang 仓库调试 persistent session 的 codegen 状态隔离。**优先级**：中（ash 顶层脚本不受限，deploy demo 可用；复杂脚本待修）。
+**残留**：跨 `session.run` 的函数调用返回值偶有错位（persistent session 的导出地址偏移问题），但不 panic。`examples/deploy.ash` 现在可以把循环放回 `fn` 内（不再需要顶层规避），但脚本内 source + 跨 block 调用仍有返回值问题，留后续。
