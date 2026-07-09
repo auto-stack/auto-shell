@@ -29,6 +29,10 @@ pub mod repl_mode;
 pub mod shell;
 pub mod signal;
 
+/// Default `~/.ashrc` content, seeded on first start so users discover the
+/// user-defined-functions feature. Editable by the user afterwards.
+pub const DEFAULT_ASHRC: &str = include_str!("default_ashrc.txt");
+
 // Re-export core modules at crate root for backward compatibility
 pub use ash_core::bookmarks;
 pub use ash_core::parser;

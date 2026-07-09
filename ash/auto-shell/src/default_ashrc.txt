@@ -1,0 +1,42 @@
+// ~/.ashrc — ash startup script (like .bashrc)
+//
+// This file runs every time you start an interactive ash session. Use it to
+// define your own functions (AutoLang `fn`), aliases, and settings.
+//
+// == Organizing functions across files ==
+// To keep functions in separate files, `source` them here. For example,
+// put work-related functions in ~/.config/ash/work.at and add a line:
+//
+//     source ~/.config/ash/work.at
+//
+// == Calling your functions ==
+// Functions defined here are available at the prompt:
+//     ash> now()           # prints the current date/time
+//     ash> cpu()           # shows CPU info
+//
+// Edit this file and restart ash (or run `source ~/.ashrc`) to apply changes.
+
+// ── now — print the current date/time ──
+fn now() {
+    print(system("date"))
+}
+
+// ── cpu — show CPU info ──
+fn cpu() {
+    print(system("sys.cpu"))
+}
+
+// ── ip — show network interfaces ──
+fn ip() {
+    print(system("ipconfig 2>nul || ifconfig 2>/dev/null || ip addr"))
+}
+
+// ── greet — a simple hello function with a parameter ──
+fn greet(name) {
+    print("hello, " + name + "!")
+}
+
+// ── add — add two numbers ──
+fn add(a, b) {
+    a + b
+}

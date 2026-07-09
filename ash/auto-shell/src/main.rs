@@ -123,6 +123,9 @@ fn main() -> Result<()> {
                 println!("  ash -s            Read script from stdin");
                 println!("  ash -l, --login   Start as login shell");
                 println!();
+                println!("  On first start, ash creates ~/.ashrc with example functions.");
+                println!("  Edit it to define your own functions (like .bashrc).");
+                println!();
                 println!("  --json            Output as JSON (agent mode; may appear anywhere)");
                 println!("  ash -c <cmd> --json      Pipeline result as JSON");
                 println!("  ash -s --json           Each command as NDJSON");

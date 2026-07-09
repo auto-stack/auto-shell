@@ -41,11 +41,21 @@ impl Repl {
             shell.set_alias(name, value);
         }
 
-        // Plan 302 Step 1.3: Load ~/.ashrc if it exists (can override config aliases)
+        // Plan 302 Step 1.3: Load ~/.ashrc (user startup script — like .bashrc).
+        // This is where user-defined functions (AutoLang `fn`) and aliases live.
+        // On first start (file missing), seed it with example functions so users
+        // discover the feature. Functions defined here register into the
+        // persistent session and are callable from the prompt.
         if let Some(home) = dirs::home_dir() {
             let rc_path = home.join(".ashrc");
             if rc_path.exists() {
                 let _ = shell.source_file(&rc_path); // silently ignore errors
+            } else {
+                // First run: create a default .ashrc with example functions.
+                if let Ok(content) = std::str::from_utf8(crate::DEFAULT_ASHRC.as_bytes()) {
+                    let _ = std::fs::write(&rc_path, content);
+                    let _ = shell.source_file(&rc_path);
+                }
             }
         }
 
