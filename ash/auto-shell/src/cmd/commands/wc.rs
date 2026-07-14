@@ -13,6 +13,7 @@ impl Command for WcCommand {
 
     fn signature(&self) -> Signature {
         Signature::new("wc", "Count lines, words, bytes, and characters")
+            .optional("file", "File(s) to count (default: count from pipeline)")
             .flag_with_short("lines", 'l', "Count lines")
             .flag_with_short("words", 'w', "Count words")
             .flag_with_short("bytes", 'c', "Count bytes")
@@ -23,7 +24,7 @@ impl Command for WcCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        shell: &mut Shell,
     ) -> Result<PipelineData> {
         // Extract flags
         let count_lines = args.has_flag("lines");
@@ -33,6 +34,12 @@ impl Command for WcCommand {
 
         // If no flags specified, count all
         let count_all = !count_lines && !count_words && !count_bytes && !count_chars;
+
+        // If file arguments are provided, read and count them (POSIX wc behavior).
+        // This takes precedence over pipeline input.
+        if !args.positionals.is_empty() {
+            return wc_files(args, shell, count_lines, count_words, count_bytes, count_chars, count_all);
+        }
 
         match input {
             PipelineData::Value(Value::Array(arr)) => {
@@ -248,6 +255,91 @@ impl Command for WcCommand {
     }
 }
 
+/// Count lines, words, bytes, chars for one or more files (POSIX wc behavior).
+/// Called when file arguments are given (e.g., `wc -l shell.rs` or `wc file1 file2`).
+fn wc_files(
+    args: &crate::cmd::parser::ParsedArgs,
+    shell: &mut Shell,
+    count_lines: bool,
+    count_words: bool,
+    count_bytes: bool,
+    count_chars: bool,
+    count_all: bool,
+) -> Result<PipelineData> {
+    let mut results: Vec<Value> = Vec::new();
+    let mut total_lines = 0i32;
+    let mut total_words = 0i32;
+    let mut total_bytes = 0i32;
+    let mut total_chars = 0i32;
+
+    for file_arg in &args.positionals {
+        let path = match shell.resolve_path(file_arg, false) {
+            Ok(p) => p,
+            Err(e) => {
+                miette::bail!("wc: {}: {}", file_arg, e);
+            }
+        };
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                miette::bail!("wc: {}: {}", file_arg, e);
+            }
+        };
+
+        let lines = count_lines_in_text(&content) as i32;
+        let words = count_words_in_text(&content) as i32;
+        let bytes = content.len() as i32;
+        let chars = content.chars().count() as i32;
+
+        total_lines += lines;
+        total_words += words;
+        total_bytes += bytes;
+        total_chars += chars;
+
+        let mut obj = Obj::new();
+        if count_lines || count_all {
+            obj.set("lines", Value::Int(lines));
+        }
+        if count_words || count_all {
+            obj.set("words", Value::Int(words));
+        }
+        if count_bytes || count_all {
+            obj.set("bytes", Value::Int(bytes));
+        }
+        if count_chars || count_all {
+            obj.set("chars", Value::Int(chars));
+        }
+        obj.set("file", Value::str(file_arg));
+        results.push(Value::Obj(obj));
+    }
+
+    // If multiple files, add a "total" row (POSIX behavior).
+    if args.positionals.len() > 1 {
+        let mut total = Obj::new();
+        if count_lines || count_all {
+            total.set("lines", Value::Int(total_lines));
+        }
+        if count_words || count_all {
+            total.set("words", Value::Int(total_words));
+        }
+        if count_bytes || count_all {
+            total.set("bytes", Value::Int(total_bytes));
+        }
+        if count_chars || count_all {
+            total.set("chars", Value::Int(total_chars));
+        }
+        total.set("file", Value::str("total"));
+        results.push(Value::Obj(total));
+    }
+
+    // Single file → return a single object; multiple → array.
+    if results.len() == 1 {
+        Ok(PipelineData::from_value(results.into_iter().next().unwrap()))
+    } else {
+        Ok(PipelineData::from_value(Value::Array(Array::from(results))))
+    }
+}
+
 /// Extract text content from a Value
 fn extract_text(value: &Value) -> Option<String> {
     match value {
@@ -342,5 +434,36 @@ mod tests {
         } else {
             panic!("Expected Value::Obj with lines count");
         }
+    }
+
+    #[test]
+    fn test_wc_counts_file() {
+        // wc -l <file> should read the file and count its lines.
+        let dir = std::env::temp_dir().join(format!("ash-wc-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let test_file = dir.join("test.txt");
+        std::fs::write(&test_file, "line1\nline2\nline3\n").unwrap();
+
+        let wc = WcCommand;
+        let mut flags = std::collections::HashMap::new();
+        flags.insert("lines".to_string(), true);
+        let args = crate::cmd::parser::ParsedArgs {
+            positionals: vec![test_file.to_string_lossy().into_owned()],
+            flags,
+            ..Default::default()
+        };
+
+        let mut shell = Shell::new();
+        // Use absolute path so resolve_path works regardless of cwd.
+        let result = wc.run(&args, PipelineData::empty(), &mut shell).unwrap();
+
+        if let PipelineData::Value(Value::Obj(obj)) = result {
+            let lines = obj.get("lines");
+            assert_eq!(lines, Some(Value::Int(3)), "should count 3 lines in the file");
+        } else {
+            panic!("Expected Value::Obj, got {:?}", result);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
