@@ -35,3 +35,9 @@ fn countdown(n) {
 fn banner(text) {
     print("=== " + text + " ===")
 }
+
+// ── host_info — show the machine name via system() ──
+fn host_info() {
+    print(system("hostname"))
+}
+
