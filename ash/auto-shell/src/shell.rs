@@ -182,6 +182,7 @@ impl Shell {
             reg.register(Box::new(commands::ls::LsCommand));
             reg.register(Box::new(commands::cd::CdCommand));
             reg.register(Box::new(commands::pwd::PwdCommand));
+            reg.register(Box::new(commands::realpath::RealpathCommand));
             reg.register(Box::new(commands::echo::EchoCommand));
             reg.register(Box::new(commands::help::HelpCommand));
             reg.register(Box::new(commands::get::GetCommand));

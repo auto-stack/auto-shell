@@ -45,6 +45,7 @@ pub mod pwd;
 pub mod rev;
 pub mod rm;
 pub mod run;
+pub mod realpath;
 pub mod r#where;
 pub mod select;
 pub mod show;
