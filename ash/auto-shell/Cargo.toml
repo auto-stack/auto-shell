@@ -52,6 +52,8 @@ chrono = "0.4"
 regex = "1.10"
 unicode-segmentation = "1.10"
 unicode-width = "0.2"
+# Syntax highlighting for `show` command (bat-style code coloring)
+syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
 # Note: Using regex crate instead of grep crate for simpler API
 # ripgrep's grep crate has complex module structure that's not well documented
 

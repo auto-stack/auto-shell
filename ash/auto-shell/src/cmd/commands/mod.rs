@@ -1,6 +1,7 @@
 pub mod build;
 pub mod cat;
 pub mod cd;
+pub mod code_highlight;
 pub mod column;
 pub mod cp;
 pub mod cut;

@@ -17,11 +17,13 @@ use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
 
 /// The target output format for `show`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Format {
     Json,
     Csv,
     Text,
+    /// Code file to be syntax-highlighted. Carries the file extension.
+    Code(String),
 }
 
 /// Decide the output format from an explicit `--as` option, a file extension
@@ -38,6 +40,9 @@ fn resolve_format(args: &ParsedArgs, ext_hint: Option<&str>) -> Format {
         None => match ext_hint.map(|e| e.to_ascii_lowercase()).as_deref() {
             Some("json") => Format::Json,
             Some("csv") => Format::Csv,
+            Some(ext) if super::code_highlight::is_code_file(ext) => {
+                Format::Code(ext.to_string())
+            }
             _ => Format::Text,
         },
     }
@@ -52,6 +57,11 @@ fn parse_text(text: &str, fmt: Format) -> Result<PipelineData> {
             text, ",", true,
         )?))),
         Format::Text => Ok(PipelineData::from_text(text.to_string())),
+        Format::Code(ext) => {
+            // Syntax-highlight the code with ANSI color escapes.
+            let highlighted = super::code_highlight::highlight_code(text, &ext);
+            Ok(PipelineData::from_text(highlighted))
+        }
     }
 }
 
@@ -82,6 +92,7 @@ impl Command for ShowCommand {
                 "Formatting rules:\n  \
                  .json  → parsed to a structured Value (table/record)\n  \
                  .csv   → parsed to a table (Array of Obj)\n  \
+                 .toml/.rs/.py/.js/... → syntax-highlighted code\n  \
                  other  → raw file text (same as `cat`)",
             )
     }
@@ -155,6 +166,14 @@ mod tests {
     fn resolve_format_defaults_to_text_for_unknown_extension() {
         assert_eq!(resolve_format(&args_with_as(None), Some("txt")), Format::Text);
         assert_eq!(resolve_format(&args_with_as(None), Some("log")), Format::Text);
+    }
+
+    #[test]
+    fn resolve_format_detects_code_files() {
+        assert_eq!(resolve_format(&args_with_as(None), Some("toml")), Format::Code("toml".into()));
+        assert_eq!(resolve_format(&args_with_as(None), Some("rs")), Format::Code("rs".into()));
+        assert_eq!(resolve_format(&args_with_as(None), Some("py")), Format::Code("py".into()));
+        assert_eq!(resolve_format(&args_with_as(None), Some("TOML")), Format::Code("toml".into()));
     }
 
     #[test]
