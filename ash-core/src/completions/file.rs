@@ -15,18 +15,24 @@ pub fn complete_file(input: &str) -> Vec<Completion> {
     let path_start = last_space_idx.map(|i| i + 1).unwrap_or(0);
     let partial_path = &input[path_start..];
 
-    if partial_path.is_empty() {
+    // Expand `~` to the user's home directory so that Tab completion works for
+    // paths like `~/.ashrc` or `~/src/`. Both bare `~` and `~/...` are handled.
+    // The expanded path is used for directory scanning; the original `~`-prefixed
+    // text is preserved in completion display so the user sees what they typed.
+    let expanded_path = expand_tilde(partial_path);
+
+    if expanded_path.is_empty() {
         // Complete from current directory
         complete_from_dir(Path::new("."), "", &mut completions);
     } else {
         // Check if path ends with a directory separator (e.g., "src/", "src/\")
         // In this case, we want to list the contents of that directory
-        if partial_path.ends_with('/') || partial_path.ends_with('\\') {
+        if expanded_path.ends_with('/') || expanded_path.ends_with('\\') {
             // List contents of the directory
-            complete_from_dir(Path::new(partial_path), "", &mut completions);
+            complete_from_dir(Path::new(&expanded_path), "", &mut completions);
         } else {
             // Extract directory and partial name
-            let path = Path::new(partial_path);
+            let path = Path::new(&expanded_path);
 
             // Get parent directory, defaulting to "." if parent is empty or doesn't exist
             let parent = if let Some(p) = path.parent() {
@@ -47,6 +53,22 @@ pub fn complete_file(input: &str) -> Vec<Completion> {
     }
 
     completions
+}
+
+/// Expand a leading `~` (or `~/...`) to the home directory.
+/// Returns the original string unchanged if it doesn't start with `~` or if
+/// the home directory can't be determined.
+fn expand_tilde(path: &str) -> String {
+    if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home.to_string_lossy().into_owned();
+        }
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest).to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
 }
 
 /// Complete files from a directory with a partial name filter.
@@ -288,5 +310,33 @@ mod tests {
                 first.display
             );
         }
+    }
+
+    #[test]
+    fn test_expand_tilde() {
+        // Bare ~ → home dir
+        let expanded = expand_tilde("~");
+        assert_ne!(expanded, "~", "bare ~ should be expanded");
+        assert!(!expanded.starts_with('~'));
+
+        // ~/sub → home/sub
+        let expanded = expand_tilde("~/Documents");
+        assert!(!expanded.starts_with('~'));
+        assert!(expanded.ends_with("Documents"));
+
+        // Non-tilde paths unchanged
+        assert_eq!(expand_tilde("src/main.rs"), "src/main.rs");
+        assert_eq!(expand_tilde("./test"), "./test");
+        assert_eq!(expand_tilde("/absolute/path"), "/absolute/path");
+    }
+
+    #[test]
+    fn test_complete_file_tilde_home() {
+        // `cat ~/.ashr` should complete to find `.ashrc` in the home dir.
+        // We can't assert the exact file exists, but the completion should
+        // at least scan the home directory (not fail silently on `~`).
+        let completions = complete_file("cat ~/.ashr");
+        // If ~/.ashrc exists, it should appear; either way, no panic.
+        let _ = completions;
     }
 }
