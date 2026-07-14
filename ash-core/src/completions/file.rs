@@ -131,9 +131,15 @@ fn complete_from_dir(dir_path: &Path, partial: &str, completions: &mut Vec<Compl
         }
     }
 
-    // Prefix matches first, fuzzy matches as fallback
-    completions.extend(prefix_matches);
-    completions.extend(fuzzy_matches);
+    // Prefix matches take priority. Fuzzy (prefix-subsequence) matches are
+    // ONLY included when there are zero prefix matches — so typing `cr` with
+    // `crates/` present won't also show `Cargo.lock` (which only fuzzy-matches
+    // c→C, r→r). This keeps the candidate list clean and predictable.
+    if !prefix_matches.is_empty() {
+        completions.extend(prefix_matches);
+    } else {
+        completions.extend(fuzzy_matches);
+    }
 }
 
 /// Check if `input` matches `candidate` as a "prefix-subsequence" pattern.
