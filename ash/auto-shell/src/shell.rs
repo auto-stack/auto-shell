@@ -127,6 +127,11 @@ pub struct Shell {
     /// Plan 011 (MS3-B): shell-host bridge for AutoLang system()/exit()/
     /// export(). Installed on the VM so natives can call back into this Shell.
     pub host: crate::host::ShellHostImpl,
+    /// Whether the currently-executing command is the final (or only) one in
+    /// its pipeline.  Commands that own their output (e.g. `show` streaming)
+    /// use this to decide between writing directly to stdout vs returning
+    /// data in the pipeline.
+    is_pipeline_last: bool,
 }
 
 /// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
@@ -210,6 +215,8 @@ impl Shell {
             reg.register(Box::new(commands::file::FileCommand));
             reg.register(Box::new(commands::tee::TeeCommand));
             reg.register(Box::new(commands::ln::LnCommand));
+            reg.register(Box::new(commands::less::LessCommand));
+            reg.register(Box::new(commands::less::MoreCommand));
             // Batch 2: Text processing
             reg.register(Box::new(commands::sort::SortCommand));
             reg.register(Box::new(commands::uniq::UniqCommand));
@@ -293,6 +300,7 @@ impl Shell {
             json_output: false,
             policy,
             host: crate::host::ShellHostImpl::new(),
+            is_pipeline_last: true, // standalone commands act as pipeline-final
         };
 
         // Plan 011 (MS3-B): install the shell-host bridge on the AutoVM so
@@ -301,6 +309,10 @@ impl Shell {
         // the VM's lifetime.
         let host_handle = shell.host.shared();
         shell.session.vm.set_host(host_handle);
+
+        // Pre-warm syntect syntax/theme caches in the background so the
+        // first `show` call doesn't block for 2-3s on regex compilation.
+        crate::cmd::commands::code_highlight::warmup();
 
         shell
     }
@@ -640,6 +652,7 @@ impl Shell {
         // If there are redirects AND it's an external command, use redirect-aware execution
         if let Some(ref redir) = redirect {
             // For registry/builtin/auto commands: execute normally, then write output to file
+            self.set_pipeline_last(false); // redirect target is a file, not terminal
             if let Some(cmd) = self.registry.get(cmd_name) {
                 let signature = cmd.signature();
                 match crate::cmd::parser::parse_args(&signature, args) {
@@ -676,6 +689,7 @@ impl Shell {
 
         // No redirects — normal execution path
         // Check registry first
+        self.set_pipeline_last(true); // single command = pipeline final
         if let Some(cmd) = self.registry.get(cmd_name) {
             let signature = cmd.signature();
             match crate::cmd::parser::parse_args(&signature, args) {
@@ -892,6 +906,17 @@ impl Shell {
         self.json_output = on;
     }
 
+    /// Whether the currently-executing command is the final (or only) one in
+    /// its pipeline. Commands like `show` use this to decide between streaming
+    /// directly to stdout vs returning data through the pipeline.
+    pub fn is_pipeline_last(&self) -> bool {
+        self.is_pipeline_last
+    }
+
+    pub(crate) fn set_pipeline_last(&mut self, v: bool) {
+        self.is_pipeline_last = v;
+    }
+
     /// Execute a command chain with short-circuit `&&` / `||` evaluation.
     ///
     /// Each element is a `(pipe_commands, next_operator)` pair:
@@ -991,6 +1016,10 @@ impl Shell {
             if let Some(registered_cmd) = self.registry.get(cmd_name) {
                 let signature = registered_cmd.signature();
                 let input = input_pipeline.take().unwrap_or_else(AtomPipeline::empty);
+
+                // Tell the command whether it's the last in the pipeline so
+                // it can decide between streaming to stdout vs returning data.
+                self.set_pipeline_last(is_last);
 
                 match crate::cmd::parser::parse_args(&signature, args) {
                     Ok(parsed_args) => {

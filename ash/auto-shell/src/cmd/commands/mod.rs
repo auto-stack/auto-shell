@@ -29,6 +29,7 @@ pub mod http_head;
 pub mod http_post;
 pub mod http_put;
 pub mod insert;
+pub mod less;
 pub mod ln;
 pub mod ls;
 pub mod math_avg;

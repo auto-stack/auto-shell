@@ -280,6 +280,17 @@ pub trait Command {
         let legacy_out = self.run(args, legacy_in, shell)?;
         Ok(pipeline_convert::pipeline_data_to_atom(legacy_out))
     }
+
+    /// Whether this command can be safely re-spawned as an `ash -c`
+    /// subprocess to produce a true OS-pipe stream when it appears in the
+    /// middle of a pipeline (e.g. `show file.rs | less`).
+    ///
+    /// Commands that depend on shell state (aliases, variables, working
+    /// directory beyond `cwd`) or that consume pipeline input should return
+    /// `false`.  Default is `false`; opt in by overriding.
+    fn is_streamable_producer(&self) -> bool {
+        false
+    }
 }
 
 /// Execute a command (built-in or external)

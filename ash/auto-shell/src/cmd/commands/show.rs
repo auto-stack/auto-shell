@@ -4,6 +4,7 @@
 //! Formerly `open` (Plan 001); renamed in Plan 004 because `open` now means
 //! "launch with the OS default application" across the auto-os ecosystem.
 
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 use auto_val::Value;
@@ -88,12 +89,18 @@ impl Command for ShowCommand {
                 'a',
                 "Force a format: json | csv | text (default: infer from extension)",
             )
+            .flag_with_short(
+                "pager",
+                'p',
+                "Display code in an interactive pager (like `less` with lazy syntax highlighting)",
+            )
             .extra_help(
                 "Formatting rules:\n  \
                  .json  → parsed to a structured Value (table/record)\n  \
                  .csv   → parsed to a table (Array of Obj)\n  \
                  .toml/.rs/.py/.js/... → syntax-highlighted code\n  \
-                 other  → raw file text (same as `cat`)",
+                 other  → raw file text (same as `cat`)\n  \
+                 -p / --pager → view code interactively with lazy highlighting",
             )
     }
 
@@ -129,7 +136,41 @@ impl Command for ShowCommand {
         };
 
         let fmt = resolve_format(args, ext_hint.as_deref());
-        parse_text(&text, fmt)
+        let want_pager = args.has_flag("pager");
+
+        // `--pager` on a code file: enter interactive pager with lazy
+        // syntax highlighting — only the visible lines are highlighted,
+        // so the first screen appears in milliseconds regardless of file
+        // size.  Only when stdout is a terminal.
+        if want_pager {
+            if let Format::Code(ref ext) = fmt {
+                if std::io::stdout().is_terminal() {
+                    let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+                    let _raw = super::less::RawModeGuard::enter()?;
+                    let _alt = super::less::AltScreenGuard::enter()?;
+                    let mut pager = super::less::CodePager::new(lines, ext.clone())?;
+                    pager.run()?;
+                    return Ok(PipelineData::empty());
+                }
+            }
+        }
+
+        // For code files when this command is the final (or only) one in the
+        // pipeline: stream highlighted output directly to stdout so the first
+        // line appears in ~10 µs.  When piped to another command (e.g.
+        // `show file.rs | less`), return highlighted text through the normal
+        // PipelineData path.
+        match &fmt {
+            Format::Code(ext) if shell.is_pipeline_last() => {
+                let stdout = std::io::stdout();
+                let mut lock = stdout.lock();
+                super::code_highlight::highlight_code_to_writer(&text, ext, &mut lock)
+                    .into_diagnostic()?;
+                lock.flush().into_diagnostic()?;
+                Ok(PipelineData::empty())
+            }
+            _ => parse_text(&text, fmt),
+        }
     }
 
     fn run_atom(
@@ -138,10 +179,54 @@ impl Command for ShowCommand {
         input: ash_core::pipeline::AtomPipeline,
         shell: &mut Shell,
     ) -> Result<ash_core::pipeline::AtomPipeline> {
+        // ── Streaming path for code files in a pipeline ──
+        //
+        // When `show file.rs` is NOT the last command (e.g. `show file.rs |
+        // less`) and the file is a code file, re-spawn ourselves as an
+        // `ash -c "show file.rs"` subprocess.  The child streams highlighted
+        // output through an OS pipe, giving the downstream consumer true
+        // lazy/streaming input.  We only do this for code files — JSON/CSV
+        // produce structured Values that must stay in-process.
+        if !shell.is_pipeline_last() && args.positionals.len() == 1 {
+            let path = &args.positionals[0];
+            if let Ok(resolved) = shell.resolve_path(path, false) {
+                if resolved.exists() {
+                    if let Some(ext) = extension_of(&resolved) {
+                        if super::code_highlight::is_code_file(&ext) {
+                            // Spawn `ash -c "show <path>"` as a subprocess.
+                            let cmd_str = format!("show {}", path);
+                            if let Ok(ash_exe) = std::env::current_exe() {
+                                let mut child_cmd = std::process::Command::new(&ash_exe);
+                                child_cmd
+                                    .arg("-c")
+                                    .arg(&cmd_str)
+                                    .current_dir(shell.pwd())
+                                    .stdin(std::process::Stdio::null())
+                                    .stdout(std::process::Stdio::piped())
+                                    .stderr(std::process::Stdio::inherit());
+                                if let Ok(child) = child_cmd.spawn() {
+                                    let stream =
+                                        ash_core::pipeline::ExternalStream::new(child);
+                                    return Ok(ash_core::pipeline::AtomPipeline::ExternalStream(
+                                        stream,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Normal path: bridge to run().
         let legacy_in = atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;
         Ok(pipeline_data_to_atom(legacy_out))
     }
+
+    // Note: `show` does NOT set is_streamable_producer() = true because it
+    // produces structured Values for JSON/CSV files (which need in-process
+    // AtomPipeline passing).  Code-file streaming is handled inside run().
 }
 
 #[cfg(test)]

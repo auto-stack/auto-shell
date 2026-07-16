@@ -5,10 +5,38 @@
 //! lightweight regex-based highlighter. Maps file extensions to syntax
 //! definitions and renders with ANSI escape codes.
 
+use std::sync::OnceLock;
+
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style, ThemeSet};
 use syntect::parsing::SyntaxSet;
-use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+use syntect::util::LinesWithEndings;
+
+/// Lazily-loaded singleton syntax set (loading 75 grammars takes ~1s;
+/// cached so subsequent `show` calls are instant).
+fn syntax_set() -> &'static SyntaxSet {
+    static SS: OnceLock<SyntaxSet> = OnceLock::new();
+    SS.get_or_init(|| SyntaxSet::load_defaults_newlines())
+}
+
+/// Lazily-loaded singleton theme set.
+fn theme_set() -> &'static ThemeSet {
+    static TS: OnceLock<ThemeSet> = OnceLock::new();
+    TS.get_or_init(|| ThemeSet::load_defaults())
+}
+
+/// Pre-warm the syntax and theme caches in a background thread.
+/// Call this early (e.g. from `Shell::new()`) so that the first `show`
+/// invocation doesn't block on syntect loading.
+pub fn warmup() {
+    std::thread::Builder::new()
+        .name("syntect-warmup".into())
+        .spawn(|| {
+            let _ = syntax_set();
+            let _ = theme_set();
+        })
+        .ok();
+}
 
 /// File extensions that `show` should render with syntax highlighting.
 pub fn is_code_file(ext: &str) -> bool {
@@ -39,10 +67,10 @@ pub fn highlight_code(text: &str, ext: &str) -> String {
         return highlight_toml_like(text);
     }
 
-    let ps = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
+    let ps = syntax_set();
+    let ts = theme_set();
 
-    let syntax = match find_syntax_by_extension(&ps, &extension) {
+    let syntax = match find_syntax_by_extension(ps, &extension) {
         Some(s) => s,
         None => return text.to_string(),
     };
@@ -54,7 +82,9 @@ pub fn highlight_code(text: &str, ext: &str) -> String {
         .unwrap();
 
     let mut h = HighlightLines::new(syntax, theme);
-    let mut output = String::with_capacity(text.len());
+    // ANSI escape codes add roughly 30-60 bytes per color span; a 2×
+    // estimate avoids reallocations for typical source files.
+    let mut output = String::with_capacity(text.len().saturating_mul(2));
 
     for line in LinesWithEndings::from(text) {
         let regions: Vec<(Style, &str)> = match h.highlight_line(line, &ps) {
@@ -64,13 +94,141 @@ pub fn highlight_code(text: &str, ext: &str) -> String {
                 continue;
             }
         };
-        let escaped = as_24_bit_terminal_escaped(&regions[..], false);
-        output.push_str(&escaped);
-        if !escaped.ends_with("\x1b[0m") {
-            output.push_str("\x1b[0m");
-        }
+        // Write ANSI escapes directly into `output` instead of allocating a
+        // per-line temporary string (saves ~N allocations for an N-line file).
+        append_as_24_bit_escaped(&mut output, &regions);
     }
     output
+}
+
+/// Append 24-bit ANSI terminal escape codes for the given style regions
+/// directly into `out`, avoiding a per-line temporary-string allocation.
+fn append_as_24_bit_escaped(out: &mut String, regions: &[(Style, &str)]) {
+    use std::fmt::Write;
+    for &(ref style, text) in regions {
+        let _ = write!(
+            out,
+            "\x1b[38;2;{};{};{}m",
+            style.foreground.r, style.foreground.g, style.foreground.b
+        );
+        out.push_str(text);
+    }
+    out.push_str("\x1b[0m");
+}
+
+// ── Writer-based (streaming) variants ──────────────────────────────
+
+/// Highlight `text` line-by-line and write each line immediately to `writer`.
+///
+/// Unlike [`highlight_code`], this does not build a full String in memory
+/// before returning — the first highlighted line hits the writer in ~10 µs,
+/// giving the user immediate feedback even for very large files.
+pub fn highlight_code_to_writer(
+    text: &str,
+    ext: &str,
+    writer: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
+    let extension = ext.to_ascii_lowercase();
+
+    // TOML/INI go through the lightweight hand-rolled highlighter.
+    if matches!(extension.as_str(), "toml" | "ini" | "conf" | "cfg") {
+        return highlight_toml_like_to_writer(text, writer);
+    }
+
+    let ps = syntax_set();
+    let ts = theme_set();
+
+    let syntax = match find_syntax_by_extension(ps, &extension) {
+        Some(s) => s,
+        None => return writer.write_all(text.as_bytes()),
+    };
+
+    let theme = ts
+        .themes
+        .get("base16-ocean.dark")
+        .or_else(|| ts.themes.get("base16-eighties.dark"))
+        .unwrap();
+
+    let mut h = HighlightLines::new(syntax, theme);
+    // Reusable per-line buffer — cleared and refilled each iteration so we
+    // never allocate more than a single line's worth of ANSI escapes.
+    let mut line_buf = String::with_capacity(512);
+
+    for line in LinesWithEndings::from(text) {
+        line_buf.clear();
+        match h.highlight_line(line, &ps) {
+            Ok(regions) => {
+                append_as_24_bit_escaped(&mut line_buf, &regions);
+                writer.write_all(line_buf.as_bytes())?;
+            }
+            Err(_) => {
+                writer.write_all(line.as_bytes())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Streaming variant of [`highlight_toml_like`]: highlight each line and
+/// write it to `writer` immediately.
+fn highlight_toml_like_to_writer(
+    text: &str,
+    writer: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
+    use nu_ansi_term::{Color, Style};
+
+    let key_style = Style::new().fg(Color::Cyan);
+    let string_style = Style::new().fg(Color::LightYellow);
+    let num_style = Style::new().fg(Color::Purple);
+    let bool_style = Style::new().fg(Color::Red);
+    let comment_style = Style::new().fg(Color::DarkGray).italic();
+    let table_style = Style::new().fg(Color::Blue).bold();
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with('#') {
+            write!(writer, "{}", comment_style.paint(line))?;
+        } else if trimmed.starts_with('[') {
+            write!(writer, "{}", table_style.paint(line))?;
+        } else if let Some(eq_pos) = line.find('=') {
+            let key_part = &line[..eq_pos];
+            let value_part = &line[eq_pos + 1..];
+
+            write!(writer, "{}=", key_style.paint(key_part))?;
+
+            let v = value_part.trim_start();
+            let leading_ws_len = value_part.len() - v.len();
+            let leading_ws = &value_part[..leading_ws_len];
+
+            if v.starts_with('"') || v.starts_with('\'') {
+                write!(writer, "{}{}", leading_ws, string_style.paint(v))?;
+            } else if v == "true" || v == "false" {
+                write!(writer, "{}{}", leading_ws, bool_style.paint(v))?;
+            } else if v.parse::<f64>().is_ok() && !v.is_empty() {
+                write!(writer, "{}{}", leading_ws, num_style.paint(v))?;
+            } else if let Some(hash_pos) = find_comment_pos(v) {
+                let (val, comment) = v.split_at(hash_pos);
+                let val_t = val.trim_end();
+                write!(writer, "{}", leading_ws)?;
+                if val_t.starts_with('"') || val_t.starts_with('\'') {
+                    write!(writer, "{}", string_style.paint(val_t))?;
+                } else if val_t.parse::<f64>().is_ok() {
+                    write!(writer, "{}", num_style.paint(val_t))?;
+                } else {
+                    write!(writer, "{}", val_t)?;
+                }
+                let ws_between = &val[val_t.len()..];
+                write!(writer, "{}{}", ws_between, comment_style.paint(comment))?;
+            } else {
+                write!(writer, "{}", value_part)?;
+            }
+        } else {
+            write!(writer, "{}", line)?;
+        }
+        writeln!(writer)?;
+    }
+    Ok(())
 }
 
 /// Lightweight highlighter for TOML/INI-style config files.

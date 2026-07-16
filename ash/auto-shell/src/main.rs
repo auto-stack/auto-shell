@@ -2,6 +2,12 @@ use miette::Result;
 use std::path::PathBuf;
 
 fn main() -> Result<()> {
+    // Pre-warm syntect syntax/theme caches in the background as early as
+    // possible, so that `ash -c "show file.rs"` can overlap loading with CLI
+    // parsing and shell setup, and the REPL has them ready before the first
+    // prompt even appears.
+    auto_shell::cmd::commands::code_highlight::warmup();
+
     // Set up miette for beautiful error reporting
     miette::set_hook(Box::new(|_| {
         Box::new(
