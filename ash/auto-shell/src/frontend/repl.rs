@@ -414,8 +414,24 @@ impl Repl {
         self.update_prompt();
 
         // Lazily load the persistent session and print a banner.
+        // `load()` builds the AiClient here, in a SYNCHRONOUS context — it
+        // runs the blocking daemon probe, which must NOT happen inside the
+        // async turn (see `frontend::ai::ChatSession` docs).
         if self.chat.is_none() {
-            self.chat = Some(crate::frontend::ai::ChatSession::load());
+            match crate::frontend::ai::ChatSession::load() {
+                Ok(session) => self.chat = Some(session),
+                Err(e) => {
+                    eprintln!(
+                        "  AI error: {}\n  (set ZHIPU_API_KEY / ANTHROPIC_API_KEY / \
+                         OPENAI_API_KEY or start the aaid daemon)",
+                        e
+                    );
+                    // Can't chat without a client — leave AI mode.
+                    self.mode_state.locked = None;
+                    self.update_prompt();
+                    return Ok(());
+                }
+            }
         }
         let turns = self.chat.as_ref().expect("chat session initialized above").turn_count();
         if turns > 0 {

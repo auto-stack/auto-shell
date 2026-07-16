@@ -24,15 +24,14 @@ pub fn build_system_prompt(cwd: &Path) -> String {
     )
 }
 
-/// Run a future on a fresh multi-thread tokio runtime and block on it.
+/// Run a future on a fresh tokio runtime and block on it.
 ///
 /// The REPL is synchronous, so each chat turn spins up a one-shot runtime to
-/// drive the async `AiClient`. We use a **multi-thread** runtime
-/// (`Runtime::new()`), matching `auto-ai-cli`, because the current-thread
-/// runtime panics on shutdown under tokio ≥1.52:
-/// `Cannot drop a runtime in a context where blocking is not allowed.`
-/// The multi-thread runtime's dedicated blocking pool performs the shutdown
-/// join cleanly, so the panic does not occur.
+/// drive the async `AiClient` call. The future passed in MUST NOT itself
+/// construct an `AiClient` (or any `reqwest::blocking::Client`) — that runs a
+/// blocking daemon probe and panics when built inside a tokio runtime context
+/// ("Cannot drop a runtime in a context where blocking is not allowed").
+/// Callers build the client on the sync side first; see `ChatSession`.
 pub fn block_on_async<F: Future>(fut: F) -> F::Output {
     let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime");
     rt.block_on(fut)
@@ -73,22 +72,38 @@ fn history_file_under(home: &Path) -> PathBuf {
 ///
 /// `messages` holds only user+assistant turns; the system prompt is rebuilt
 /// per request (cwd changes between sessions) and is NOT stored here.
+///
+/// The `AiClient` is created ONCE at load time (in a synchronous context),
+/// NOT inside the async `send_turn_streaming`. Reason: `AiClient::new()`
+/// runs the blocking daemon probe (`ensure_daemon` → `reqwest::blocking`),
+/// and constructing a `reqwest::blocking::Client` from within a tokio
+/// runtime context panics under tokio >=1.52 ("Cannot drop a runtime in a
+/// context where blocking is not allowed"). Keeping client construction on
+/// the sync side avoids entering a runtime from within a runtime.
 pub struct ChatSession {
     messages: Vec<Message>,
     history_path: PathBuf,
+    client: AiClient,
 }
 
 impl ChatSession {
-    /// Load the conversation from `~/.auto-shell-ai-chat.json`.
-    /// Missing or corrupt file → empty conversation (recovers gracefully).
-    pub fn load() -> Self {
-        Self::with_history_path(history_path())
+    /// Load the conversation from `~/.auto-shell-ai-chat.json` and create the
+    /// daemon client. Call from a SYNCHRONOUS context (the daemon probe blocks).
+    /// Missing or corrupt history file → empty conversation (recovers
+    /// gracefully); failure to reach the daemon is deferred to the first turn.
+    pub fn load() -> Result<Self, String> {
+        let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
+        Ok(Self::with_client(client))
     }
 
-    /// Construct from an explicit history file path (used by `load` and tests).
-    /// A missing file yields an empty conversation (normal first run, silent);
-    /// a corrupt file also recovers to empty but logs a single warning line.
-    pub fn with_history_path(path: PathBuf) -> Self {
+    /// Construct with an explicit client and the default history path.
+    /// Used by `load`; also the entry point for tests that inject a client.
+    pub fn with_client(client: AiClient) -> Self {
+        Self::with_client_and_path(client, history_path())
+    }
+
+    /// Construct from an explicit client + history file path (tests).
+    pub fn with_client_and_path(client: AiClient, path: PathBuf) -> Self {
         let messages = match std::fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str::<Vec<Message>>(&text) {
                 Ok(msgs) => msgs,
@@ -100,7 +115,7 @@ impl ChatSession {
             },
             Err(_) => Vec::new(), // missing file — normal first run, stay silent
         };
-        ChatSession { messages, history_path: path }
+        ChatSession { messages, history_path: path, client }
     }
 
     /// Number of stored turns (user + assistant messages).
@@ -129,7 +144,9 @@ impl ChatSession {
         user: &str,
         system: &str,
     ) -> Result<String, String> {
-        let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
+        // NOTE: do NOT call AiClient::new() here — it runs a blocking daemon
+        // probe (reqwest::blocking) which panics when constructed inside a
+        // tokio runtime context. The client is built once at load time.
 
         // Build the request with the user turn appended, WITHOUT mutating
         // `self.messages` yet. We only persist the user turn once the call
@@ -155,7 +172,8 @@ impl ChatSession {
             }
         };
 
-        let resp: CompletionResponse = client
+        let resp: CompletionResponse = self
+            .client
             .complete_stream(&req, on_event)
             .await
             .map_err(|e| format!("{}", e))?;
@@ -242,6 +260,14 @@ mod tests {
         );
     }
 
+    /// Test helper: build a ChatSession at `path` with a no-op client. Uses
+    /// `AiClient::with_url` (no daemon probe) so tests never touch the network
+    /// and never construct a reqwest::blocking::Client.
+    fn session_at(path: PathBuf) -> ChatSession {
+        let client = AiClient::with_url("http://0.0.0.0:0");
+        ChatSession::with_client_and_path(client, path)
+    }
+
     #[test]
     fn load_from_missing_file_is_empty() {
         let tmp = std::env::temp_dir().join("ash_ai_missing_test");
@@ -250,7 +276,7 @@ mod tests {
         let path = tmp.join("chat.json");
         assert!(!path.exists());
 
-        let s = ChatSession::with_history_path(path.clone());
+        let s = session_at(path.clone());
         assert_eq!(s.turn_count(), 0);
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -262,13 +288,13 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("chat.json");
 
-        let mut s = ChatSession::with_history_path(path.clone());
+        let mut s = session_at(path.clone());
         s.push_user("hello");
         s.push_assistant("hi there");
         s.save().unwrap();
         assert!(path.exists(), "save should write the file");
 
-        let s2 = ChatSession::with_history_path(path);
+        let s2 = session_at(path);
         assert_eq!(s2.turn_count(), 2);
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -281,7 +307,7 @@ mod tests {
         let path = tmp.join("chat.json");
         std::fs::write(&path, "this is { not valid json").unwrap();
 
-        let s = ChatSession::with_history_path(path.clone());
+        let s = session_at(path.clone());
         assert_eq!(s.turn_count(), 0, "corrupt file should recover to empty");
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -293,14 +319,14 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("chat.json");
 
-        let mut s = ChatSession::with_history_path(path.clone());
+        let mut s = session_at(path.clone());
         s.push_user("a");
         s.push_assistant("b");
         s.clear();
         assert_eq!(s.turn_count(), 0);
         s.save().unwrap();
         // Reload to confirm persistence.
-        let s2 = ChatSession::with_history_path(path);
+        let s2 = session_at(path);
         assert_eq!(s2.turn_count(), 0);
         let _ = std::fs::remove_dir_all(&tmp);
     }
