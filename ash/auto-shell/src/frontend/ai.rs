@@ -7,7 +7,7 @@
 //!
 //! v1 is chat-only (no tools). See `plans/027-ash-ai-chat-mode.md`.
 
-use auto_ai_client::Message;
+use auto_ai_client::{AiClient, CompletionRequest, CompletionResponse, Message};
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -113,6 +113,53 @@ impl ChatSession {
     /// Append an assistant turn.
     pub fn push_assistant(&mut self, text: &str) {
         self.messages.push(Message::assistant(text));
+    }
+
+    /// Send one user turn. Appends the user message, builds a multi-turn
+    /// request, streams the assistant reply to stdout as deltas arrive,
+    /// appends the reply, and returns the full assistant text.
+    ///
+    /// `system` is the per-request system prompt (NOT stored in `messages`).
+    pub async fn send_turn_streaming(
+        &mut self,
+        user: &str,
+        system: &str,
+    ) -> Result<String, String> {
+        self.push_user(user);
+
+        let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
+
+        let req = CompletionRequest {
+            model: "tier:mid".to_string(),
+            messages: self.messages.clone(),
+            max_tokens: Some(4096),
+            temperature: Some(0.4),
+            system_prompt: Some(system.to_string()),
+            tools: Vec::new(),
+            stream: false, // complete_stream sets this to true itself.
+        };
+
+        use std::io::Write;
+        let on_event = |ev: serde_json::Value| {
+            if let Some(text) = ev.get("text").and_then(|t| t.as_str()) {
+                print!("{}", text);
+                let _ = std::io::stdout().flush();
+            }
+        };
+
+        let resp: CompletionResponse = client
+            .complete_stream(&req, on_event)
+            .await
+            .map_err(|e| format!("{}", e))?;
+        println!(); // newline after the streamed reply
+
+        if let Some(err) = &resp.error {
+            return Err(err.clone());
+        }
+
+        let text = resp.content.trim().to_string();
+        self.push_assistant(&text);
+        Ok(text)
     }
 
     /// Forget the conversation (in-memory only; call `save` to persist).
