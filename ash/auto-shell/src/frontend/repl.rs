@@ -191,6 +191,15 @@ impl Repl {
                     ReedlineEvent::Submit,
                 ]),
             );
+            // Plan 027: F4 — enter persistent AI chat mode (insert \x15 + submit).
+            keybindings.add_binding(
+                KeyModifiers::NONE,
+                KeyCode::F(4),
+                ReedlineEvent::Multiple(vec![
+                    ReedlineEvent::Edit(vec![EditCommand::InsertString("\x15".to_string())]),
+                    ReedlineEvent::Submit,
+                ]),
+            );
             // Esc — unlock mode (insert \x14 + submit).
             keybindings.add_binding(
                 KeyModifiers::NONE,
@@ -201,7 +210,7 @@ impl Repl {
                 ]),
             );
             // Plan 322 #4: Alt+1/2/3 as laptop-friendly F1/F2/F3 aliases.
-            for (key, prefix) in [('1', "\x11"), ('2', "\x12"), ('3', "\x13")] {
+            for (key, prefix) in [('1', "\x11"), ('2', "\x12"), ('3', "\x13"), ('4', "\x15")] {
                 keybindings.add_binding(
                     KeyModifiers::ALT,
                     KeyCode::Char(key),
