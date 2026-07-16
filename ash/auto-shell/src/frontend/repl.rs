@@ -416,7 +416,7 @@ impl Repl {
         if self.chat.is_none() {
             self.chat = Some(crate::frontend::ai::ChatSession::load());
         }
-        let turns = self.chat.as_ref().unwrap().turn_count();
+        let turns = self.chat.as_ref().expect("chat session initialized above").turn_count();
         if turns > 0 {
             println!("  * 已恢复 {} 轮对话 *", turns / 2);
         } else {

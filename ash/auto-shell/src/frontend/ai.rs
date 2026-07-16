@@ -115,9 +115,10 @@ impl ChatSession {
         self.messages.push(Message::assistant(text));
     }
 
-    /// Send one user turn. Appends the user message, builds a multi-turn
-    /// request, streams the assistant reply to stdout as deltas arrive,
-    /// appends the reply, and returns the full assistant text.
+    /// Send one user turn. Builds a multi-turn request (history + this user
+    /// message), streams the assistant reply to stdout as deltas arrive, and on
+    /// success appends BOTH the user and assistant messages to the history.
+    /// On error the history is left untouched (no orphan user turn).
     ///
     /// `system` is the per-request system prompt (NOT stored in `messages`).
     pub async fn send_turn_streaming(
@@ -125,13 +126,17 @@ impl ChatSession {
         user: &str,
         system: &str,
     ) -> Result<String, String> {
-        self.push_user(user);
-
         let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
 
+        // Build the request with the user turn appended, WITHOUT mutating
+        // `self.messages` yet. We only persist the user turn once the call
+        // succeeds, so a failed/erroring turn leaves the history clean (no
+        // orphan user message with no assistant reply).
+        let mut messages = self.messages.clone();
+        messages.push(Message::user(user));
         let req = CompletionRequest {
             model: "tier:mid".to_string(),
-            messages: self.messages.clone(),
+            messages,
             max_tokens: Some(4096),
             temperature: Some(0.4),
             system_prompt: Some(system.to_string()),
@@ -157,7 +162,9 @@ impl ChatSession {
             return Err(err.clone());
         }
 
+        // Success: now persist both turns.
         let text = resp.content.trim().to_string();
+        self.push_user(user);
         self.push_assistant(&text);
         Ok(text)
     }
