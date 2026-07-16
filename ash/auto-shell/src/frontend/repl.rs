@@ -379,9 +379,10 @@ impl Repl {
             .with_temperature(0.3);
 
         // Run the async completion in a blocking runtime (REPL is sync).
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
+        // Multi-thread runtime: the current-thread one panics on shutdown
+        // under tokio >=1.52 ("Cannot drop a runtime in a context where
+        // blocking is not allowed"). See `frontend::ai::block_on_async`.
+        let rt = tokio::runtime::Runtime::new()
             .map_err(|e| format!("runtime: {}", e))?;
 
         let response = rt.block_on(async { client.complete(&req).await });

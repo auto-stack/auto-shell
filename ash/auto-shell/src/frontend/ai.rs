@@ -24,14 +24,17 @@ pub fn build_system_prompt(cwd: &Path) -> String {
     )
 }
 
-/// Run a future on a fresh single-thread tokio runtime and block on it.
-/// The REPL is synchronous; this mirrors `Repl::ask_ai`'s runtime pattern so
-/// each chat turn can call the async `AiClient` without a global runtime.
+/// Run a future on a fresh multi-thread tokio runtime and block on it.
+///
+/// The REPL is synchronous, so each chat turn spins up a one-shot runtime to
+/// drive the async `AiClient`. We use a **multi-thread** runtime
+/// (`Runtime::new()`), matching `auto-ai-cli`, because the current-thread
+/// runtime panics on shutdown under tokio ≥1.52:
+/// `Cannot drop a runtime in a context where blocking is not allowed.`
+/// The multi-thread runtime's dedicated blocking pool performs the shutdown
+/// join cleanly, so the panic does not occur.
 pub fn block_on_async<F: Future>(fut: F) -> F::Output {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build tokio runtime");
+    let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime");
     rt.block_on(fut)
 }
 
