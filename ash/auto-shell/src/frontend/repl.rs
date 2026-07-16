@@ -24,6 +24,8 @@ pub struct Repl {
     completion_state: Arc<Mutex<CompletionState>>,
     /// Plan 322: Input mode state (Shell/AutoScript/AI + lock + continuation).
     mode_state: crate::repl_mode::ModeState,
+    /// Plan 027: Lazy-initialized persistent AI chat session.
+    chat: Option<crate::frontend::ai::ChatSession>,
 }
 
 impl Repl {
@@ -278,7 +280,7 @@ impl Repl {
             line_editor = line_editor.with_hinter(h);
         }
 
-        Ok(Self { shell, line_editor, prompt, completion_state, mode_state: Default::default() })
+        Ok(Self { shell, line_editor, prompt, completion_state, mode_state: Default::default(), chat: None })
     }
 
     /// Get the path to the history file
@@ -400,6 +402,125 @@ impl Repl {
             Ok(resp) => Err(format!("AI returned error: {:?}", resp.error)),
             Err(e) => Err(format!("{}", e)),
         }
+    }
+
+    /// Plan 027: the standalone AI chat loop. Owns the reedline editor until
+    /// the user exits via Esc, F4 (toggle-off), F1/F2/F3 (mode switch), or
+    /// `/exit`. Persists the conversation on exit.
+    fn run_chat_loop(&mut self) -> Result<()> {
+        // Lock AI mode so the prompt shows `▌?`.
+        self.mode_state.locked = Some(crate::repl_mode::InputMode::AI);
+        self.update_prompt();
+
+        // Lazily load the persistent session and print a banner.
+        if self.chat.is_none() {
+            self.chat = Some(crate::frontend::ai::ChatSession::load());
+        }
+        let turns = self.chat.as_ref().unwrap().turn_count();
+        if turns > 0 {
+            println!("  * 已恢复 {} 轮对话 *", turns / 2);
+        } else {
+            println!("  * 开始新对话 *  (/clear 清空  /exit 退出  F1/F2/F3/Esc 离开)");
+        }
+
+        loop {
+            let sig = self.line_editor.read_line(&self.prompt);
+            let line = match sig {
+                Ok(Signal::Success(l)) => l.trim().to_string(),
+                Ok(Signal::CtrlD) => break,          // Ctrl-D exits chat
+                Ok(Signal::CtrlC) => continue,       // Ctrl-C: new prompt, stay in chat
+                Err(_) => continue,
+            };
+
+            // Exit prefixes: F4 toggle-off (\x15), Esc (\x14), F1/F2/F3
+            // (\x11/\x12/\x13). Save, unlock AI, then hand the prefix back to
+            // run() by re-running the same mode-switch logic.
+            if let Some(prefix) = line.chars().next() {
+                if matches!(prefix, '\x11' | '\x12' | '\x13' | '\x14' | '\x15') {
+                    if let Some(session) = self.chat.as_mut() {
+                        let _ = session.save();
+                    }
+                    // Re-dispatch the prefix through the normal mode machinery.
+                    match prefix {
+                        '\x11' => self.mode_state.toggle_lock(crate::repl_mode::InputMode::Shell),
+                        '\x12' => self.mode_state.toggle_lock(crate::repl_mode::InputMode::AutoScript),
+                        '\x13' => {
+                            // F3 one-shot NL→command: leave chat unlocked; the
+                            // outer run() F3 branch handles the actual flow on
+                            // the *next* read. For simplicity we just unlock.
+                            self.mode_state.locked = None;
+                        }
+                        // \x14 (Esc) and \x15 (F4): unlock back to shell.
+                        _ => self.mode_state.locked = None,
+                    }
+                    self.update_prompt();
+                    // If it was F1/F2/F3 with trailing text, we dropped it
+                    // (chat doesn't interpret those). Acceptable for v1.
+                    break;
+                }
+            }
+
+            // Slash commands.
+            if let Some(cmd) = crate::frontend::ai::parse_slash_command(&line) {
+                match cmd {
+                    crate::frontend::ai::SlashCommand::Exit => {
+                        if let Some(session) = self.chat.as_mut() {
+                            let _ = session.save();
+                        }
+                        self.mode_state.locked = None;
+                        self.update_prompt();
+                        break;
+                    }
+                    crate::frontend::ai::SlashCommand::Clear => {
+                        if let Some(session) = self.chat.as_mut() {
+                            session.clear();
+                            let _ = session.save();
+                        }
+                        println!("  * 对话已清空 *");
+                        continue;
+                    }
+                }
+            }
+
+            // Unknown slash command → no-op notice.
+            if line.starts_with('/') {
+                println!("  未知命令: {} (可用: /clear /exit)", line);
+                continue;
+            }
+
+            // Empty line → no-op.
+            if line.is_empty() {
+                continue;
+            }
+
+            // A real chat turn.
+            let _ = self.handle_chat_turn(&line);
+        }
+
+        Ok(())
+    }
+
+    /// Plan 027: send one chat turn using the current cwd. Mirrors `ask_ai`'s
+    /// runtime pattern (one-shot current-thread tokio runtime).
+    fn handle_chat_turn(&mut self, user: &str) -> Result<()> {
+        let system = crate::frontend::ai::build_system_prompt(&self.shell.pwd());
+        let session = self.chat.as_mut().expect("chat session initialized in run_chat_loop");
+        let result = crate::frontend::ai::block_on_async(
+            session.send_turn_streaming(user, &system),
+        );
+        match result {
+            Ok(_full_text) => {
+                let _ = session.save();
+            }
+            Err(e) => {
+                eprintln!(
+                    "  AI error: {}\n  (set ZHIPU_API_KEY / ANTHROPIC_API_KEY / \
+                     OPENAI_API_KEY or start the aaid daemon)",
+                    e
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Open the current input line in $EDITOR (or vim/notepad) and return the result.
@@ -555,6 +676,15 @@ impl Repl {
                         // AI is transient — return to previous mode.
                         self.mode_state.locked = None;
                         self.update_prompt();
+                        continue;
+                    }
+
+                    // Plan 027: F4 = persistent AI chat mode. Enter a
+                    // standalone loop that owns the editor until exit.
+                    if line.starts_with('\x15') {
+                        // Any text typed after F4 is ignored for now
+                        // (chat reads full lines in its own loop).
+                        self.run_chat_loop()?;
                         continue;
                     }
 
