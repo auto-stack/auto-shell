@@ -18,6 +18,8 @@ auto-val = { path = "../../../auto-lang/crates/auto-val" }
 # Plan 325: AI client for F3 AI mode (from auto-ai repo at ../../../auto-ai)
 auto-ai-client = { path = "../../../auto-ai/crates/auto-ai-client" }
 tokio = { version = "1", features = ["full"] }
+# Plan 027: explicit dep (previously transitive via auto-ai-client -> ai-config)
+serde_json = "1.0"
 
 # Ash Core (pure logic, zero terminal deps)
 ash-core = { path = "../../ash-core" }

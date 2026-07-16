@@ -303,6 +303,7 @@ dependencies = [
  "rayon",
  "reedline",
  "regex",
+ "serde_json",
  "syntect",
  "sysinfo",
  "thiserror 1.0.69",

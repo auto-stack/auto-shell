@@ -15,3 +15,4 @@ pub mod renderer;
 pub mod repl;
 pub mod term;
 pub mod completions_reedline;
+pub mod ai;
