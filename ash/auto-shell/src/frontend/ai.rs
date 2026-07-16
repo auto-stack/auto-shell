@@ -7,6 +7,7 @@
 //!
 //! v1 is chat-only (no tools). See `plans/027-ash-ai-chat-mode.md`.
 
+use std::future::Future;
 use std::path::Path;
 
 /// Build the per-request system prompt for the chat. Pure fn so it is unit-
@@ -19,6 +20,17 @@ pub fn build_system_prompt(cwd: &Path) -> String {
          commands, explain concepts, or help troubleshoot. Plain text only — no markdown.",
         cwd.display()
     )
+}
+
+/// Run a future on a fresh single-thread tokio runtime and block on it.
+/// The REPL is synchronous; this mirrors `Repl::ask_ai`'s runtime pattern so
+/// each chat turn can call the async `AiClient` without a global runtime.
+pub fn block_on_async<F: Future>(fut: F) -> F::Output {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    rt.block_on(fut)
 }
 
 #[cfg(test)]
@@ -38,5 +50,11 @@ mod tests {
         assert!(s.contains("Ash"), "prompt should name Ash");
         assert!(s.contains("/tmp/some-project"), "prompt should include cwd");
         assert!(s.to_lowercase().contains("no markdown"), "prompt should forbid markdown");
+    }
+
+    #[test]
+    fn block_on_async_runs_future() {
+        let val = block_on_async(async { 42 });
+        assert_eq!(val, 42);
     }
 }
