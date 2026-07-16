@@ -83,10 +83,19 @@ impl ChatSession {
     }
 
     /// Construct from an explicit history file path (used by `load` and tests).
+    /// A missing file yields an empty conversation (normal first run, silent);
+    /// a corrupt file also recovers to empty but logs a single warning line.
     pub fn with_history_path(path: PathBuf) -> Self {
         let messages = match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str::<Vec<Message>>(&text).unwrap_or_default(),
-            Err(_) => Vec::new(),
+            Ok(text) => match serde_json::from_str::<Vec<Message>>(&text) {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    // Corrupt history: recover to empty, but tell the user.
+                    eprintln!("warning: chat history was unreadable, starting fresh: {}", e);
+                    Vec::new()
+                }
+            },
+            Err(_) => Vec::new(), // missing file — normal first run, stay silent
         };
         ChatSession { messages, history_path: path }
     }
@@ -111,11 +120,14 @@ impl ChatSession {
         self.messages.clear();
     }
 
-    /// Serialize the conversation to the history file (overwrites).
+    /// Serialize the conversation to the history file atomically (write to a
+    /// temp sibling, then rename). A crash mid-write won't corrupt the file.
     pub fn save(&self) -> std::io::Result<()> {
         let json = serde_json::to_string(&self.messages)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(&self.history_path, json)
+            .map_err(std::io::Error::other)?;
+        let tmp = self.history_path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, &self.history_path)
     }
 }
 
