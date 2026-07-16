@@ -33,6 +33,25 @@ pub fn block_on_async<F: Future>(fut: F) -> F::Output {
     rt.block_on(fut)
 }
 
+/// The recognized chat slash commands (v1 minimal set).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashCommand {
+    /// Forget the conversation history.
+    Clear,
+    /// Leave chat mode (same as pressing Esc).
+    Exit,
+}
+
+/// If `line` is one of the chat slash commands (case-insensitive, surrounding
+/// whitespace ignored), return it. Otherwise return `None`.
+pub fn parse_slash_command(line: &str) -> Option<SlashCommand> {
+    match line.trim().to_lowercase().as_str() {
+        "/clear" => Some(SlashCommand::Clear),
+        "/exit" => Some(SlashCommand::Exit),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +75,16 @@ mod tests {
     fn block_on_async_runs_future() {
         let val = block_on_async(async { 42 });
         assert_eq!(val, 42);
+    }
+
+    #[test]
+    fn parse_slash_commands() {
+        assert_eq!(parse_slash_command("/clear"), Some(SlashCommand::Clear));
+        assert_eq!(parse_slash_command("/exit"), Some(SlashCommand::Exit));
+        assert_eq!(parse_slash_command("  /CLEAR  "), Some(SlashCommand::Clear));
+        assert_eq!(parse_slash_command("/Exit"), Some(SlashCommand::Exit));
+        assert_eq!(parse_slash_command("hello"), None);
+        assert_eq!(parse_slash_command("/unknown"), None);
+        assert_eq!(parse_slash_command(""), None);
     }
 }
