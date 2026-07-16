@@ -9,6 +9,7 @@
 
 use std::future::Future;
 use std::path::Path;
+use std::path::PathBuf;
 
 /// Build the per-request system prompt for the chat. Pure fn so it is unit-
 /// testable and the cwd is always current (the user may `cd` between turns).
@@ -52,6 +53,18 @@ pub fn parse_slash_command(line: &str) -> Option<SlashCommand> {
     }
 }
 
+/// Path to the persisted chat history: `~/.auto-shell-ai-chat.json`.
+pub fn history_path() -> PathBuf {
+    history_file_under(&dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+}
+
+/// Build the history file path for a given home directory. Factored out so the
+/// path logic is testable without depending on the OS home-dir lookup (which
+/// `dirs` resolves via native APIs and does not honor `HOME` on Windows).
+fn history_file_under(home: &Path) -> PathBuf {
+    home.join(".auto-shell-ai-chat.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +99,23 @@ mod tests {
         assert_eq!(parse_slash_command("hello"), None);
         assert_eq!(parse_slash_command("/unknown"), None);
         assert_eq!(parse_slash_command(""), None);
+    }
+
+    #[test]
+    fn history_file_under_is_home_plus_filename() {
+        let home = Path::new("/home/user");
+        let p = history_file_under(home);
+        assert_eq!(p, Path::new("/home/user/.auto-shell-ai-chat.json"));
+    }
+
+    #[test]
+    fn history_path_has_correct_filename() {
+        // We can't control dirs::home_dir() across platforms, but the filename
+        // component is deterministic regardless of where home resolves.
+        let p = history_path();
+        assert_eq!(
+            p.file_name().and_then(|s| s.to_str()),
+            Some(".auto-shell-ai-chat.json")
+        );
     }
 }
