@@ -7,6 +7,7 @@
 //!
 //! v1 is chat-only (no tools). See `plans/027-ash-ai-chat-mode.md`.
 
+use auto_ai_client::Message;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -65,6 +66,59 @@ fn history_file_under(home: &Path) -> PathBuf {
     home.join(".auto-shell-ai-chat.json")
 }
 
+/// A persistent chat conversation backed by a JSON file.
+///
+/// `messages` holds only user+assistant turns; the system prompt is rebuilt
+/// per request (cwd changes between sessions) and is NOT stored here.
+pub struct ChatSession {
+    messages: Vec<Message>,
+    history_path: PathBuf,
+}
+
+impl ChatSession {
+    /// Load the conversation from `~/.auto-shell-ai-chat.json`.
+    /// Missing or corrupt file → empty conversation (recovers gracefully).
+    pub fn load() -> Self {
+        Self::with_history_path(history_path())
+    }
+
+    /// Construct from an explicit history file path (used by `load` and tests).
+    pub fn with_history_path(path: PathBuf) -> Self {
+        let messages = match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str::<Vec<Message>>(&text).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        ChatSession { messages, history_path: path }
+    }
+
+    /// Number of stored turns (user + assistant messages).
+    pub fn turn_count(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Append a user turn.
+    pub fn push_user(&mut self, text: &str) {
+        self.messages.push(Message::user(text));
+    }
+
+    /// Append an assistant turn.
+    pub fn push_assistant(&mut self, text: &str) {
+        self.messages.push(Message::assistant(text));
+    }
+
+    /// Forget the conversation (in-memory only; call `save` to persist).
+    pub fn clear(&mut self) {
+        self.messages.clear();
+    }
+
+    /// Serialize the conversation to the history file (overwrites).
+    pub fn save(&self) -> std::io::Result<()> {
+        let json = serde_json::to_string(&self.messages)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&self.history_path, json)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +171,68 @@ mod tests {
             p.file_name().and_then(|s| s.to_str()),
             Some(".auto-shell-ai-chat.json")
         );
+    }
+
+    #[test]
+    fn load_from_missing_file_is_empty() {
+        let tmp = std::env::temp_dir().join("ash_ai_missing_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("chat.json");
+        assert!(!path.exists());
+
+        let s = ChatSession::with_history_path(path.clone());
+        assert_eq!(s.turn_count(), 0);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn save_then_load_roundtrip() {
+        let tmp = std::env::temp_dir().join("ash_ai_roundtrip_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("chat.json");
+
+        let mut s = ChatSession::with_history_path(path.clone());
+        s.push_user("hello");
+        s.push_assistant("hi there");
+        s.save().unwrap();
+        assert!(path.exists(), "save should write the file");
+
+        let s2 = ChatSession::with_history_path(path);
+        assert_eq!(s2.turn_count(), 2);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_from_corrupt_file_is_empty() {
+        let tmp = std::env::temp_dir().join("ash_ai_corrupt_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("chat.json");
+        std::fs::write(&path, "this is { not valid json").unwrap();
+
+        let s = ChatSession::with_history_path(path.clone());
+        assert_eq!(s.turn_count(), 0, "corrupt file should recover to empty");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn clear_empties_and_persists() {
+        let tmp = std::env::temp_dir().join("ash_ai_clear_test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("chat.json");
+
+        let mut s = ChatSession::with_history_path(path.clone());
+        s.push_user("a");
+        s.push_assistant("b");
+        s.clear();
+        assert_eq!(s.turn_count(), 0);
+        s.save().unwrap();
+        // Reload to confirm persistence.
+        let s2 = ChatSession::with_history_path(path);
+        assert_eq!(s2.turn_count(), 0);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
