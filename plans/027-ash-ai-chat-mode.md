@@ -552,38 +552,41 @@ git commit -m "feat(ai): slash command parser /clear /exit (Plan 027)"
 
 - [ ] **Step 1: Write the failing test**
 
-Add to the `tests` module (uses `HOME` override so it works cross-platform and
-in CI):
+> **Note:** The original plan tried to redirect `HOME`/`USERPROFILE` to test
+> `history_path()`, but `dirs::home_dir()` resolves the home directory via
+> native OS APIs (e.g. `SHGetKnownFolderPath` on Windows) and **ignores** those
+> env vars, so that test cannot pass. The accepted fix: factor the path logic
+> into a private `history_file_under(home: &Path) -> PathBuf` and test that
+> directly, plus assert the filename of the real `history_path()`.
+
+Add to the `tests` module:
 
 ```rust
-#[test]
-fn history_path_under_home() {
-    let tmp = std::env::temp_dir().join("ash_ai_history_path_test");
-    let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).unwrap();
+    #[test]
+    fn history_file_under_is_home_plus_filename() {
+        let home = Path::new("/home/user");
+        let p = history_file_under(home);
+        assert_eq!(p, Path::new("/home/user/.auto-shell-ai-chat.json"));
+    }
 
-    let prev_home = std::env::var_os("HOME");
-    // On Windows, dirs uses USERPROFILE; set both to be safe.
-    let prev_profile = std::env::var_os("USERPROFILE");
-    std::env::set_var("HOME", &tmp);
-    std::env::set_var("USERPROFILE", &tmp);
-
-    let p = history_path();
-    assert_eq!(p.file_name().unwrap(), ".auto-shell-ai-chat.json");
-    assert!(p.starts_with(&tmp), "history path should live under home dir");
-
-    if let Some(h) = prev_home { std::env::set_var("HOME", h); } else { std::env::remove_var("HOME"); }
-    if let Some(p) = prev_profile { std::env::set_var("USERPROFILE", p); } else { std::env::remove_var("USERPROFILE"); }
-    let _ = std::fs::remove_dir_all(&tmp);
-}
+    #[test]
+    fn history_path_has_correct_filename() {
+        // We can't control dirs::home_dir() across platforms, but the filename
+        // component is deterministic regardless of where home resolves.
+        let p = history_path();
+        assert_eq!(
+            p.file_name().and_then(|s| s.to_str()),
+            Some(".auto-shell-ai-chat.json")
+        );
+    }
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cargo test -p auto-shell frontend::ai::tests::history_path_under_home`
-Expected: FAIL — `cannot find function history_path`.
+Run: `cargo test -p auto-shell --lib frontend::ai::tests::history_file_under_is_home_plus_filename`
+Expected: FAIL — `cannot find function history_file_under`.
 
-- [ ] **Step 3: Implement `history_path`**
+- [ ] **Step 3: Implement `history_path` and the `history_file_under` helper**
 
 Add above the `tests` module:
 
@@ -592,9 +595,14 @@ use std::path::PathBuf;
 
 /// Path to the persisted chat history: `~/.auto-shell-ai-chat.json`.
 pub fn history_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".auto-shell-ai-chat.json")
+    history_file_under(&dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+}
+
+/// Build the history file path for a given home directory. Factored out so the
+/// path logic is testable without depending on the OS home-dir lookup (which
+/// `dirs` resolves via native APIs and does not honor `HOME` on Windows).
+fn history_file_under(home: &Path) -> PathBuf {
+    home.join(".auto-shell-ai-chat.json")
 }
 ```
 
