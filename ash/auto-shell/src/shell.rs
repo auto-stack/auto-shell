@@ -1247,6 +1247,16 @@ impl Shell {
         &self.registry
     }
 
+    /// Plan 028: Build a `ToolRegistry` bridging all registered commands.
+    ///
+    /// Each command becomes a `DynamicCommandTool` (introspection-only — it
+    /// carries the command's name/description/schema for catalog export, but
+    /// does not hold the command object itself). The resulting registry's
+    /// `catalog()` can be exported for AI Agents via `ash agent describe-tools`.
+    pub fn build_tool_registry(&self) -> ash_core::tool::catalog::ToolRegistry {
+        crate::tool_bridge::build_tool_registry_from_commands(&self.registry)
+    }
+
     /// Check if input looks like an AutoLang expression
     /// Plan 322: Conservative Auto expression detection.
     /// Only classify as Auto when there's a STRONG signal — default is Shell.
