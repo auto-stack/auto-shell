@@ -146,6 +146,8 @@ dependencies = [
  "indexmap",
  "miette",
  "regex",
+ "serde",
+ "serde_json",
  "sysinfo",
  "thiserror 1.0.69",
 ]

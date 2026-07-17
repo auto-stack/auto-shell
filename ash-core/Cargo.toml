@@ -25,6 +25,11 @@ regex = "1.10"
 miette = "7.0"
 thiserror = "1.0"
 
+# Plan 028: Tool Registry 需要 JSON Schema 序列化。
+# 只用于 tool/ 模块;现有 Atom/AtomPipeline/SecurityPolicy 不加 derive。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [dev-dependencies]
 pretty_assertions = "1.4"
 criterion = "0.5"
