@@ -9,6 +9,7 @@
 pub mod agent_loop;
 pub mod atom_kind;
 pub mod catalog;
+pub mod envelope;
 pub mod error;
 pub mod schema;
 pub mod value_convert;

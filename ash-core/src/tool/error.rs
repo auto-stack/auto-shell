@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The category of a tool failure. Agents match on this to choose recovery.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     /// Command executed but returned non-zero exit.
