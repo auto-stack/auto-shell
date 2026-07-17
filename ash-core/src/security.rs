@@ -173,6 +173,25 @@ impl SecurityPolicy {
             eprintln!("security: failed to write audit log {}: {}", path.display(), e);
         }
     }
+
+    /// Plan 028: Produce a capability-only summary for Agents.
+    ///
+    /// Deliberately does NOT include specific paths (sandbox_dir is shown
+    /// only as a boolean "is sandboxed") or deny-list contents (only the
+    /// count). This is safe to surface in system prompts / logs without
+    /// leaking filesystem layout.
+    pub fn summarize(&self) -> PolicySummary {
+        PolicySummary {
+            has_allow_list: !self.allow.is_empty(),
+            deny_count: self.deny.len(),
+            no_exec: self.no_exec,
+            no_network: self.no_network,
+            read_only: self.read_only,
+            dry_run: self.dry_run,
+            sandboxed: self.sandbox_dir.is_some(),
+            audit_enabled: self.audit_file.is_some(),
+        }
+    }
 }
 
 /// True if the command is network-capable. Registry `http_*` names (multi-word)
@@ -313,6 +332,29 @@ fn json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Plan 028: A capability-only summary of a SecurityPolicy, safe to expose
+/// to Agents. Contains NO specific paths and NO deny-list contents — only
+/// booleans and counts. This is what `ash agent describe-policy` returns.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PolicySummary {
+    /// True if an allow-list is active (default-deny mode).
+    pub has_allow_list: bool,
+    /// Number of entries in the deny-list (contents not exposed).
+    pub deny_count: usize,
+    /// `--no-exec` active: external process spawning blocked.
+    pub no_exec: bool,
+    /// `--no-network` active: network-capable commands blocked.
+    pub no_network: bool,
+    /// `--read-only` active: write commands blocked.
+    pub read_only: bool,
+    /// `--dry-run` active: writes/spawns short-circuited.
+    pub dry_run: bool,
+    /// `--sandbox <dir>` active: path operations confined (dir not exposed).
+    pub sandboxed: bool,
+    /// `--audit <file>` active: every command logged (file not exposed).
+    pub audit_enabled: bool,
 }
 
 #[cfg(test)]
@@ -577,5 +619,39 @@ mod tests {
         assert!(is_write_command("rm"));
         // Multi-word: take first token.
         assert!(!is_write_command("http post"));
+    }
+
+    #[test]
+    fn plan028_summarize_default_policy() {
+        let p = crate::security::SecurityPolicy::default();
+        let s = p.summarize();
+        assert!(!s.has_allow_list);
+        assert_eq!(s.deny_count, 0);
+        assert!(!s.no_exec);
+        assert!(!s.no_network);
+        assert!(!s.read_only);
+        assert!(!s.dry_run);
+        assert!(!s.sandboxed);
+        assert!(!s.audit_enabled);
+    }
+
+    #[test]
+    fn plan028_summarize_locked_down_policy() {
+        let mut p = crate::security::SecurityPolicy::default();
+        p.no_exec = true;
+        p.no_network = true;
+        p.read_only = true;
+        p.sandbox_dir = Some(std::path::PathBuf::from("/sandbox"));
+        p.deny.push("rm".into());
+        let s = p.summarize();
+        assert!(s.no_exec);
+        assert!(s.no_network);
+        assert!(s.read_only);
+        assert!(s.sandboxed);
+        assert_eq!(s.deny_count, 1);
+        // sandbox_dir value must NOT appear in the summary JSON
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("/sandbox"), "summary leaked sandbox path: {}", json);
+        assert!(!json.contains("\"rm\""), "summary leaked deny-list contents: {}", json);
     }
 }
