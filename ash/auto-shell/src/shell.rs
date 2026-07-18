@@ -448,6 +448,13 @@ impl Shell {
         true
     }
 
+    /// Plan 028: public wrapper around `classify_is_external` for the
+    /// `ash agent check` dry-run path (which needs to know whether the
+    /// command would spawn an external process, to apply --no-exec/--no-network).
+    pub fn classify_is_external_pub(&self, cmd_name: &str) -> bool {
+        self.classify_is_external(cmd_name)
+    }
+
     /// Internal: actual command dispatch.
     fn execute_inner(&mut self, input: &str) -> Result<Option<String>> {
         // Fire preexec hook (before command execution)
