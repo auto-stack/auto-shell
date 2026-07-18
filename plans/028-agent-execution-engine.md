@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **⚠️ 实现状态(2026-07-18):** M1+M2 已实现完毕(分支 `feat/028-agent-engine`)。实现中发现 3 处与原 plan 不符的偏差(`AtomPipeline` 不 Clone / `auto_val::Value` ≠ `serde_json::Value` / `Command` 无 Send+Sync bound),已就地修正。**完整偏差记录见 `designs/028-agent-execution-engine.md` 附录 B**。M3/M4 展开前必读该附录。下面 M1/M2 的任务文本保留原样作为历史记录;实际代码以分支上的 commit 为准。
+
 **Goal:** 为 ASH 构建统一的 Tool Registry 和外部 Agent CLI 接口,让 AI Agent 能安全、确定、结构化地调用 ash 的 80 个命令。
 
 **Architecture:** 在 `ash-core` 新增 `tool/` 模块,定义 `Tool` trait + `ToolRegistry`;通过 `CommandToolBridge` 让现有 80 个 `Command` 自动满足 `Tool`;在 `auto-shell` 新增 `ash agent ...` CLI 子命令族(describe-tools / describe-policy / check / run / run-batch)。所有改动是加法,旧 `ash -c --json` 接口保持不变。

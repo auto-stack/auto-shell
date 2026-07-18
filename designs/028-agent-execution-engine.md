@@ -917,6 +917,56 @@ Agent 启动时可调一次,把结果纳入决策。
 
 ---
 
+## 附录 B:M1+M2 实现偏差记录(2026-07-18)
+
+M1+M2 实现过程中发现原设计与实际代码的 3 处偏差,均已就地修正。记录于此供 M3/M4 及后续 Plan 参考。
+
+### 偏差 1:`ToolData::Atom(AtomPipeline)` 不可行
+
+**原设计**(第 1.3 节):`ToolData` 有 `Atom(AtomPipeline)` 变体,`ToolResult` derive `Clone`。
+
+**实际情况**:`AtomPipeline`(`ash-core/src/pipeline/atom_pipeline.rs`)**不实现 `Clone`**(deliberately —— 它持有流式资源)。而 `ToolResult` 需要 `Clone`(信封序列化要克隆)。两者冲突。
+
+**修正**:
+- 从 `ToolData` 移除 `Atom(AtomPipeline)` 变体(只保留 `Json(Value)` / `Text(String)` / `Empty`)。
+- 新增 `ToolData::from_atom_pipeline(&AtomPipeline) -> Self` 方法,在调用点把 AtomPipeline 转成 JSON 再包进 `ToolData::Json`。
+- 新增顶层函数 `atom_pipeline_to_json(&AtomPipeline) -> Value`。
+- 未来内置 F4 loop 若需要 in-process 传递 AtomPipeline,可在 Plan 029 重新设计(可能用 `Arc<AtomPipeline>` 或改 ToolResult 不 derive Clone)。
+
+### 偏差 2:`auto_val::Value` ≠ `serde_json::Value`
+
+**原设计**:假设 `Atom.value`(类型 `auto_val::Value`)可直接当 `serde_json::Value` 用。
+
+**实际情况**:`auto_val::Value`(`auto-lang/crates/auto-val/src/value.rs`)是 AutoLang 语言的值类型,有 50+ 变体(含 `Lambda`、`Closure`、`Widget`、`Model`、`Future` 等语言级概念),与 `serde_json::Value` 是**完全不同的两个类型**,无内置转换。
+
+**修正**:新增 `ash-core/src/tool/value_convert.rs` 模块,提供 `auto_value_to_json(&auto_val::Value) -> serde_json::Value`:
+- 数值/布尔/字符串/数组/对象 → 对应 JSON
+- `Nil/Null/None/Void` → JSON null
+- `Some(x)/Ok(x)` → unwrap 递归
+- `Future` → `{"pending": "future not resolved"}`
+- `Error/Err(msg)` → `{"error": msg}`
+- 其余语言级变体(`Lambda/Closure/Widget/...`)→ 降级为 `"<auto_val:TypeName>"` 描述字符串
+
+**影响**:这是 ash 项目"自有值系统 vs JSON 世界"的根本张力点。未来任何需要把 Atom 数据暴露给外部(信封、MCP、日志)的地方都要经过此转换。
+
+### 偏差 3:`Command` trait 无 `Send + Sync` bound
+
+**原设计**(第 1.5 节):`DynamicCommandTool` 持有 `Arc<dyn Command>`,实现 `Tool`(要求 `Send + Sync`)。
+
+**实际情况**:`Command` trait(`auto-shell/src/cmd.rs`)**没有 `Send + Sync` supertrait bound**,且 79 个现有 `impl Command` 不保证都满足。所以 `Arc<dyn Command>` 不能直接放进需要 `Send + Sync` 的 `Tool` 实现里。
+
+**修正**:`DynamicCommandTool` **不持有** `Arc<dyn Command>`。它在构造时(`from_command(&dyn Command)`)只从 `Command::signature()` **拷贝出** name/description,然后用 `derive_schema_from_signature()` 算出 schema。之后这个 Tool 就是个纯数据壳(name + description + parameters,都是 `Send + Sync + Clone`)。
+
+**后果**:`DynamicCommandTool::invoke()` 返回 `Failed(Internal, "...use ash agent run")`——它是**纯内省**(给 catalog/describe-tools 用),不负责执行。真正的执行在 `ash agent run` 路径(M2.4),那里有 `&mut Shell` 可直接调 `Command::run`。这其实跟原设计的"bridge 的 invoke 是 shell-less,真正执行在 agent run"方向一致,只是更彻底——连 Command 引用都不存。
+
+### 经验教训(给 M3/M4)
+
+1. **勘探要到位**:写 plan 前的代码勘探漏了 `AtomPipeline` 不 Clone、`auto_val::Value` 类型、`Command` 无 Send+Sync 这三个关键事实。M3/M4 展开 plan 前要补做针对性勘探。
+2. **`ash-core` 测试从 `ash-core/` 目录跑**:`cargo test -p ash-core` 在 workspace 外会失败(它不是 workspace member,dev-deps 解析不到)。必须 `cd ash-core && cargo test`。
+3. **`auto-lang` 是活跃开发仓库**:实现期间被外部改动打断了两次。M3/M4 期间若再遇,优先让用户先稳定 auto-lang。
+
+---
+
 ## 参考
 
 - `docs/roadmap.md` —— 项目战略 roadmap,护城河定位
