@@ -448,9 +448,9 @@ impl Shell {
         true
     }
 
-    /// Plan 028: public wrapper around `classify_is_external` for the
-    /// `ash agent check` dry-run path (which needs to know whether the
-    /// command would spawn an external process, to apply --no-exec/--no-network).
+    /// Public wrapper around `classify_is_external` — needed by the security
+    /// policy's dry-run path to decide whether a command would spawn an
+    /// external process (for --no-exec / --no-network enforcement).
     pub fn classify_is_external_pub(&self, cmd_name: &str) -> bool {
         self.classify_is_external(cmd_name)
     }
@@ -1252,16 +1252,6 @@ impl Shell {
     /// Get the command registry
     pub fn registry(&self) -> &CommandRegistry {
         &self.registry
-    }
-
-    /// Plan 028: Build a `ToolRegistry` bridging all registered commands.
-    ///
-    /// Each command becomes a `DynamicCommandTool` (introspection-only — it
-    /// carries the command's name/description/schema for catalog export, but
-    /// does not hold the command object itself). The resulting registry's
-    /// `catalog()` can be exported for AI Agents via `ash agent describe-tools`.
-    pub fn build_tool_registry(&self) -> ash_core::tool::catalog::ToolRegistry {
-        crate::tool_bridge::build_tool_registry_from_commands(&self.registry)
     }
 
     /// Check if input looks like an AutoLang expression

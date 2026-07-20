@@ -16,7 +16,6 @@ pub use ash_core as core;
 pub mod frontend;
 
 // Legacy modules (will migrate into ash-core or frontend over time)
-pub mod agent;
 pub mod auto_config;
 pub mod cmd;
 pub mod completions;
@@ -29,7 +28,6 @@ pub mod prompt;
 pub mod repl_mode;
 pub mod shell;
 pub mod signal;
-pub mod tool_bridge;
 
 /// Default `~/.ashrc` content, seeded on first start so users discover the
 /// user-defined-functions feature. Editable by the user afterwards.

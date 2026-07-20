@@ -61,13 +61,6 @@ fn main() -> Result<()> {
                 i += 1;
                 continue;
             }
-            "agent" => {
-                // Plan 028: `ash agent <sub>` dispatches to the agent CLI family
-                // (describe-tools / describe-policy / check / run).
-                let sub_args: Vec<String> = args[(i + 1)..].to_vec();
-                let code = auto_shell::agent::dispatch(&sub_args);
-                std::process::exit(code);
-            }
             "-c" => {
                 // Execute a single command string (Plan 007: --json for agent)
                 if i + 1 >= args.len() {
