@@ -181,6 +181,9 @@ fn main() -> Result<()> {
         shell.set_json_output(json_mode);
         // Plan 008: apply CLI security policy.
         shell.set_policy(std::mem::take(&mut policy));
+        // Plan 034 Bug 2: pass positional args to the script ($1, $@, $#).
+        let script_args: Vec<String> = args[(i + 1)..].to_vec();
+        shell.set_script_args(script_args);
         shell.execute_script_file(path)?;
         // Plan 011: honor AutoLang `exit(code)`.
         if shell.script_exit_requested() {
