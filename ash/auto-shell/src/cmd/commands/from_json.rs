@@ -3,7 +3,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
-use ash_core::pipeline::AtomPipeline;
+use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Array, Obj, Value};
 use miette::{IntoDiagnostic, Result};
 
@@ -36,13 +36,17 @@ impl Command for FromJsonCommand {
 
     fn run_atom(
         &self,
-        args: &ParsedArgs,
+        _args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        _shell: &mut Shell,
     ) -> Result<AtomPipeline> {
-        let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
-        let legacy_out = self.run(args, legacy_in, shell)?;
-        Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy_out))
+        // Plan 034 Bug 5: Don't go through the lossy atom_to_pipeline_data
+        // bridge — it silently turns ExternalStream read errors into empty
+        // strings via unwrap_or_default(). Instead, use input.into_text()
+        // which correctly handles all AtomPipeline variants.
+        let text = input.into_text();
+        let value = parse_json(&text)?;
+        Ok(AtomPipeline::from_atom(Atom::new(value, AtomType::Table)))
     }
 }
 

@@ -132,6 +132,9 @@ pub struct Shell {
     /// use this to decide between writing directly to stdout vs returning
     /// data in the pipeline.
     is_pipeline_last: bool,
+    /// Plan 034 Bug 2: Positional args passed to a script (`ash script.ash arg1 arg2`).
+    /// Stored so `$1`/`$@`/`$#` can be interpolated inside the script.
+    script_args: Vec<String>,
 }
 
 /// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
@@ -301,6 +304,7 @@ impl Shell {
             policy,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
+            script_args: Vec::new(), // Plan 034 Bug 2: no script args by default
         };
 
         // Plan 011 (MS3-B): install the shell-host bridge on the AutoVM so
@@ -411,6 +415,12 @@ impl Shell {
     /// Plan 008 (MS2-A): Replace the security policy (used by CLI flags).
     pub fn set_policy(&mut self, policy: ash_core::security::SecurityPolicy) {
         self.policy = policy;
+    }
+
+    /// Plan 034 Bug 2: Set positional args for script execution.
+    /// These are accessible inside scripts via `$1`, `$2`, ..., `$@`, `$#`.
+    pub fn set_script_args(&mut self, args: Vec<String>) {
+        self.script_args = args;
     }
 
     /// Plan 011 (MS3-B): Set an environment variable (used by the ShellHost
@@ -2272,6 +2282,9 @@ impl Shell {
     pub fn execute_script_content(&mut self, content: &str) -> Result<()> {
         let mut auto_block = String::new();
         let mut lines = content.lines().peekable();
+        // Plan 034 Bug 3: Track brace depth so `> cmd` inside fn/if/for
+        // bodies is rewritten to system() instead of flushing the block.
+        let mut brace_depth: i32 = 0;
 
         while let Some(line) = lines.next() {
             let trimmed = line.trim();
@@ -2302,8 +2315,19 @@ impl Shell {
                 continue;
             }
 
+            // Plan 034 Bug 3: Track brace depth for non-shell lines.
+            // We count `{` and `}` in the trimmed line (rough but effective
+            // for typical AutoLang code). String literals with braces are
+            // rare in scripts and this is a heuristic, not a full parser.
+            if !trimmed.starts_with('>') {
+                let opens = trimmed.matches('{').count();
+                let closes = trimmed.matches('}').count();
+                brace_depth += opens as i32 - closes as i32;
+                if brace_depth < 0 { brace_depth = 0; }
+            }
+
             // Shell line: starts with >
-            if trimmed.starts_with('>') {
+            if trimmed.starts_with('>') && brace_depth == 0 {
                 self.flush_auto_block(&mut auto_block)?;
 
                 let cmd = trimmed[1..].trim();
@@ -2316,6 +2340,19 @@ impl Shell {
                     Ok(Some(output)) => println!("{}", output),
                     Ok(None) => {}
                     Err(e) => eprintln!("Error: {}", e),
+                }
+                continue;
+            }
+
+            // Plan 034 Bug 3: `> cmd` inside a fn/if/for body (brace_depth > 0).
+            // Rewrite it to `system("cmd")` and inject into the AutoLang block
+            // instead of flushing the incomplete block.
+            if trimmed.starts_with('>') && brace_depth > 0 {
+                let cmd = trimmed[1..].trim();
+                if !cmd.is_empty() {
+                    // Escape double quotes in the command for the system() call
+                    let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+                    auto_block.push_str(&format!("system(\"{}\")\n", escaped));
                 }
                 continue;
             }
@@ -2509,8 +2546,32 @@ impl Shell {
             return None;
         };
 
-        // Look for `= >` separator
-        let eq_pos = rest.find("= >")?;
+        // Plan 034 Bug 4: Find `=` followed by `>` with flexible whitespace.
+        // Old code used rest.find("= >") which required exact spacing.
+        // Now we scan for '=' then skip spaces and check for '>'.
+        let bytes = rest.as_bytes();
+        let mut eq_pos = None;
+        let mut gt_pos = None;
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'=' && eq_pos.is_none() {
+                eq_pos = Some(i);
+                i += 1;
+                // Skip whitespace after '='
+                while i < bytes.len() && bytes[i] == b' ' { i += 1; }
+                if i < bytes.len() && bytes[i] == b'>' {
+                    gt_pos = Some(i);
+                    break;
+                }
+                // Not a capture assignment, keep scanning for another '='
+                eq_pos = None;
+            }
+            i += 1;
+        }
+
+        let eq_pos = eq_pos?;
+        let gt_pos = gt_pos?;
+
         let var_name = rest[..eq_pos].trim();
 
         // Validate variable name
@@ -2518,8 +2579,8 @@ impl Shell {
             return None;
         }
 
-        // Extract the shell command after `= >`
-        let cmd = rest[eq_pos + 3..].trim();
+        // Extract the shell command after '>'
+        let cmd = rest[gt_pos + 1..].trim();
         if cmd.is_empty() {
             return None;
         }
@@ -2555,13 +2616,36 @@ impl Shell {
 
     /// Replace `$var` in shell command text with Auto VM variable values.
     ///
-    /// Lookup priority: Auto VM locals → Shell local vars → Environment vars.
+    /// Lookup priority: Script args ($1/$@/$#) → Auto VM locals → Shell local vars → Environment vars.
     fn interpolate_auto_vars(&self, cmd: &str) -> String {
         let mut result = String::with_capacity(cmd.len());
         let mut chars = cmd.chars().peekable();
 
         while let Some(c) = chars.next() {
             if c == '$' {
+                // Plan 034 Bug 2: Check for positional args ($1, $2, ...) and specials ($@, $#)
+                if let Some(&next) = chars.peek() {
+                    if next.is_ascii_digit() {
+                        // $1, $2, etc.
+                        chars.next();
+                        let idx = next.to_digit(10).unwrap_or(0) as usize;
+                        if idx > 0 && idx <= self.script_args.len() {
+                            result.push_str(&self.script_args[idx - 1]);
+                        }
+                        continue;
+                    } else if next == '@' {
+                        // $@ — all args space-joined
+                        chars.next();
+                        result.push_str(&self.script_args.join(" "));
+                        continue;
+                    } else if next == '#' {
+                        // $# — arg count
+                        chars.next();
+                        result.push_str(&self.script_args.len().to_string());
+                        continue;
+                    }
+                }
+
                 // Read variable name
                 let mut name = String::new();
                 while let Some(&ch) = chars.peek() {
