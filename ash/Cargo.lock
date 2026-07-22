@@ -178,6 +178,7 @@ dependencies = [
  "futures",
  "reqwest",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

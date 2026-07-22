@@ -1,0 +1,55 @@
+// examples/filestats/filestats.ash
+// 按文件扩展名分组统计文件数量。
+// 展示: HashMap 统计 + for 循环 + 字符串 split
+//
+// 用法: ash filestats.ash [目录]
+
+fn main() {
+    var dir = system("echo $1").trim()
+    if dir.len() == 0 { dir = "." }
+
+    print("统计 " + dir + " 的文件类型分布:")
+    print("-----------------------------------")
+
+    // 用 ls 拿文件名列表
+    var files = system("ls -1 " + dir + " 2>/dev/null || true")
+    var lines = files.trim().lines()
+
+    // HashMap 存 扩展名 → 计数
+    var stats = HashMap.new()
+
+    for fname in lines {
+        if fname.trim().len() == 0 { continue }
+
+        // 提取扩展名(最后一个 . 后面的部分)
+        var ext = "无扩展名"
+        var dot_pos = fname.find(".")
+        if dot_pos >= 0 {
+            // 找最后一个点
+            var parts = fname.split(".")
+            if parts.len() > 1 {
+                ext = parts[parts.len() - 1].lower()
+            }
+        }
+
+        // 累加计数
+        var count = stats.get_str(ext)
+        if count.len() == 0 {
+            stats.insert_str(ext, "1")
+        } else {
+            stats.insert_str(ext, count.to_uint() + 1)
+        }
+    }
+
+    // 输出统计结果
+    var total = 0
+    for (ext, count) in stats {
+        print("  ." + ext + ": " + count + " 个")
+        total = total + count.to_uint()
+    }
+
+    print("-----------------------------------")
+    print("总计: " + total.str() + " 个文件")
+}
+
+main()
