@@ -1,0 +1,80 @@
+# Plan 035 M2: Release — build ash binaries on tag push, attach to GitHub Release.
+#
+# Triggered by: git tag v* && git push --tags
+# Builds release binaries for Windows/macOS/Linux and attaches to the Release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: ash
+            asset_name: ash-linux-x86_64
+          - os: macos-latest
+            artifact: ash
+            asset_name: ash-macos-x86_64
+          - os: windows-latest
+            artifact: ash.exe
+            asset_name: ash-windows-x86_64.exe
+
+    steps:
+      - name: Checkout auto-shell
+        uses: actions/checkout@v4
+
+      - name: Checkout sibling: auto-lang
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-lang
+          path: ../auto-lang
+
+      - name: Checkout sibling: auto-ai
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-ai
+          path: ../auto-ai
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path ash/Cargo.toml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ash/target/release/${{ matrix.artifact }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release with assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/ash-linux-x86_64/ash
+            artifacts/ash-macos-x86_64/ash
+            artifacts/ash-windows-x86_64.exe/ash.exe
