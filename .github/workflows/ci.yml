@@ -1,0 +1,98 @@
+# Plan 035 M2: CI — three-platform test matrix + release builds.
+#
+# Tests ash-core and auto-shell on Windows/macOS/Linux.
+# NOTE: This repo depends on sibling repos (auto-lang, auto-ai) at ../ paths.
+# In CI we clone them side-by-side. When ash is published to crates.io,
+# the sibling-clone step can be removed.
+
+name: CI
+
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout auto-shell
+        uses: actions/checkout@v4
+
+      - name: Checkout sibling: auto-lang
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-lang
+          # If auto-lang is in a different org, replace the owner above.
+          # If it's private, ensure the CI token has access.
+          path: ../auto-lang
+
+      - name: Checkout sibling: auto-ai
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-ai
+          path: ../auto-ai
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ash/target
+            ash-core/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build ash-core
+        run: cargo build --manifest-path ash-core/Cargo.toml
+
+      - name: Test ash-core
+        run: cargo test --manifest-path ash-core/Cargo.toml
+
+      - name: Build auto-shell (default features)
+        run: cargo build --manifest-path ash/Cargo.toml -p auto-shell
+
+      - name: Test auto-shell (default features)
+        run: cargo test --manifest-path ash/Cargo.toml -p auto-shell
+
+      # Plan 030 M0: verify feature isolation (pure engine builds without reedline)
+      - name: Build auto-shell (no-default-features, pure engine)
+        run: cargo build --manifest-path ash/Cargo.toml -p auto-shell --no-default-features
+
+  # Quick clippy check on Linux only (clippy is platform-agnostic for most lints)
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout siblings
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-lang
+          path: ../auto-lang
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/auto-ai
+          path: ../auto-ai
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Clippy ash-core
+        run: cargo clippy --manifest-path ash-core/Cargo.toml -- -W clippy::all
+        continue-on-error: true  # ash-core has pre-existing warnings; don't block CI
+      - name: Clippy auto-shell
+        run: cargo clippy --manifest-path ash/Cargo.toml -p auto-shell -- -W clippy::all
+        continue-on-error: true  # auto-shell has pre-existing warnings too
