@@ -192,3 +192,83 @@ ash 版一行 pipeline,输出结构化。
 
 - `examples/deploy.ash` —— MS3 demo(fn + while + try/catch + system/export/exit),作为 #29 部署助手的基础
 - `ash/auto-shell/src/default_ashrc.txt` —— 4 个小函数示例(greet/countdown/banner/host_info),作为函数贡献的范例
+
+---
+
+## 附录 B:已知 VM Bug 记录(2026-07-23 调查)
+
+在编写 30 个实例时发现 5 个运行时 bug。以下为根因分析和修复方案。
+
+### Bug 1:`.to_uint()` 返回垃圾值且算术错误 —— **auto-lang 仓库**
+
+**症状**:`"42".to_uint()` 返回 `0-2147483647` 之类的垃圾值。`"5".to_uint() + 3` 给出错误结果。但 `var x = 0; x = x + 1` 正常。
+
+**根因**:`codegen.rs` 的 `contains_u64`(line 8772)和 `is_u64_expr`(line 8743)在处理 `Expr::Call` 时,只检查 `Expr::Ident`(函数名)形式的调用,**不处理 `Expr::Dot`(方法调用)**。所以 `"42".to_uint()` 的返回类型被误判为 I32(1 slot),而实际 native 返回 I64(2 slot),导致栈对齐错乱。
+
+**影响**:所有返回 I64/U64 的实例方法(`.to_uint()`、`.len()` 等)在算术/打印中都会出错。影响 csvsum、filestats、loccount、dedupe、diagnose、disk-clean、biglog 等实例。
+
+**修复**:
+- `codegen.rs` `contains_u64` 的 `Expr::Call` 分支:增加对 `Expr::Dot` 方法调用的处理
+- `is_u64_expr`:同样增加 Dot 分支
+- 启动时从 native_catalog 填充 `fn_return_types`,让 I64 返回的 native 被正确识别
+- 范围:~30 行,3 个函数
+
+### Bug 2:位置参数 `$1`/`$@` 不传递给脚本 —— **auto-shell 仓库**
+
+**症状**:`ash script.ash hello world` → 脚本内 `system("echo $1")` 返回空字符串。
+
+**根因**:`main.rs:184` 收集了脚本路径但 **从未传递 `args[i+1..]`**。`execute_script_file` 和 `execute_script_content` 无 args 参数。Shell 无 `set_script_args` 机制。
+
+**修复**:
+- `shell.rs`:Shell 加 `script_args: Vec<String>` 字段 + `pub fn set_script_args(&mut self, args: Vec<String>)`
+- `main.rs:184`:收集 `args[i+1..]` 并调 `shell.set_script_args()`
+- `interpolate_auto_vars()`:扩展 `$1`/`$@`/`$#` 查找,优先查 script_args
+- 范围:~30 行
+
+### Bug 3:`> cmd` shell 行不能出现在 `fn` 体内 —— **auto-shell 仓库**
+
+**症状**:
+```
+fn foo() {
+    > ls -la      // ← 解析错误:"unexpected token"
+}
+```
+但 `var x = system("ls -la")` 在 fn 内正常。`> ls -la` 在顶层正常。
+
+**根因**:`execute_script_content`(shell.rs:2306)的预处理器**不跟踪大括号深度**。遇到 `>` 行时无条件 `flush_auto_block`,把不完整的 `fn foo() {` 发给 VM,导致解析失败。
+
+**修复**:
+- 在 `execute_script_content` 的行循环中跟踪大括号深度(count `{` / `}`)
+- 当 `>` 行遇到且深度 > 0(在 fn/if/for 体内)时,重写为 `system("cmd")` 注入 auto_block,而非 flush+execute
+- 范围:~25 行
+
+### Bug 4:`var x = > cmd` 捕获语法解析错误 —— **auto-shell 仓库**
+
+**症状**:`var result = > git rev-parse HEAD` 给出 "Expected term, got RBrace"。只有 `var result = system("git rev-parse HEAD")` 能用。
+
+**根因**:`try_capture_assignment`(shell.rs:2513)要求精确的 `"= >"` 子串(`rest.find("= >")`)。空格变体(`=>`、`=  >`、`= >cmd`)不匹配,返回 None,原始 `>` 字符被当作 AutoLang token 送进 parser。
+
+**修复**:
+- 把 `rest.find("= >")` 改为更宽松的匹配:手动扫描 `=` 后跟(可选空格)`>`,允许任意空格
+- 范围:~15 行
+
+### Bug 5:`cat file | from_json` 管道在运行时失败 —— **auto-shell 仓库**
+
+**症状**:`cat data.json | from_json` 给出 "unexpected end of input"。from_json 独立使用正常。
+
+**根因**:`from_json.rs:37-46` 的 `run_atom` 经过 lossy 的 `atom_to_pipeline_data` 桥接。`ExternalStream` 的 `unwrap_or_default()`(pipeline_convert.rs:45)吞掉读取错误,返回空字符串 → `parse_json("")` → "unexpected end of input"。
+
+**修复**:
+- `from_json.rs` 的 `run_atom`:不经过 bridge,直接调 `input.into_text()` + `parse_json`
+- 同样的模式也影响 from_csv/from_yaml/from_toml/from_xml(相同 run_atom 结构),v1 只修 from_json 验证模式
+- 范围:~10 行
+
+### Bug 影响矩阵
+
+| Bug | 影响的实例 | 仓库 | 严重度 |
+|-----|-----------|------|--------|
+| 1 (.to_uint) | csvsum, filestats, loccount, dedupe, diagnose, disk-clean, biglog | auto-lang | 高(系统性) |
+| 2 ($1 参数) | 几乎所有带参数的实例 | auto-shell | 高(功能缺失) |
+| 3 (> in fn) | synctree, batch-rename, cleanup 等用 > 在 fn 内的 | auto-shell | 中(可避免) |
+| 4 (var = >) | 少数用捕获语法的实例 | auto-shell | 低(有 system() 替代) |
+| 5 (from_json pipe) | jq-like, csv2json | auto-shell | 中(核心功能) |
