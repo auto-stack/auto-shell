@@ -136,9 +136,16 @@ ash/auto-shell/tests/parity/
 - ~~ash `> ls <glob>` 只取第一个匹配~~ → **已修复**:`ls` 现遍历全部位置参数(ls.rs `collect_ls_value`),`ls *.txt`/`ls a.txt b.txt` 列出所有文件
 - ~~ash `>` 重定向捕获 `echo` 输出时多一个空行~~ → **已修复**:`apply_output_redirect` 改为仅当 output 不以 `\n` 结尾时才补换行(与 R4 同源;`echo hi > f` 现写入 `hi\n`,与 bash 一致)
 
-### P2: 真实 shell 命令 case(依赖 P1)
+### P2: 真实 shell 命令 case(依赖 P1)— ✅ 已完成(2026-07-24)
 
-补真实命令版 case:`> ls -l`/`> grep -c`/`> grep -n`/`> ps`/`> find`。ash 版用 `--bash-compat` 模式(case 目录放 `bash_compat` 标记)。预计 10-15 个新 case。
+补真实命令版 case,用 `--bash-compat` 模式(case 目录放 `bash_compat` 标记)。已新增 9 个真实命令 case(51-59):
+- 51_ls_bash(ls 单文件)、52_grep_bash(grep)、53_wc_bash(wc -w 管道)
+- 54_grep_n(grep -n 带行号)、55_grep_c(grep -c 计数)、56_grep_i(grep -i 忽略大小写)
+- 57_wc_l(wc -l 管道)、58_wc_c(wc -c 字节)、59_sort(sort 排序)
+
+**验收**:`cargo test --test parity`(strict)→ **59/59 全过**(原 50 AutoLang + 9 真实命令)。
+
+**探测发现不可 parity(留待后续)**:`ls -l`(ash bash-compat 未实现长格式)、`ls -a`(ash 不含 `.`/`..`)、`uniq`(ash 管道末端输出空,疑似 bug)。
 
 ### P3: fish/nu shell 变体覆盖
 
