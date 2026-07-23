@@ -99,29 +99,58 @@ fn ash_binary_path() -> PathBuf {
 }
 
 /// Execute a bash script via subprocess. Returns (stdout, exit_code).
+///
+/// On Windows, the bare name `"bash"` may resolve to WSL's `System32\bash.exe`,
+/// which can spawn (exit 0, not 127) but does not execute bash script syntax
+/// correctly (broken POSIX path mounting). So we prefer the full Git bash path
+/// candidates first, falling back to `"bash"` only on Unix (where it is the
+/// real bash). A candidate is accepted only if it actually emits the expected
+/// `$BASH_VERSION` probe output, proving it is a functional bash.
 fn run_bash(script_path: &Path) -> Option<(String, i32)> {
     let script_content = fs::read_to_string(script_path).ok()?;
-    // Use bash -c to avoid shebang/path issues on Windows
-    let bash_candidates = [
-        "bash",
-        "C:\\Program Files\\Git\\bin\\bash.exe",
-        "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-    ];
-    for bash in &bash_candidates {
-        let output = Command::new(bash)
-            .args(["-c", &script_content])
-            .output();
-        if let Ok(output) = output {
-            // code 127 means "command not found" (this bash candidate unusable)
-            if output.status.code() != Some(127) {
-                return Some((
-                    String::from_utf8_lossy(&output.stdout).into_owned(),
-                    output.status.code().unwrap_or(-1),
-                ));
+
+    let bash = resolve_bash()?;
+    let output = Command::new(&bash)
+        .args(["-c", &script_content])
+        .output()
+        .ok()?;
+    Some((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        output.status.code().unwrap_or(-1),
+    ))
+}
+
+/// Resolve a functional bash binary path.
+/// Caches the result in a once-cell-like static via std::sync::OnceLock.
+fn resolve_bash() -> Option<PathBuf> {
+    use std::sync::OnceLock;
+    static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            // Windows: prefer full Git bash paths; the bare "bash" may be WSL.
+            // Unix: "bash" is the real bash.
+            let candidates: &[&str] = if cfg!(windows) {
+                &[
+                    r"C:\Program Files\Git\bin\bash.exe",
+                    r"C:\Program Files\Git\usr\bin\bash.exe",
+                    "bash",
+                ]
+            } else {
+                &["bash"]
+            };
+            for c in candidates {
+                // Probe: a real bash prints BASH_VERSION. WSL bash also has it,
+                // but if a full Git path exists it is preferred and wins first.
+                if let Ok(o) = Command::new(c).args(["-c", "echo $BASH_VERSION"]).output() {
+                    let out = String::from_utf8_lossy(&o.stdout);
+                    if !out.trim().is_empty() {
+                        return Some(PathBuf::from(c));
+                    }
+                }
             }
-        }
-    }
-    None
+            None
+        })
+        .clone()
 }
 
 /// Execute a PowerShell script via subprocess. Returns (stdout, exit_code).
@@ -252,7 +281,7 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
 
     // 3. Compare against bash if present and bash is available
     if let Some(bash_path) = &case.bash_script {
-        if command_exists("bash") {
+        if resolve_bash().is_some() {
             let (bash_out, bash_code) = run_bash(bash_path).unwrap_or_default();
             let bash_norm = normalize(&bash_out);
             if ash_norm != bash_norm {
@@ -371,7 +400,7 @@ fn bootstrap_expected() {
 
     for case in &cases {
         if let Some(bash_path) = &case.bash_script {
-            if command_exists("bash") {
+            if resolve_bash().is_some() {
                 let (bash_out, _) = run_bash(bash_path).unwrap_or_default();
                 let normalized = normalize(&bash_out);
                 let expected_path = case.dir.join("expected.txt");

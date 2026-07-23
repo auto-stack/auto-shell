@@ -38,6 +38,20 @@ TIERS (highest priority first):
 Format: Auto/Atom (.at). `generate` parses the command's --help output.
 ";
 
+/// Print the output of a shell command without adding a spurious trailing
+/// newline. Commands like `echo` already end their captured output with `\n`;
+/// using `println!("{}", output)` would emit a second `\n`, producing blank
+/// lines between commands. This prints the output as-is when it already ends
+/// in a newline, otherwise appends one (matching typical shell behavior where
+/// command output is line-terminated).
+fn print_command_output(output: &str) {
+    if output.ends_with('\n') {
+        print!("{}", output);
+    } else {
+        println!("{}", output);
+    }
+}
+
 /// Plan 322: Check if text is an arithmetic expression (not just a bare number).
 /// True for: "1 + 2", "3 * x", "(a + b)", "3.14 / 2", "41 + 1"
 /// False for: "42" (bare number — could be a PID), "1234" (kill arg)
@@ -2337,7 +2351,7 @@ impl Shell {
                 let cmd = self.interpolate_auto_vars(cmd);
 
                 match self.execute(&cmd) {
-                    Ok(Some(output)) => println!("{}", output),
+                    Ok(Some(output)) => print_command_output(&output),
                     Ok(None) => {}
                     Err(e) => eprintln!("Error: {}", e),
                 }
@@ -2486,7 +2500,7 @@ impl Shell {
         if let Some(output) = crate::cmd::builtin::execute_builtin_with_input(
             command, &self.current_dir, Some(stdin_data))?
         {
-            println!("{}", output);
+            print_command_output(&output);
             return Ok(None);
         }
 
