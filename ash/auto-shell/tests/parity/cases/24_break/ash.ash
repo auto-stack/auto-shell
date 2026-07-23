@@ -1,0 +1,9 @@
+fn main() {
+    for i in 0..10 {
+        if i == 3 {
+            break
+        }
+        print(i)
+    }
+}
+main()
