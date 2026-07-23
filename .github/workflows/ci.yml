@@ -68,6 +68,16 @@ jobs:
       - name: Test auto-shell (default features)
         run: cargo test --manifest-path ash/Cargo.toml -p auto-shell
 
+      # Plan 036 P4: parity tests as a CI gate. Strict mode turns parity
+      # divergences into test failures (default is warning-only). Skipped on
+      # Windows where a functional bash (Git bash) may not be on PATH for the
+      # test process; Linux/macOS have a real bash.
+      - name: Parity gate (strict)
+        if: runner.os != 'Windows'
+        env:
+          ASH_PARITY_STRICT: "1"
+        run: cargo test --manifest-path ash/Cargo.toml -p auto-shell --test parity
+
       # Plan 030 M0: verify feature isolation (pure engine builds without reedline)
       - name: Build auto-shell (no-default-features, pure engine)
         run: cargo build --manifest-path ash/Cargo.toml -p auto-shell --no-default-features

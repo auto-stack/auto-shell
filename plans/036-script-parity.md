@@ -151,9 +151,14 @@ ash/auto-shell/tests/parity/
 
 harness 的 `run_fish`/`run_nu` runner 和 best-effort WARNING 逻辑已就绪(parity.rs)。需为高价值 case 补 fish/nu 版本;无法对应的标 `skip_shells: [nu]`(需在 harness 加 skip 机制,读 `desc.md`)。
 
-### P4: CI 集成
+### P4: CI 集成 — ✅ 已完成(2026-07-24)
 
-`parity_all_cases` 默认 warning 模式,需 `ASH_PARITY_STRICT=1` 才 fail。在 CI 加 `ASH_PARITY_STRICT=1 cargo test --test parity` 作门禁。需确保 CI 环境有 Git bash(Windows)或 bash(Linux)。
+`parity_all_cases` 默认 warning 模式,需 `ASH_PARITY_STRICT=1` 才 fail。
+
+**已实施**:在 `.github/workflows/ci.yml` 的 test job 加 "Parity gate (strict)" 步骤:
+- `ASH_PARITY_STRICT=1 cargo test --test parity`
+- `if: runner.os != 'Windows'`(Windows 的 Git bash 路径在 CI 不确定,避免误阻塞;Linux/macOS 自带真 bash)
+- 这样 parity 分歧会成为 CI 门禁(Linux/macOS),回归自动暴露
 
 ### P5: R4 交互式 REPL 回归验证 — ✅ 已完成(2026-07-24)
 
