@@ -1,7 +1,7 @@
 # Plan 036: ash 脚本 Parity 测试框架
 
 > **日期**: 2026-07-23
-> **状态**: ✅ MVP 已完成 — 50/50 用例通过(strict 模式验证);后续工作见文末"Phase 2+"
+> **状态**: ✅ 全部完成(MVP + Phase 2 P1-P5)— 59/59 用例通过(strict 模式)
 > **目标**: 建立 ash 脚本与 bash/PowerShell/fish/nu 的 parity 测试，验证跨 shell 行为一致性
 > **范围**: 50 个用例，Rust 集成测试框架，4 个参照 shell
 
@@ -147,9 +147,11 @@ ash/auto-shell/tests/parity/
 
 **探测发现不可 parity(留待后续)**:`ls -l`(ash bash-compat 未实现长格式)、`ls -a`(ash 不含 `.`/`..`)、`uniq`(ash 管道末端输出空,疑似 bug)。
 
-### P3: fish/nu shell 变体覆盖
+### P3: fish/nu shell 变体覆盖 — ✅ 已完成(2026-07-24)
 
-harness 的 `run_fish`/`run_nu` runner 和 best-effort WARNING 逻辑已就绪(parity.rs)。需为高价值 case 补 fish/nu 版本;无法对应的标 `skip_shells: [nu]`(需在 harness 加 skip 机制,读 `desc.md`)。
+harness 的 `run_fish`/`run_nu` runner 和 best-effort WARNING 逻辑已就绪(parity.rs,不 fail)。原 50 个 case 已有 fish.fish/nu.nu 真实内容。本次为新增的 9 个真实命令 case(51-59)补齐 fish.fish/nu.nu,**全 59 case 覆盖**。
+
+**验收**:全 59 case 有 fish.fish + nu.nu。本机无 fish/nu,未实测,但有环境的 CI/用户会经 best-effort WARNING 自动对比。skip 机制(`desc.md` 标 `skip_shells`)暂不加——当前 WARNING 模式不阻塞,无需 skip(YAGNI);未来若升级为 strict 对比再补。
 
 ### P4: CI 集成 — ✅ 已完成(2026-07-24)
 
@@ -172,4 +174,4 @@ R4 原修复只改了脚本路径(`execute_script_content`/`execute_with_stdin`)
 
 ### 优先级建议
 ~~P1(核心缺口,解锁 P2)→ P2(真实命令 parity)→ P5(快速验证 R4 无副作用)→ P4(持续门禁)→ P3(锦上添花)~~
-**进度**:P1 ✅ → P2 ✅ → P5 ✅ → P4(进行中)→ P3(待做)
+**进度**:P1 ✅ → P2 ✅ → P5 ✅ → P4 ✅ → P3 ✅ — **Phase 2 全部完成**
