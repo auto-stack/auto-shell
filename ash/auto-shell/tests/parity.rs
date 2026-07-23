@@ -59,6 +59,16 @@ fn normalize(output: &str) -> String {
     // Trim leading/trailing newlines
     s = s.trim_matches('\n').to_string();
 
+    // Replace absolute temp-dir paths with <TMPDIR> placeholder, so that
+    // cross-shell temp-path differences don't cause false divergences.
+    // Handles Windows (\\?\C:\..., C:\...) and Unix (/tmp/...) variants.
+    let tmp = std::env::temp_dir();
+    let tmp_win = tmp.to_string_lossy().into_owned();
+    let tmp_slash = tmp_win.replace('\\', "/");
+    s = s.replace("\\\\?\\", "");
+    s = s.replace(&tmp_win, "<TMPDIR>");
+    s = s.replace(&tmp_slash, "<TMPDIR>");
+
     s
 }
 
@@ -66,34 +76,30 @@ fn normalize(output: &str) -> String {
 // Shell execution helpers
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Execute an ash script via subprocess (same as other shells).
-/// Uses the pre-built ash binary to ensure stdout capture works correctly.
-fn run_ash(script_path: &Path) -> Option<String> {
+/// Execute an ash script via subprocess. Returns (stdout, exit_code).
+fn run_ash(script_path: &Path) -> Option<(String, i32)> {
     let bin = ash_binary_path();
     let output = Command::new(&bin)
         .arg(script_path)
         .output()
         .ok()?;
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    Some((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        output.status.code().unwrap_or(-1),
+    ))
 }
 
-/// Locate the pre-built ash binary.
+/// Locate the ash binary (cargo auto-builds it via CARGO_BIN_EXE_ash).
+/// Falls back to ASH_TEST_BIN env override for custom builds.
 fn ash_binary_path() -> PathBuf {
     if let Ok(b) = std::env::var("ASH_TEST_BIN") {
         return PathBuf::from(b);
     }
-    let manifest = env!("CARGO_MANIFEST_DIR");
-    let name = if cfg!(windows) { "ash.exe" } else { "ash" };
-    Path::new(manifest)
-        .parent() // ash/
-        .unwrap()
-        .join("target")
-        .join("debug")
-        .join(name)
+    PathBuf::from(env!("CARGO_BIN_EXE_ash"))
 }
 
-/// Execute a bash script via subprocess.
-fn run_bash(script_path: &Path) -> Option<String> {
+/// Execute a bash script via subprocess. Returns (stdout, exit_code).
+fn run_bash(script_path: &Path) -> Option<(String, i32)> {
     let script_content = fs::read_to_string(script_path).ok()?;
     // Use bash -c to avoid shebang/path issues on Windows
     let bash_candidates = [
@@ -106,40 +112,53 @@ fn run_bash(script_path: &Path) -> Option<String> {
             .args(["-c", &script_content])
             .output();
         if let Ok(output) = output {
+            // code 127 means "command not found" (this bash candidate unusable)
             if output.status.code() != Some(127) {
-                return Some(String::from_utf8_lossy(&output.stdout).into_owned());
+                return Some((
+                    String::from_utf8_lossy(&output.stdout).into_owned(),
+                    output.status.code().unwrap_or(-1),
+                ));
             }
         }
     }
     None
 }
 
-/// Execute a PowerShell script via subprocess.
-fn run_pwsh(script_path: &Path) -> Option<String> {
+/// Execute a PowerShell script via subprocess. Returns (stdout, exit_code).
+fn run_pwsh(script_path: &Path) -> Option<(String, i32)> {
     let output = Command::new("pwsh")
         .args(["-NoProfile", "-File"])
         .arg(script_path)
         .output()
         .ok()?;
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    Some((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        output.status.code().unwrap_or(-1),
+    ))
 }
 
-/// Execute a fish script via subprocess.
-fn run_fish(script_path: &Path) -> Option<String> {
+/// Execute a fish script via subprocess. Returns (stdout, exit_code).
+fn run_fish(script_path: &Path) -> Option<(String, i32)> {
     let output = Command::new("fish")
         .arg(script_path)
         .output()
         .ok()?;
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    Some((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        output.status.code().unwrap_or(-1),
+    ))
 }
 
-/// Execute a nu (nushell) script via subprocess.
-fn run_nu(script_path: &Path) -> Option<String> {
+/// Execute a nu (nushell) script via subprocess. Returns (stdout, exit_code).
+fn run_nu(script_path: &Path) -> Option<(String, i32)> {
     let output = Command::new("nu")
         .arg(script_path)
         .output()
         .ok()?;
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+    Some((
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        output.status.code().unwrap_or(-1),
+    ))
 }
 
 /// Check if a command exists on the system.
@@ -215,7 +234,7 @@ fn discover_cases() -> Vec<ParityCase> {
 /// Run a single parity case: compare ash output against bash and expected.
 fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 1. Run ash
-    let ash_out = run_ash(&case.ash_script).unwrap_or_default();
+    let (ash_out, ash_code) = run_ash(&case.ash_script).unwrap_or_default();
     let ash_norm = normalize(&ash_out);
 
     // 2. Compare against expected.txt (golden) if present
@@ -234,7 +253,7 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 3. Compare against bash if present and bash is available
     if let Some(bash_path) = &case.bash_script {
         if command_exists("bash") {
-            let bash_out = run_bash(bash_path).unwrap_or_default();
+            let (bash_out, bash_code) = run_bash(bash_path).unwrap_or_default();
             let bash_norm = normalize(&bash_out);
             if ash_norm != bash_norm {
                 return Err(format!(
@@ -244,13 +263,20 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
                     ash_norm, bash_norm
                 ));
             }
+            // R3: exit-code parity — compare against bash exit code.
+            if ash_code != bash_code {
+                return Err(format!(
+                    "ash exit-code != bash exit-code: {} != {}",
+                    ash_code, bash_code
+                ));
+            }
         }
     }
 
     // 4. PowerShell comparison (best-effort)
     let pwsh_path = case.dir.join("pwsh.ps1");
     if pwsh_path.exists() && command_exists("pwsh") {
-        let pwsh_out = run_pwsh(&pwsh_path).unwrap_or_default();
+        let (pwsh_out, _) = run_pwsh(&pwsh_path).unwrap_or_default();
         let pwsh_norm = normalize(&pwsh_out);
         if ash_norm != pwsh_norm {
             eprintln!(
@@ -264,7 +290,7 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 5. fish comparison (best-effort)
     let fish_path = case.dir.join("fish.fish");
     if fish_path.exists() && command_exists("fish") {
-        let fish_out = run_fish(&fish_path).unwrap_or_default();
+        let (fish_out, _) = run_fish(&fish_path).unwrap_or_default();
         let fish_norm = normalize(&fish_out);
         if ash_norm != fish_norm {
             eprintln!(
@@ -278,7 +304,7 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 6. nu comparison (best-effort)
     let nu_path = case.dir.join("nu.nu");
     if nu_path.exists() && command_exists("nu") {
-        let nu_out = run_nu(&nu_path).unwrap_or_default();
+        let (nu_out, _) = run_nu(&nu_path).unwrap_or_default();
         let nu_norm = normalize(&nu_out);
         if ash_norm != nu_norm {
             eprintln!(
@@ -346,7 +372,7 @@ fn bootstrap_expected() {
     for case in &cases {
         if let Some(bash_path) = &case.bash_script {
             if command_exists("bash") {
-                let bash_out = run_bash(bash_path).unwrap_or_default();
+                let (bash_out, _) = run_bash(bash_path).unwrap_or_default();
                 let normalized = normalize(&bash_out);
                 let expected_path = case.dir.join("expected.txt");
                 fs::write(&expected_path, &normalized).unwrap();
