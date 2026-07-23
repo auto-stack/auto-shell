@@ -1,0 +1,2 @@
+echo exit: 0
+fail exit: 1

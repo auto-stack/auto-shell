@@ -1,0 +1,2 @@
+#!/bin/bash
+printf 'a\na\nb\nb\na\n' | uniq

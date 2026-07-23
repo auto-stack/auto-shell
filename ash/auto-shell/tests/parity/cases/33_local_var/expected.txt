@@ -1,0 +1,2 @@
+in fn: inner
+in main: outer
