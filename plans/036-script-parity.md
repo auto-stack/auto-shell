@@ -132,9 +132,9 @@ ash/auto-shell/tests/parity/
 
 **验收**:`cargo test --test parity`(strict)→ **53/53 全过**(原 50 + 新增 3)。value_helpers 单测 12/12 通过。execute_for_agent 单测 4/4 通过。
 
-**实施中发现的相关 bug(超出 P1,记录待修)**:
-- ash `> ls <glob>` 只取第一个匹配(计划用子目录规避)
-- ash `>` 重定向捕获 `echo` 输出时多一个空行(与 R4 同源但作用于重定向路径;影响基于文件的 wc case,53 改用管道规避)
+**实施中发现的相关 bug(已修复)**:
+- ~~ash `> ls <glob>` 只取第一个匹配~~ → **已修复**:`ls` 现遍历全部位置参数(ls.rs `collect_ls_value`),`ls *.txt`/`ls a.txt b.txt` 列出所有文件
+- ~~ash `>` 重定向捕获 `echo` 输出时多一个空行~~ → **已修复**:`apply_output_redirect` 改为仅当 output 不以 `\n` 结尾时才补换行(与 R4 同源;`echo hi > f` 现写入 `hi\n`,与 bash 一致)
 
 ### P2: 真实 shell 命令 case(依赖 P1)
 

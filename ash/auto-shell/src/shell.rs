@@ -794,7 +794,13 @@ impl Shell {
             };
             let mut writer = std::io::BufWriter::new(file);
             writer.write_all(output.as_bytes()).into_diagnostic()?;
-            writer.write_all(b"\n").into_diagnostic()?;
+            // Only append a newline if the output doesn't already end with one.
+            // Commands like `echo` terminate their output with `\n`; the previous
+            // unconditional `write_all(b"\n")` produced `hi\n\n` for `echo hi > f`,
+            // diverging from bash (which writes the command's raw stdout).
+            if !output.ends_with('\n') {
+                writer.write_all(b"\n").into_diagnostic()?;
+            }
         }
 
         Ok(())
