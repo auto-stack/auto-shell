@@ -1317,3 +1317,93 @@ fish/nu, full coverage after VM bug fixes."
 - [x] README + 已知差异表 → Task 4/11
 
 **实测依据**:所有 ash case 代码基于 2026-07-23 实测矩阵(echo/print/var/cat/sort/uniq/cut/sed/tr/exit 纯文本;wc/grep/head/tail/awk 结构化或缺失)。
+
+---
+
+## ⚠️ MVP 实施结果与计划偏差(2026-07-23 实施后记录)
+
+本计划的 Task 1-11 是按"从零写 32 个 case"设计的,但**实施时发现仓库已有 Plan 036 建好的 50 个 case**(commit `e9285f3`/`9f62063`),覆盖全部 A-G 七大类。实际实施路径因此改变:
+
+| 计划设想 | 实际情况 |
+|---------|---------|
+| 写 32 个新 case | 仓库已有 50 个 case(全 A-G 类) |
+| 预期 ≥25 跑通,其余 KNOWN_FAIL | **50/50 全部跑通**(0 KNOWN_FAIL) |
+| 预期 ash 用 `>` shell 命令写 | 实际 50 case 全用 **AutoLang 原生实现**(规避结构化命令) |
+| 只修 R1/R2/R3 | 实际额外修了 **R4(重复换行)+ WSL bash 误选**,这才是 37 分歧的根因 |
+
+**已完成的 commit**:`b72cf8b`(harness)、`6fbe0ff`(R4+WSL)、`b68f3a7`(docs)。Task 1-3 + Task 4 的 01_echo 修正 + R4 + WSL 修复均已落地。Task 5-11(批量写 case)因仓库已有而**无需执行**。
+
+**关键洞察**:50/50 全过是**真实的**,但它测的是"AutoLang 逻辑等价性",**不是"shell 命令 parity"**。真正的 shell 命令(`> grep`/`> wc`/`> ls`)在 ash 里仍输出结构化表格,与 bash 不一致——这是下一段(后续工作 P1)要解决的。
+
+---
+
+## 后续工作(Phase 2+)
+
+按优先级排序。每项含:现状、实施路径(已调研)、工作量评估。
+
+### P1: 结构化命令 bash 兼容输出模式 ⭐最高优先级
+
+**现状**:ash 的 `ls`/`grep`/`wc`/`ps` 等输出 ratatui 表格,与 bash 纯文本不一致。实测验证(2026-07-23):
+- `> grep apple f.txt` → 表格(带 `\\?\C:\...` 路径列),bash 是 `apple\napple`
+- `> cat f | wc -l` → `lines: 3`,bash 是 `3`
+- `> ls` → name/permissions/type/size/modified 五列表格,bash 是 `file1\nfile2`
+
+当前 50 case 全用 AutoLang 模拟规避了这点,但**真正的 shell 命令 parity 缺失**。
+
+**实施路径**(已精确调研,照抄 `--json` 三件套):
+- **Step 1**(shell.rs):加 `bash_compat: bool` 字段(行 136 后)+ 构造初始化 + `set_bash_compat` setter(照抄 `set_json_output` 行 936)
+- **Step 2**(新建 `ash-core/src/cmd/bash_compat.rs` 或 value_helpers.rs):写 `format_atom_as_bash(atom) -> Option<String>`,按 `AtomType` 分发:
+  - `FileList`/`FileEntry` → 每行一个 name(`ls` 默认)
+  - `ProcessList`/`ProcessEntry` → 经典 `ps` 列
+  - `MatchList` → `file:line:content`(grep -n)或纯行
+  - `CountResult` → 纯数字 + `\n`(wc 风格)
+  - `Path` → 原样字符串
+  - 其他 → `None`(落 fallback `into_text`)
+  - 复用 `format_value_for_table`(value_helpers.rs:164)提取字段,**不复用** `format_array_as_table`(带表头)
+- **Step 3**(shell.rs `format_output` 行 885 后):注入分支 `if self.bash_compat { ... }`,在 json 之后、表格之前
+- **Step 4**(main.rs):加 `--bash-compat` flag(照抄 `--json` 预扫描行 40 + skip 行 53 + 三处应用)。**注意 `-c` 路径的 `execute_for_agent` 会 reset 字段**,需扩签名或改 set+execute
+- **Step 5**:加 parity case `51_ls_bash`/`52_grep_bash`/`53_wc_bash`(用 `--bash-compat` 跑 ash,对比真实 bash ls/grep/wc)
+
+**工作量**:核心 < 150 行,触及 3 文件(shell.rs、main.rs、新格式器)。风险:`-c` 路径 reset 问题。
+
+**验收**:新增的 `51-53` case 通过(strict 模式),且现有 50 case 不回归。
+
+### P2: 真实 shell 命令 case(依赖 P1)
+
+**现状**:当前 50 case 全是 AutoLang 模拟。P1 完成后,可补**真实 shell 命令版** case:
+- `> ls` / `> ls -l` / `> ls -a`
+- `> grep pattern file` / `> grep -c` / `> grep -n`
+- `> wc -l/-w/-c`
+- `> ps` / `> ps aux`
+- `> find . -name x`
+
+**实施**:每个 case 的 ash 版用 `--bash-compat` 模式(或脚本内 `set_bash_compat`),bash 版用真实命令。预计 10-15 个新 case。
+
+### P3: fish/nu shell 变体覆盖
+
+**现状**:harness 已有 `run_fish`/`run_nu` runner 和 best-effort WARNING 逻辑(parity.rs),但 case 目录里 `fish.fish`/`nu.nu` 多为空或简单。fish/nu 语法与 bash 差异大,某些场景无法精确对应。
+
+**实施**:为高价值 case 补 fish/nu 版本;无法对应的标 `skip_shells: [nu]`(需在 harness 加 skip 机制,读 `desc.md`)。
+
+### P4: CI 集成
+
+**现状**:`parity_all_cases` 默认是 warning 模式(不 fail),需 `ASH_PARITY_STRICT=1` 才 fail。CI 未集成。
+
+**实施**:在 CI 配置加 `ASH_PARITY_STRICT=1 cargo test --test parity`,让 parity 回归成为 CI 门禁。需确保 CI 环境有 Git bash(Windows)或 bash(Linux)。
+
+### P5: 交互式 REPL 的 R4 回归验证
+
+**现状**:R4 修复(`print_command_output`)改了 `execute_script_content` 和 `execute_with_stdin` 的输出路径。交互式 REPL 走不同路径(`Repl::run`),理论上不受影响,但**未做交互模式回归测试**。
+
+**实施**:手动验证 `ash`(交互式)下 `echo hello`、`ls`、`cat file` 输出正常(无多余空行、表格渲染正常)。
+
+---
+
+## 后续工作优先级建议
+
+1. **P1(结构化命令 bash 兼容模式)** — 核心能力缺口,解锁 P2,工作量可控(<150 行)
+2. **P2(真实 shell 命令 case)** — 依赖 P1,补齐"shell 命令 parity"的真正验证
+3. **P5(REPL 回归)** — 快速验证 R4 无副作用,应尽早做
+4. **P4(CI 集成)** — 让 parity 成为持续门禁
+5. **P3(fish/nu)** — 锦上添花,优先级最低
+

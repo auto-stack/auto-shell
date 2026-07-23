@@ -206,8 +206,11 @@ tests/parity/cases/<NN_name>/
 
 ## 6. 未来扩展(超出本 MVP)
 
-- 结构化命令 parity(需新增"bash 兼容输出模式"flag + per-atom-type 经典格式器)
-- fish/nu shell 变体覆盖(需标记 skip,因语法差异)
-- G 类错误处理(try-catch vs trap、命令失败处理、空输入)
-- 全部 case 跑通(需先修复挡路的 VM bug)
-- CI 集成(Plan 036 §实施步骤 4)
+> 实施后更新(2026-07-23):本 MVP 50/50 全过,但测的是"AutoLang 逻辑等价性"而非"shell 命令 parity"。后续工作的详细实施路径已写入实施计划 `docs/superpowers/plans/2026-07-23-ash-script-parity-testsuite.md` 的"后续工作(Phase 2+)"章节。优先级:P1 > P2 > P5 > P4 > P3。
+
+- **P1:结构化命令 bash 兼容输出模式**(最高优先级,已调研实施路径)— `ls`/`grep`/`wc`/`ps` 等仍输出 ratatui 表格。新增 `--bash-compat` flag(照抄 `--json` 三件套)+ per-AtomType 经典格式器(FileList→每行 name、CountResult→纯数字)。核心 < 150 行,触及 shell.rs/main.rs/新格式器。
+- **P2:真实 shell 命令 case**(依赖 P1)— 补 `> ls`/`> grep`/`> wc` 等真实命令版 case(当前 50 case 全用 AutoLang 模拟)。
+- **P5:R4 交互式 REPL 回归验证** — 验证 `print_command_output` 修复对交互模式无副作用。
+- **P4:CI 集成** — `ASH_PARITY_STRICT=1 cargo test --test parity` 作为 CI 门禁。
+- **P3:fish/nu shell 变体** — harness runner 已就绪,需补 case 文件 + skip 机制。
+- **(G 类错误处理已覆盖)**:47_try_catch/48_cmd_fail/49_empty_input 已在 50 case 内,全过。
