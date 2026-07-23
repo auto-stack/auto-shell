@@ -1,7 +1,7 @@
 # 设计文档 037: ash 脚本 Parity 测试套件(MVP)
 
 > **日期**: 2026-07-23
-> **状态**: 设计已确认,待实施
+> **状态**: ✅ MVP 已实施 — 50/50 case 通过(strict 模式验证),超出验收目标(原 ≥25)
 > **关系**: 细化并扩展 [plans/036-script-parity.md](../plans/036-script-parity.md);本套件在 Plan 036 已建的框架骨架上落地
 > **目标**: 为 ash 的"跨平台脚本替代 bash/powershell"能力建立可执行、可验证的 parity 测试套件
 
@@ -35,13 +35,17 @@ ash (AutoShell) 的脚本能力(AutoLang + `>` shell-bridge)目标是**替代 ba
 
 **结论:harness 骨架基本就绪,B1(stdout 捕获)阻塞其实已解决。** 最初调研读到的"run_ash 返回空串"是陈旧副本,当前版本已是子进程方案。
 
-### 2.2 真实阻塞(3 个,均已定位且轻微)
+### 2.2 真实阻塞(5 个,均已定位并修复)
 
 | # | 阻塞 | 根因(实测) | 修复 |
 |---|------|------------|------|
 | **R1** | `01_echo/ash.ash` 跑不出输出 | ash 脚本模型:shell 命令**必须以 `>` 前缀**(shell.rs:2330 `if trimmed.starts_with('>')`)。现有 case 写成纯 bash 风格 `echo "hello"`(无 `>`),被当作 AutoLang 代码处理,`echo` 不是合法语句故输出被吞。 | 用例编写规范问题,非代码 bug。见 §3.1 规约。 |
 | **R2** | 二进制定位脆弱 | `parity.rs:81` 用硬路径 `target/debug/ash`,要求手动 `cargo build`。 | 改用 `env!("CARGO_BIN_EXE_ash")`(cargo 自动构建定位)。 |
 | **R3** | exit-code 未参与对比 | `run_ash` 只回 stdout,`run_parity_case` 只比 stdout。 | runner 返回 `(stdout, exit_code)`,对比逻辑加 exit-code 比对。 |
+| **R4**(实施中发现) | shell 行输出每命令多一个尾部空行 | `execute_script_content` 用 `println!("{}", output)` 打印,而 `echo` 等命令输出已带 `\n`,导致重复换行。影响几乎所有用 `> echo`/`> cat` 的 case。 | 新增 `print_command_output()`(shell.rs):输出已带 `\n` 用 `print!`,否则 `println!`。 |
+| **WSL bash**(实施中发现) | `run_bash` 在 `cargo test` 下返回垃圾/空 | Windows 上 `Command::new("bash")` 在测试进程解析到 **WSL `System32\bash.exe`**,能启动(exit 0 ≠ 127)但无法执行 bash 脚本语法(输出垃圾)。旧逻辑用 `code != 127` 选候选,在第一个(WSL)就返回了垃圾。 | `resolve_bash()`:用 `echo $BASH_VERSION` 探测,Windows 上完整 Git bash 路径优先,`OnceLock` 缓存;gate 改为 `resolve_bash().is_some()`。 |
+
+**R4 + WSL bash 是 37 个分歧的真正根因**(非 echo 语法、非 VM bug)。两者修复后 **50/50 全过**。
 
 ### 2.3 关于结构化命令输出(B2)
 
@@ -174,12 +178,18 @@ tests/parity/cases/<NN_name>/
 
 > **注:这是 MVP 验收标准。** 未来需要扩充到更多用例(覆盖 ls/ps 等结构化命令、fish/nu shell 变体、错误处理 G 类等),且目标覆盖全部用例跑通(届时需先修复挡路的 VM bug)。本 MVP 套件为后续扩充奠定可扩展骨架。
 
-- [ ] harness 增强:R2(`CARGO_BIN_EXE_ash` 定位)+ R3(exit-code 对比)落地
-- [ ] `01_echo` 修正为守 `>` 规约,实测跑通
-- [ ] 32 个 case 全部建立(ash.ash + bash.sh + pwsh.ps1 + expected.txt)
-- [ ] **至少 25 个 case 实测跑通**(ash vs bash stdout + exit-code 一致)
-- [ ] 其余跑不通的 case 标 `KNOWN_FAIL` 并记入 `tests/parity/README.md` 已知差异表
-- [ ] `cargo test --test parity` 通过(已知差异不阻塞)
+**✅ 实施结果(2026-07-23):全部达成,且超出预期。**
+
+- [x] harness 增强:R2(`CARGO_BIN_EXE_ash` 定位)+ R3(exit-code 对比)+ normalize 路径占位
+- [x] `01_echo` 修正为守 `>` 规约,实测跑通
+- [x] **50 个 case 全部通过**(Plan 036 已建全套,本计划验证并修复使其全过;原计划 32 个的目标被实际 50 个超越)
+- [x] **50/50 实测跑通**(ash vs bash stdout + exit-code 一致,strict 模式 `ASH_PARITY_STRICT=1` 验证)
+- [x] ~~其余标 KNOWN_FAIL~~ — 无需,全部通过,0 个 KNOWN_FAIL
+- [x] `cargo test --test parity` 通过(`✓ All 50 parity cases passed`)
+
+**实施中额外修复的 2 个关键阻塞**(详见 §2.2):
+- **R4**:ash shell 行输出重复换行 bug(`print_command_output` 修复)
+- **WSL bash 误选**:`run_bash` 在 cargo test 下解析到 WSL bash 导致 37 个假分歧(`resolve_bash` 探测修复)
 
 ---
 
