@@ -658,7 +658,7 @@ impl Repl {
                                         match self.shell.execute(&suggestion) {
                                             Ok(output) => {
                                                 if let Some(s) = output {
-                                                    println!("{}", s);
+                                                    crate::shell::print_command_output(&s);
                                                 }
                                             }
                                             Err(e) => eprintln!("Error: {}", e),
@@ -673,7 +673,7 @@ impl Repl {
                                                 match self.shell.execute(edited) {
                                                     Ok(output) => {
                                                         if let Some(s) = output {
-                                                            println!("{}", s);
+                                                            crate::shell::print_command_output(&s);
                                                         }
                                                     }
                                                     Err(e) => eprintln!("Error: {}", e),
@@ -819,7 +819,10 @@ impl Repl {
                     match self.shell.execute(&line) {
                         Ok(output) => {
                             if let Some(s) = output {
-                                println!("{}", s);
+                                // Use print_command_output to avoid a spurious
+                                // trailing blank line when output already ends
+                                // in '\n' (e.g. echo). Same fix as R4/script path.
+                                crate::shell::print_command_output(&s);
                             }
                             // After command execution, async-refresh git cache
                             // (most changes are caught by filesystem watcher,

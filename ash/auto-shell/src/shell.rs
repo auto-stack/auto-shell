@@ -44,7 +44,7 @@ Format: Auto/Atom (.at). `generate` parses the command's --help output.
 /// lines between commands. This prints the output as-is when it already ends
 /// in a newline, otherwise appends one (matching typical shell behavior where
 /// command output is line-terminated).
-fn print_command_output(output: &str) {
+pub fn print_command_output(output: &str) {
     if output.ends_with('\n') {
         print!("{}", output);
     } else {

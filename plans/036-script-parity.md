@@ -155,9 +155,16 @@ harness 的 `run_fish`/`run_nu` runner 和 best-effort WARNING 逻辑已就绪(p
 
 `parity_all_cases` 默认 warning 模式,需 `ASH_PARITY_STRICT=1` 才 fail。在 CI 加 `ASH_PARITY_STRICT=1 cargo test --test parity` 作门禁。需确保 CI 环境有 Git bash(Windows)或 bash(Linux)。
 
-### P5: R4 交互式 REPL 回归验证
+### P5: R4 交互式 REPL 回归验证 — ✅ 已完成(2026-07-24)
 
-R4 修复(`print_command_output`)改了 `execute_script_content`/`execute_with_stdin` 输出路径。交互式 REPL 走不同路径(`Repl::run`),理论上不受影响,但未做交互模式回归。手动验证 `ash`(交互式)下 `echo hello`/`ls`/`cat file` 输出正常。
+R4 原修复只改了脚本路径(`execute_script_content`/`execute_with_stdin`)。回归验证发现 **REPL 路径和 `-c` 路径仍有同样的重复换行 bug**(`println!("{}", s)` 打印已带 `\n` 的 echo 输出)。
+
+**已修复**:把 `print_command_output` 改为 `pub`,统一应用到所有命令输出路径:
+- `repl.rs` REPL 主循环(repl.rs:822)+ AI 模式执行(2 处)→ 改用 `crate::shell::print_command_output`
+- `main.rs` `-c` 路径(main.rs:86)→ 改用 `auto_shell::shell::print_command_output`
+
+**验证**:`ash -c 'echo hi'` 现输出 `hi\n`(与 bash 一致,不再是 `hi\n\n`)。parity 59/59(strict)、shell 单测 66/66 通过,无回归。
 
 ### 优先级建议
-P1(核心缺口,解锁 P2)→ P2(真实命令 parity)→ P5(快速验证 R4 无副作用)→ P4(持续门禁)→ P3(锦上添花)
+~~P1(核心缺口,解锁 P2)→ P2(真实命令 parity)→ P5(快速验证 R4 无副作用)→ P4(持续门禁)→ P3(锦上添花)~~
+**进度**:P1 ✅ → P2 ✅ → P5 ✅ → P4(进行中)→ P3(待做)

@@ -83,7 +83,9 @@ fn main() -> Result<()> {
                 match shell.execute_for_agent(command, json_mode, bash_compat) {
                     Ok(output) => {
                         if let Some(s) = output {
-                            println!("{}", s);
+                            // Avoid spurious trailing blank line when output
+                            // already ends in '\n' (e.g. echo). Same fix as R4.
+                            auto_shell::shell::print_command_output(&s);
                         }
                         // Plan 008: a security denial or command that set a
                         // non-zero exit code must propagate to the process
