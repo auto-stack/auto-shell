@@ -38,6 +38,9 @@ fn main() -> Result<()> {
     // (`-c` consumes its argument and returns, so a `--json` *after* it would
     // otherwise never be seen.)
     let json_mode = args.iter().any(|a| a == "--json");
+    // Plan 036 P1: --bash-compat renders structured commands (ls/grep/wc/ps)
+    // as bash-style plain text instead of a ratatui table (for parity tests).
+    let bash_compat = args.iter().any(|a| a == "--bash-compat");
 
     // Plan 008 (MS2-A): parse security flags anywhere on the command line.
     // They augment the policy loaded from config (`[security]` section).
@@ -47,6 +50,11 @@ fn main() -> Result<()> {
         let arg = &args[i];
         match arg.as_str() {
             "--json" => {
+                // Already handled by the global pre-scan; skip here.
+                i += 1;
+                continue;
+            }
+            "--bash-compat" => {
                 // Already handled by the global pre-scan; skip here.
                 i += 1;
                 continue;
@@ -72,7 +80,7 @@ fn main() -> Result<()> {
                 shell.load_env_persistence(); // Plan 309 Task 1.2 P4: apply ~/.config/ash/env.at
                 // Plan 008: apply CLI security policy.
                 shell.set_policy(std::mem::take(&mut policy));
-                match shell.execute_for_agent(command, json_mode) {
+                match shell.execute_for_agent(command, json_mode, bash_compat) {
                     Ok(output) => {
                         if let Some(s) = output {
                             println!("{}", s);
@@ -105,6 +113,8 @@ fn main() -> Result<()> {
                 // Plan 007: --json serializes each command's output as a JSON
                 // line (NDJSON) for agent consumers.
                 shell.set_json_output(json_mode);
+                // Plan 036 P1: --bash-compat renders structured commands as text.
+                shell.set_bash_compat(bash_compat);
                 // Plan 008: apply CLI security policy.
                 shell.set_policy(std::mem::take(&mut policy));
                 shell.execute_script_content(&input)?;
@@ -136,6 +146,8 @@ fn main() -> Result<()> {
                 println!("  ash -c <cmd> --json      Pipeline result as JSON");
                 println!("  ash -s --json           Each command as NDJSON");
                 println!("  ash <script.at> --json  Script output as NDJSON");
+                println!("  --bash-compat     Render structured commands (ls/grep/wc/ps) as");
+                println!("                    bash-style plain text instead of a table");
                 println!();
                 println!("  SECURITY (Plan 008):");
                 println!("  --allow <cmd>     Only allow listed commands (default-deny)");
@@ -179,6 +191,8 @@ fn main() -> Result<()> {
         // Plan 007: --json serializes each command's output as a JSON
         // line (NDJSON) for agent consumers.
         shell.set_json_output(json_mode);
+        // Plan 036 P1: --bash-compat renders structured commands as text.
+        shell.set_bash_compat(bash_compat);
         // Plan 008: apply CLI security policy.
         shell.set_policy(std::mem::take(&mut policy));
         // Plan 034 Bug 2: pass positional args to the script ($1, $@, $#).

@@ -134,6 +134,10 @@ pub struct Shell {
     locked_mode: Option<crate::repl_mode::InputMode>,
     /// Plan 007: when true, format_output serializes to JSON (for `ash -c --json`).
     json_output: bool,
+    /// Plan 036 P1: when true, format_output renders structured commands
+    /// (ls/grep/wc/ps) in bash-compatible plain text instead of a ratatui
+    /// table, so their stdout matches bash for parity testing.
+    bash_compat: bool,
     /// Plan 008 (MS2-A): centralized security policy. Intercepts commands
     /// before spawn/dispatch (allow/deny, capability switches, dry-run, audit,
     /// dangerous-pattern detection). Default is a no-op (full pass-through).
@@ -315,6 +319,7 @@ impl Shell {
             ls_icons,
             locked_mode: None,
             json_output: false,
+            bash_compat: false,
             policy,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
@@ -884,6 +889,21 @@ impl Shell {
             return self.pipeline_to_json(pipeline);
         }
 
+        // Plan 036 P1: bash-compat mode renders structured commands as
+        // bash-style plain text instead of a ratatui table, for parity.
+        if self.bash_compat {
+            if let AtomPipeline::Atom(ref atom) = pipeline {
+                if let Some(rendered) = ash_core::cmd::value_helpers::format_atom_as_bash(
+                    atom.atom_type,
+                    &atom.value,
+                ) {
+                    return rendered;
+                }
+            }
+            // No bash-classic rendering for this atom type → plain text.
+            return pipeline.into_text();
+        }
+
         // Try ratatui table rendering for structured Atom data
         if let AtomPipeline::Atom(ref atom) = pipeline {
             if atom.is_structured() {
@@ -922,10 +942,19 @@ impl Shell {
     /// Execute a command and return output formatted for an agent caller
     /// (Plan 007 / MS1). When `json_mode` is true, the terminal pipeline
     /// result is serialized to JSON instead of the human-readable table.
-    pub fn execute_for_agent(&mut self, input: &str, json_mode: bool) -> Result<Option<String>> {
+    /// When `bash_compat` is true (Plan 036 P1), structured commands render
+    /// as bash-style plain text.
+    pub fn execute_for_agent(
+        &mut self,
+        input: &str,
+        json_mode: bool,
+        bash_compat: bool,
+    ) -> Result<Option<String>> {
         self.json_output = json_mode;
+        self.bash_compat = bash_compat;
         let result = self.execute(input);
         self.json_output = false; // always reset (interactive default)
+        self.bash_compat = false;
         result
     }
 
@@ -935,6 +964,13 @@ impl Shell {
     /// honors `self.json_output`.
     pub fn set_json_output(&mut self, on: bool) {
         self.json_output = on;
+    }
+
+    /// Plan 036 P1: enable/disable bash-compatible plain-text output for
+    /// structured commands (ls/grep/wc/ps). When on, format_output renders
+    /// these as bash-style text instead of a ratatui table.
+    pub fn set_bash_compat(&mut self, on: bool) {
+        self.bash_compat = on;
     }
 
     /// Whether the currently-executing command is the final (or only) one in
@@ -4701,7 +4737,7 @@ mod tests {
     fn execute_for_agent_json_text_output() {
         // echo hi → Text("hi\n"); --json → JSON string
         let mut shell = Shell::new();
-        let out = shell.execute_for_agent("echo hi", true).unwrap_or(None);
+        let out = shell.execute_for_agent("echo hi", true, false).unwrap_or(None);
         assert_eq!(out.as_deref(), Some(r#""hi\n""#));
     }
 
@@ -4709,7 +4745,7 @@ mod tests {
     fn execute_for_agent_non_json_is_table_text() {
         // Without --json, echo output is the plain text (no JSON quotes).
         let mut shell = Shell::new();
-        let out = shell.execute_for_agent("echo hi", false).unwrap_or(None);
+        let out = shell.execute_for_agent("echo hi", false, false).unwrap_or(None);
         assert_eq!(out.as_deref(), Some("hi\n"));
     }
 
@@ -4718,7 +4754,7 @@ mod tests {
         // json_output must be reset after execute_for_agent, so a subsequent
         // plain execute() renders normally.
         let mut shell = Shell::new();
-        let _ = shell.execute_for_agent("echo a", true);
+        let _ = shell.execute_for_agent("echo a", true, false);
         assert!(!shell.json_output, "json_output must be reset after agent exec");
         let out = shell.execute("echo b").unwrap_or(None);
         assert_eq!(out.as_deref(), Some("b\n"));
@@ -4729,7 +4765,7 @@ mod tests {
         // ls output is structured (FileList); --json should yield a JSON array
         // (starts with '['), not a rendered table.
         let mut shell = Shell::new();
-        let out = shell.execute_for_agent("ls", true).unwrap_or(None).unwrap_or_default();
+        let out = shell.execute_for_agent("ls", true, false).unwrap_or(None).unwrap_or_default();
         assert!(out.starts_with('['), "ls --json should be a JSON array: {out}");
     }
 

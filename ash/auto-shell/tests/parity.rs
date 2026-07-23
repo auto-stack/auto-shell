@@ -77,12 +77,16 @@ fn normalize(output: &str) -> String {
 // ──────────────────────────────────────────────────────────────────────────
 
 /// Execute an ash script via subprocess. Returns (stdout, exit_code).
-fn run_ash(script_path: &Path) -> Option<(String, i32)> {
+/// When `bash_compat` is true, passes `--bash-compat` so structured commands
+/// (ls/grep/wc) render as bash-style plain text (Plan 036 P1).
+fn run_ash(script_path: &Path, bash_compat: bool) -> Option<(String, i32)> {
     let bin = ash_binary_path();
-    let output = Command::new(&bin)
-        .arg(script_path)
-        .output()
-        .ok()?;
+    let mut cmd = Command::new(&bin);
+    cmd.arg(script_path);
+    if bash_compat {
+        cmd.arg("--bash-compat");
+    }
+    let output = cmd.output().ok()?;
     Some((
         String::from_utf8_lossy(&output.stdout).into_owned(),
         output.status.code().unwrap_or(-1),
@@ -210,6 +214,10 @@ struct ParityCase {
     ash_script: PathBuf,
     bash_script: Option<PathBuf>,
     expected: Option<String>,
+    /// Plan 036 P1: if true, run ash with --bash-compat (for real structured
+    /// commands like ls/grep/wc). Activated by a `bash_compat` marker file in
+    /// the case directory.
+    bash_compat: bool,
 }
 
 /// Discover all parity test cases under `cases/`.
@@ -248,12 +256,17 @@ fn discover_cases() -> Vec<ParityCase> {
 
         let expected = fs::read_to_string(dir.join("expected.txt")).ok();
 
+        // Plan 036 P1: a `bash_compat` marker file (empty) enables
+        // --bash-compat for this case's ash run.
+        let bash_compat = dir.join("bash_compat").exists();
+
         cases.push(ParityCase {
             name,
             dir,
             ash_script,
             bash_script,
             expected,
+            bash_compat,
         });
     }
 
@@ -263,7 +276,7 @@ fn discover_cases() -> Vec<ParityCase> {
 /// Run a single parity case: compare ash output against bash and expected.
 fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 1. Run ash
-    let (ash_out, ash_code) = run_ash(&case.ash_script).unwrap_or_default();
+    let (ash_out, ash_code) = run_ash(&case.ash_script, case.bash_compat).unwrap_or_default();
     let ash_norm = normalize(&ash_out);
 
     // 2. Compare against expected.txt (golden) if present

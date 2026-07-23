@@ -117,34 +117,28 @@ ash/auto-shell/tests/parity/
 
 按优先级排序。每项含现状、已调研的实施路径、工作量。
 
-### P1: 结构化命令 bash 兼容输出模式 ⭐最高优先级
+### P1: 结构化命令 bash 兼容输出模式 ⭐最高优先级 — ✅ 已完成(2026-07-23)
 
-**现状**:ash 的 `ls`/`grep`/`wc`/`ps` 等输出 ratatui 表格,与 bash 纯文本不一致。实测验证:
-- `> grep apple f.txt` → 表格(带路径列),bash 是 `apple\napple`
-- `> cat f | wc -l` → `lines: 3`,bash 是 `3`
-- `> ls` → 五列表格,bash 是 `file1\nfile2`
+**现状(已完成)**:ash 的 `ls`/`grep`/`wc`/`ps` 等输出 ratatui 表格,与 bash 纯文本不一致。现已新增 `--bash-compat` flag,让结构化命令输出 bash 风格纯文本。
 
-当前 50 case 全用 AutoLang 模拟规避了这点,但**真正的 shell 命令 parity 缺失**。
+**已实施**(commit 见下):
+1. **shell.rs**:加 `bash_compat: bool` 字段 + 构造初始化 + `set_bash_compat` setter(照抄 `set_json_output`)
+2. **ash-core/src/cmd/value_helpers.rs**:新增 `format_atom_as_bash(atom_type, value) -> Option<String>`,按 AtomType 分发(FileList→每行 name、MatchList→text 行/`ln:text`、CountResult→纯数字、ProcessList→`PID NAME`、Path→原样;其他→None)。含 6 个单测
+3. **shell.rs `format_output`**:注入 `if self.bash_compat { ... }` 分支(json 之后、表格之前)
+4. **main.rs**:加 `--bash-compat` flag(预扫描 + skip + `-s`/script 路径 set)
+5. **execute_for_agent**:签名扩展为 `(input, json_mode, bash_compat)`,内部 set 并 reset
+6. **parity harness**:`run_ash` 支持 `bash_compat` 参数;`ParityCase` 加 `bash_compat` 字段,case 目录放 `bash_compat` 空标记文件即启用
+7. **新 case**:`51_ls_bash`/`52_grep_bash`/`53_wc_bash`(真实 `> ls`/`> grep`/`> wc` 命令,对比 bash)
 
-**实施路径**(已精确调研,照抄 `--json` 三件套):
-1. **shell.rs**:加 `bash_compat: bool` 字段(行 136 后)+ 构造初始化 + `set_bash_compat` setter(照抄 `set_json_output` 行 936)
-2. **新建 `ash-core/src/cmd/bash_compat.rs`**:写 `format_atom_as_bash(atom) -> Option<String>`,按 `AtomType` 分发:
-   - `FileList`/`FileEntry` → 每行一个 name(`ls` 默认)
-   - `ProcessList`/`ProcessEntry` → 经典 `ps` 列
-   - `MatchList` → `file:line:content`(grep -n)或纯行
-   - `CountResult` → 纯数字 + `\n`(wc 风格)
-   - `Path` → 原样字符串
-   - 其他 → `None`(落 fallback `into_text`)
-   - 复用 `format_value_for_table`(value_helpers.rs:164)提取字段,**不复用** `format_array_as_table`(带表头)
-3. **shell.rs `format_output`**(行 885 后):注入分支 `if self.bash_compat { ... }`,在 json 之后、表格之前
-4. **main.rs**:加 `--bash-compat` flag(照抄 `--json` 预扫描行 40 + skip 行 53 + 三处应用)。注意 `-c` 路径的 `execute_for_agent` 会 reset 字段,需扩签名或改 set+execute
-5. **parity case**:加 `51_ls_bash`/`52_grep_bash`/`53_wc_bash`(用 `--bash-compat` 跑 ash,对比真实 bash)
+**验收**:`cargo test --test parity`(strict)→ **53/53 全过**(原 50 + 新增 3)。value_helpers 单测 12/12 通过。execute_for_agent 单测 4/4 通过。
 
-**工作量**:核心 < 150 行,触及 3 文件(shell.rs、main.rs、新格式器)。**验收**:新增 case 通过 + 现有 50 case 不回归。
+**实施中发现的相关 bug(超出 P1,记录待修)**:
+- ash `> ls <glob>` 只取第一个匹配(计划用子目录规避)
+- ash `>` 重定向捕获 `echo` 输出时多一个空行(与 R4 同源但作用于重定向路径;影响基于文件的 wc case,53 改用管道规避)
 
 ### P2: 真实 shell 命令 case(依赖 P1)
 
-补真实命令版 case:`> ls`/`> ls -l`/`> grep pattern file`/`> wc -l`/`> ps`/`> find`。ash 版用 `--bash-compat` 模式。预计 10-15 个新 case。
+补真实命令版 case:`> ls -l`/`> grep -c`/`> grep -n`/`> ps`/`> find`。ash 版用 `--bash-compat` 模式(case 目录放 `bash_compat` 标记)。预计 10-15 个新 case。
 
 ### P3: fish/nu shell 变体覆盖
 

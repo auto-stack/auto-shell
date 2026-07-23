@@ -4,6 +4,7 @@
 //! shell data and Auto's Value types.
 
 use auto_val::{Value, Obj, Array, AutoStr};
+use crate::pipeline::atom::AtomType;
 
 /// Build a file entry object (for ls command output)
 pub fn build_file_entry(
@@ -182,6 +183,191 @@ fn format_obj_as_record(obj: &Obj) -> String {
     parts.join(", ")
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Plan 036 P1: bash-compatible plain-text formatting for structured commands
+//
+// When `--bash-compat` is active, format_output dispatches here to render
+// structured Atoms (ls/grep/wc/ps output) as bash-style text instead of a
+// ratatui table, so their stdout matches bash for parity testing.
+// Returns None for atom types with no bash-classic equivalent (caller falls
+// back to into_text()).
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Format a structured Atom's value as bash-compatible plain text.
+/// Returns None if no bash-classic rendering is defined for this atom type,
+/// in which case the caller should fall back to `into_text()`.
+pub fn format_atom_as_bash(atom_type: AtomType, value: &Value) -> Option<String> {
+    match atom_type {
+        AtomType::FileList | AtomType::FileEntry => format_file_list_as_bash(value),
+        AtomType::MatchList => format_match_list_as_bash(value),
+        AtomType::CountResult => format_count_result_as_bash(value),
+        AtomType::ProcessList | AtomType::ProcessEntry => format_process_list_as_bash(value),
+        AtomType::Path => Some(value_to_plain_string(value)),
+        // Table/Record/SystemInfo/DiskEntry/... have no single bash-classic
+        // form; fall back to the default text rendering.
+        _ => None,
+    }
+}
+
+/// ls → one name per line (ls -1 style).
+fn format_file_list_as_bash(value: &Value) -> Option<String> {
+    let names: Vec<String> = match value {
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|item| obj_field_str(item, "name"))
+            .collect(),
+        Value::Obj(_) => obj_field_str(value, "name").into_iter().collect(),
+        _ => return None,
+    };
+    if names.is_empty() {
+        return Some(String::new());
+    }
+    Some(names.join("\n"))
+}
+
+/// grep → matching line text, one per line. If `line_number` is present,
+/// prefix it as `lineno:text` (grep -n style).
+fn format_match_list_as_bash(value: &Value) -> Option<String> {
+    let arr = match value {
+        Value::Array(arr) => arr,
+        _ => return None,
+    };
+    let mut lines = Vec::new();
+    for item in arr.iter() {
+        if let Value::Obj(obj) = item {
+            // -l (files-with-matches) mode: obj only has `file`.
+            if let Some(file) = obj_field_str(item, "file") {
+                if obj_field_str(item, "text").is_none() && obj.get("count").is_none() {
+                    // files-with-matches mode: just emit the file name
+                    lines.push(file);
+                    continue;
+                }
+            }
+            // -c (count) mode: obj has `file` + `count`.
+            if let Some(count_val) = obj.get("count") {
+                lines.push(format_value_for_table(&count_val));
+                continue;
+            }
+            // normal match: `text` (always present), optional `line_number`.
+            let text = obj_field_str(item, "text").unwrap_or_default();
+            if let Some(ln) = obj.get("line_number") {
+                lines.push(format!("{}:{}", format_value_for_table(&ln), text));
+            } else {
+                lines.push(text);
+            }
+        }
+    }
+    Some(lines.join("\n"))
+}
+
+/// wc → a bare count number (pipe form: `cat f | wc -l` → `3`, no filename).
+/// CountResult may be an Obj (single count) or Array (multiple files + total).
+fn format_count_result_as_bash(value: &Value) -> Option<String> {
+    match value {
+        Value::Obj(obj) => count_obj_to_number(obj),
+        Value::Array(arr) => {
+            // Multi-file wc: the last entry is the total (file == "total").
+            // Emit the total's count, or sum if no total row.
+            let mut total: Option<i64> = None;
+            let mut sum: i64 = 0;
+            for item in arr.iter() {
+                if let Value::Obj(o) = item {
+                    if matches!(obj_field_str(item, "file").as_deref(), Some("total")) {
+                        total = count_obj_to_i64(o);
+                    } else if let Some(n) = count_obj_to_i64(o) {
+                        sum += n;
+                    }
+                }
+            }
+            Some(total.unwrap_or(sum).to_string())
+        }
+        Value::Int(i) => Some(i.to_string()),
+        Value::Uint(u) => Some(u.to_string()),
+        _ => None,
+    }
+}
+
+/// ps → classic columns: `  PID NAME` (or `  PID NAME COMMAND` if long).
+fn format_process_list_as_bash(value: &Value) -> Option<String> {
+    let arr = match value {
+        Value::Array(arr) => arr,
+        Value::Obj(_) => {
+            // single process entry
+            return format_one_process(value);
+        }
+        _ => return None,
+    };
+    // Detect long mode (has `command` field on first entry).
+    let has_command = arr
+        .iter()
+        .next()
+        .map(|item| matches!(item, Value::Obj(obj) if obj.get("command").is_some()))
+        .unwrap_or(false);
+    let mut lines = Vec::new();
+    for item in arr.iter() {
+        if let Some(line) = format_process_entry(item, has_command) {
+            lines.push(line);
+        }
+    }
+    Some(lines.join("\n"))
+}
+
+fn format_process_entry(item: &Value, has_command: bool) -> Option<String> {
+    let pid = obj_field_plain(item, "pid")?;
+    let name = obj_field_plain(item, "name")?;
+    if has_command {
+        let cmd = obj_field_plain(item, "command").unwrap_or_default();
+        Some(format!("{:>6} {} {}", pid, name, cmd))
+    } else {
+        Some(format!("{:>6} {}", pid, name))
+    }
+}
+
+fn format_one_process(value: &Value) -> Option<String> {
+    let has_command = matches!(value, Value::Obj(obj) if obj.get("command").is_some());
+    format_process_entry(value, has_command)
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────
+
+/// Extract a string field from an Obj value (Value::Str → unquoted string).
+fn obj_field_str(value: &Value, key: &str) -> Option<String> {
+    match value {
+        Value::Obj(obj) => match obj.get(key)? {
+            Value::Str(s) => Some(s.to_string()),
+            other => Some(format_value_for_table(&other)),
+        },
+        _ => None,
+    }
+}
+
+/// Extract a field formatted for plain display (int/uint/str → string).
+fn obj_field_plain(value: &Value, key: &str) -> Option<String> {
+    match value {
+        Value::Obj(obj) => Some(format_value_for_table(&obj.get(key)?)),
+        _ => None,
+    }
+}
+
+/// Render a scalar Value as a plain string (Str without quotes, Int/Uint as-is).
+fn value_to_plain_string(value: &Value) -> String {
+    format_value_for_table(value)
+}
+
+/// A CountResult Obj → its numeric count (first of lines/words/bytes/chars).
+fn count_obj_to_i64(obj: &Obj) -> Option<i64> {
+    for key in &["lines", "words", "bytes", "chars"] {
+        if let Some(Value::Int(n)) = obj.get(*key) {
+            return Some(n as i64);
+        }
+    }
+    None
+}
+
+fn count_obj_to_number(obj: &Obj) -> Option<String> {
+    Some(count_obj_to_i64(obj)?.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +434,69 @@ mod tests {
         assert!(formatted.contains("\"value\""));
         assert!(formatted.contains("count:"));
         assert!(formatted.contains("42"));
+    }
+
+    // ── Plan 036 P1: bash-compat formatter tests ────────────────────────
+
+    fn file_entry(name: &str) -> Value {
+        build_file_entry(name, "file", Some(100), None, None)
+    }
+
+    #[test]
+    fn bash_compat_file_list_one_name_per_line() {
+        let arr = Array::from(vec![file_entry("a.txt"), file_entry("b.txt")]);
+        let out = format_atom_as_bash(AtomType::FileList, &Value::Array(arr));
+        assert_eq!(out.as_deref(), Some("a.txt\nb.txt"));
+    }
+
+    #[test]
+    fn bash_compat_file_entry_single() {
+        let out = format_atom_as_bash(AtomType::FileEntry, &file_entry("only.txt"));
+        assert_eq!(out.as_deref(), Some("only.txt"));
+    }
+
+    #[test]
+    fn bash_compat_match_list_text_lines() {
+        let mut o1 = Obj::new();
+        o1.set("file", Value::str("f.txt"));
+        o1.set("text", Value::str("apple"));
+        let mut o2 = Obj::new();
+        o2.set("file", Value::str("f.txt"));
+        o2.set("text", Value::str("apricot"));
+        let arr = Array::from(vec![Value::Obj(o1), Value::Obj(o2)]);
+        let out = format_atom_as_bash(AtomType::MatchList, &Value::Array(arr));
+        assert_eq!(out.as_deref(), Some("apple\napricot"));
+    }
+
+    #[test]
+    fn bash_compat_match_list_with_line_numbers() {
+        let mut o = Obj::new();
+        o.set("file", Value::str("f.txt"));
+        o.set("line_number", Value::Int(3));
+        o.set("text", Value::str("apple"));
+        let arr = Array::from(vec![Value::Obj(o)]);
+        let out = format_atom_as_bash(AtomType::MatchList, &Value::Array(arr));
+        assert_eq!(out.as_deref(), Some("3:apple"));
+    }
+
+    #[test]
+    fn bash_compat_count_result_obj() {
+        let mut o = Obj::new();
+        o.set("lines", Value::Int(5));
+        let out = format_atom_as_bash(AtomType::CountResult, &Value::Obj(o));
+        assert_eq!(out.as_deref(), Some("5"));
+    }
+
+    #[test]
+    fn bash_compat_count_result_bare_int() {
+        let out = format_atom_as_bash(AtomType::CountResult, &Value::Int(42));
+        assert_eq!(out.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn bash_compat_unsupported_returns_none() {
+        // Table / Record / SystemInfo have no bash-classic form.
+        let arr = Array::from(vec![file_entry("x.txt")]);
+        assert_eq!(format_atom_as_bash(AtomType::Table, &Value::Array(arr)), None);
     }
 }
