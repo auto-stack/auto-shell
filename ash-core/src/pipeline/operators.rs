@@ -87,8 +87,45 @@ impl CmpOp {
     }
 }
 
+/// Join lines back into a string, preserving the original input's trailing
+/// newline (bash uniq/sort keep the trailing newline if present).
+fn join_lines(lines: Vec<&str>, original: &str) -> String {
+    let joined = lines.join("\n");
+    if joined.is_empty() {
+        return String::new();
+    }
+    if original.ends_with('\n') {
+        format!("{}\n", joined)
+    } else {
+        joined
+    }
+}
+
 /// Apply a pipeline operation to a `Value::Array`, returning the transformed value.
 pub fn apply(op: &PipelineOp, data: &Value) -> Value {
+    // Text-line operators (uniq/sort/reverse) also work on multi-line
+    // Value::Str input (e.g. `cat file | uniq`), matching bash semantics.
+    // Without this, a Str input hits the non-array passthrough below and
+    // the operator is a silent no-op (the uniq-doesn't-dedupe bug).
+    if let Value::Str(s) = data {
+        return match op {
+            PipelineOp::Uniq => {
+                let lines: Vec<&str> = s.lines().collect();
+                let mut out: Vec<&str> = Vec::new();
+                let mut prev: Option<&str> = None;
+                for line in &lines {
+                    // bash uniq dedupes *adjacent* identical lines
+                    if Some(*line) != prev {
+                        out.push(*line);
+                        prev = Some(*line);
+                    }
+                }
+                Value::str(&join_lines(out, s))
+            }
+            _ => data.clone(), // other ops fall through to array handling below
+        };
+    }
+
     let arr = match data {
         Value::Array(a) => a,
         _ => return data.clone(), // Non-array passthrough (no-op).

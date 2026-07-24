@@ -186,7 +186,8 @@ pub fn ls_command_value(
     path: &Path,
     current_dir: &Path,
     all: bool,
-    _long: bool,
+    include_dots: bool,
+    long: bool,
     time_sort: bool,
     reverse: bool,
     recursive: bool,
@@ -215,13 +216,37 @@ pub fn ls_command_value(
             .to_string();
 
         let entry = metadata_to_entry(&target, &name, &metadata);
-        return Ok(Value::Array(auto_val::Array { values: vec![file_entry_to_value(&entry)] }));
+        let mut value = file_entry_to_value(&entry);
+        // Strip perms/owner in short mode (see directory branch for rationale).
+        if !long {
+            if let Value::Obj(ref mut obj) = value {
+                obj.remove("permissions");
+                obj.remove("owner");
+            }
+        }
+        return Ok(Value::Array(auto_val::Array { values: vec![value] }));
     }
 
     // List directory contents
     let entries = fs::read_dir(&target).into_diagnostic()?;
 
     let mut files: Vec<(String, AshFileEntry)> = Vec::new();
+
+    // bash `ls -a` includes `.` (current dir) and `..` (parent) entries.
+    // std::fs::read_dir never returns them, so inject them when -a is set
+    // (not -A). They are FileType::Dir so the directory-first sort floats
+    // them to the top, matching bash.
+    if include_dots {
+        if let Ok(md) = fs::metadata(&target) {
+            files.push((".".to_string(), metadata_to_entry(&target, ".", &md)));
+        }
+        if let Some(parent) = target.parent() {
+            if let Ok(md) = fs::metadata(parent) {
+                files.push(("..".to_string(), metadata_to_entry(parent, "..", &md)));
+            }
+        }
+    }
+
     for entry_result in entries {
         let entry = entry_result.into_diagnostic()?;
         let path = entry.path();
@@ -276,7 +301,25 @@ pub fn ls_command_value(
 
     // Build array
     let entries: Vec<AshFileEntry> = files.into_iter().map(|(_, e)| e).collect();
-    Ok(file_entries_to_value(&entries))
+    let mut value = file_entries_to_value(&entries);
+
+    // When not in long format, strip permissions/owner fields so downstream
+    // renderers (e.g. bash-compat format_file_list_as_bash) can detect "short
+    // mode" by the absence of `permissions` (mirroring how ps omits `command`
+    // in non-long mode). This keeps the table renderer unaffected (it reads
+    // whatever fields exist) while giving bash-compat a reliable signal.
+    if !long {
+        if let Value::Array(ref mut arr) = value {
+            for item in arr.values.iter_mut() {
+                if let Value::Obj(ref mut obj) = item {
+                    obj.remove("permissions");
+                    obj.remove("owner");
+                }
+            }
+        }
+    }
+
+    Ok(value)
 }
 
 /// Build a file entry object from metadata
@@ -319,7 +362,7 @@ fn list_recursive_value(
     let mut all_entries = Vec::new();
 
     // List current directory
-    if let Value::Array(entries) = ls_command_value(path, current_dir, all, false, time_sort, reverse, false)? {
+    if let Value::Array(entries) = ls_command_value(path, current_dir, all, false, false, time_sort, reverse, false)? {
         for entry in entries.iter() {
             all_entries.push(entry.clone());
         }

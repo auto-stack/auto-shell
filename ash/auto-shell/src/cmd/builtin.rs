@@ -223,10 +223,11 @@ fn echo_command(args: &[String]) -> String {
     let no_newline = args.iter().any(|a| a == "-n" || a == "--no-newline");
     let positionals: Vec<String> = args
         .iter()
-        .filter(|a| !matches!(a.as_str(), "-n" | "--no-newline"))
+        .filter(|a| !matches!(a.as_str(), "-n" | "--no-newline" | "-e" | "--interpret"))
         .cloned()
         .collect();
-    crate::cmd::commands::echo::echo_text(&positionals, no_newline)
+    let interpret = args.iter().any(|a| matches!(a.as_str(), "-e" | "--interpret"));
+    crate::cmd::commands::echo::echo_text(&positionals, no_newline, interpret)
 }
 
 /// Clear screen (platform-specific)

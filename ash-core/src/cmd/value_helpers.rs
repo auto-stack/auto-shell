@@ -203,14 +203,32 @@ pub fn format_atom_as_bash(atom_type: AtomType, value: &Value) -> Option<String>
         AtomType::CountResult => format_count_result_as_bash(value),
         AtomType::ProcessList | AtomType::ProcessEntry => format_process_list_as_bash(value),
         AtomType::Path => Some(value_to_plain_string(value)),
-        // Table/Record/SystemInfo/DiskEntry/... have no single bash-classic
-        // form; fall back to the default text rendering.
+        // Side-effect summary records (mkdir/cp/mv/rm result objects) are
+        // silent in bash on success; emit empty so their stdout matches bash.
+        AtomType::Record | AtomType::BuildResult | AtomType::RunResult => Some(String::new()),
+        // Table/SystemInfo/DiskEntry/... have no single bash-classic form;
+        // fall back to the default text rendering.
         _ => None,
     }
 }
 
 /// ls → one name per line (ls -1 style).
 fn format_file_list_as_bash(value: &Value) -> Option<String> {
+    // Detect long format: ls_command_value sets `permissions` only when -l is
+    // used (mirrors how ps omits `command` in non-long mode). If the first
+    // entry has permissions, render bash ls -l style columns.
+    let is_long = match value {
+        Value::Array(arr) => arr.iter().next().map_or(false, |item| {
+            matches!(item, Value::Obj(obj) if obj.get("permissions").is_some())
+        }),
+        Value::Obj(_) => matches!(value, Value::Obj(obj) if obj.get("permissions").is_some()),
+        _ => false,
+    };
+    if is_long {
+        return format_file_list_long_as_bash(value);
+    }
+
+    // Short format: one name per line (ls -1 style).
     let names: Vec<String> = match value {
         Value::Array(arr) => arr
             .iter()
@@ -223,6 +241,40 @@ fn format_file_list_as_bash(value: &Value) -> Option<String> {
         return Some(String::new());
     }
     Some(names.join("\n"))
+}
+
+/// ls -l → bash long format: `<perms> <links> <owner> <group> <size> <modified> <name>`
+///
+/// Note: ash's AshFileEntry lacks links count and group, so those are filled
+/// with placeholders (`1` for links, owner reused for group). This yields a
+/// visually-correct but not byte-identical bash ls -l; strict parity would
+/// require extending AshFileEntry (tracked as a residual gap in plans/036).
+fn format_file_list_long_as_bash(value: &Value) -> Option<String> {
+    let arr = match value {
+        Value::Array(arr) => arr,
+        Value::Obj(_) => {
+            // single entry
+            return format_one_file_long(value);
+        }
+        _ => return None,
+    };
+    let mut lines = Vec::new();
+    for item in arr.iter() {
+        if let Some(line) = format_one_file_long(item) {
+            lines.push(line);
+        }
+    }
+    Some(lines.join("\n"))
+}
+
+fn format_one_file_long(item: &Value) -> Option<String> {
+    let perms = obj_field_plain(item, "permissions").unwrap_or_else(|| "?".to_string());
+    let owner = obj_field_plain(item, "owner").unwrap_or_else(|| "-".to_string());
+    let size = obj_field_plain(item, "size").unwrap_or_else(|| "0".to_string());
+    let modified = obj_field_plain(item, "modified").unwrap_or_else(|| "-".to_string());
+    let name = obj_field_str(item, "name")?;
+    // links=1 placeholder (ash has no link count); group reuses owner.
+    Some(format!("{:<11} 1 {:<8} {:<8} {:>8} {} {}", perms, owner, owner, size, modified, name))
 }
 
 /// grep → matching line text, one per line. If `line_number` is present,

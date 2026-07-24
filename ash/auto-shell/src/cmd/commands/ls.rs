@@ -30,12 +30,14 @@ impl Command for LsCommand {
         shell: &mut Shell,
     ) -> Result<PipelineData> {
         let all = args.has_flag("all") || args.has_flag("almost-all");
+        // -a (all) includes . and ..; -A (almost-all) does not. (bash semantics)
+        let include_dots = args.has_flag("all") && !args.has_flag("almost-all");
         let long = args.has_flag("long");
         let time = args.has_flag("time");
         let reverse = args.has_flag("reverse");
         let recursive = args.has_flag("recursive");
 
-        let value = collect_ls_value(args, &shell.pwd(), all, long, time, reverse, recursive)?;
+        let value = collect_ls_value(args, &shell.pwd(), all, include_dots, long, time, reverse, recursive)?;
         Ok(PipelineData::from_value(value))
     }
 
@@ -46,12 +48,13 @@ impl Command for LsCommand {
         shell: &mut Shell,
     ) -> Result<AtomPipeline> {
         let all = args.has_flag("all") || args.has_flag("almost-all");
+        let include_dots = args.has_flag("all") && !args.has_flag("almost-all");
         let long = args.has_flag("long");
         let time = args.has_flag("time");
         let reverse = args.has_flag("reverse");
         let recursive = args.has_flag("recursive");
 
-        let value = collect_ls_value(args, &shell.pwd(), all, long, time, reverse, recursive)?;
+        let value = collect_ls_value(args, &shell.pwd(), all, include_dots, long, time, reverse, recursive)?;
         Ok(AtomPipeline::from_atom(Atom::file_list(value)))
     }
 }
@@ -62,10 +65,12 @@ impl Command for LsCommand {
 /// and `ls *.txt` (glob-expanded to multiple files) silently listed only the
 /// first. bash lists every argument; this merges each path's entries into one
 /// array. With no positionals, defaults to the current directory (`.`).
+/// `include_dots` (-a not -A) injects `.`/`..` directory entries (bash -a).
 fn collect_ls_value(
     args: &crate::cmd::parser::ParsedArgs,
     current_dir: &Path,
     all: bool,
+    include_dots: bool,
     long: bool,
     time_sort: bool,
     reverse: bool,
@@ -77,6 +82,7 @@ fn collect_ls_value(
             Path::new("."),
             current_dir,
             all,
+            include_dots,
             long,
             time_sort,
             reverse,
@@ -88,7 +94,7 @@ fn collect_ls_value(
     if args.positionals.len() == 1 {
         let path = Path::new(&args.positionals[0]);
         return fs::ls_command_value(
-            path, current_dir, all, long, time_sort, reverse, recursive,
+            path, current_dir, all, include_dots, long, time_sort, reverse, recursive,
         );
     }
 
@@ -97,7 +103,7 @@ fn collect_ls_value(
     for path_arg in &args.positionals {
         let path = Path::new(path_arg);
         let value = fs::ls_command_value(
-            path, current_dir, all, long, time_sort, reverse, recursive,
+            path, current_dir, all, include_dots, long, time_sort, reverse, recursive,
         )?;
         if let auto_val::Value::Array(arr) = value {
             merged.extend(arr.values);

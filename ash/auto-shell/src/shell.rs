@@ -1053,6 +1053,9 @@ impl Shell {
             if let Some(op) = ash_core::parser::pipe_stages::parse_pipe_stage(cmd) {
                 let input_val = match input_pipeline.take() {
                     Some(ash_core::pipeline::AtomPipeline::Atom(atom)) => atom.value,
+                    // Text pipeline (e.g. from `cat | sort`) — feed as Str so
+                    // text-line operators (uniq) work, matching bash semantics.
+                    Some(ash_core::pipeline::AtomPipeline::Text(s)) => auto_val::Value::str(&s),
                     _ => auto_val::Value::Array(auto_val::Array::new()),
                 };
                 let result_val = ash_core::pipeline::operators::apply(&op, &input_val);
