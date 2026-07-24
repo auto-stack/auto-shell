@@ -220,3 +220,39 @@ R4 原修复只改了脚本路径(`execute_script_content`/`execute_with_stdin`)
 ### 验收
 - parity 62/62 通过(strict):原 59 + `60_uniq`/`61_ls_all`/`62_echo_e`
 - 单测全绿:value_helpers 12、operators 16、echo 8、shell 66
+
+---
+
+## Phase 3: 脚本级 parity(中型脚本)
+
+命令级 parity(62 case)验证的是单个命令/短管道的输出一致性。**脚本级 parity** 验证的是完整的小/中型脚本——多行逻辑(循环、条件、函数)组合 shell 命令解决实际问题,如"遍历子目录算磁盘占用"、"批量重命名"、"日志统计分析"。
+
+### 脚本级障碍诊断与修复(2026-07-24)
+
+实测"遍历子目录算 du"这类中型脚本,发现并修复了 2 个阻塞性 bug:
+
+**S1: AutoLang 变量在 `>` shell 行不插值**(auto-lang `d5987cd1`)
+- 根因:顶层 `var name="a"` 走 `STORE_GLOBAL`(写入 `vm.globals`),但 `get_var_string` 只查 `scope_stack`(局部栈),漏查 globals → `$name` 插值返回空
+- 修复:`get_var_string` 回退查 `vm.globals`;`get_all_vars` 同步补查。附带给 plan370 测试加 `ui-iced` feature gate
+- 验证:`var d="b"; > cat $d/file` 正确插值并读取
+
+**S1b: 函数体内 `var x = > cmd` 捕获报解析错误**(auto-shell `85ce9bc`)
+- 根因:`try_capture_assignment` 不管 brace_depth,在函数体内也 flush+单独执行,截断函数体块 → AutoLang `unexpected token`
+- 修复:brace_depth > 0 时改写成 `var x = system("cmd")` 注入 auto_block(与 Plan 034 Bug 3 对称)
+- 验证:`fn main() { var x = > ls; for e in x.split(...); ... }` 正常工作
+
+### 剩余次要障碍(非阻塞,可规避)
+- 缺命令 flag:`du -sb` 报 `Unknown flag: -b`(换用支持的 flag 或 AutoLang 计算)
+- `.to_int()` 数值转换(已知 VM Bug 1,算术走 `> echo $((...))` 规避)
+- `DBGE:` 调试输出泄漏 stderr(遗留 debug print,影响脚本输出纯净度)
+
+### 脚本级 case 设计(case 63+)
+
+脚本级 case 同样放在 `tests/parity/cases/`,但内容是多行完整脚本。每个 case 的 ash.ash 是能独立解决一个实际问题的中型脚本,bash.sh 是等价 bash 脚本。
+
+**首批脚本级 case**:
+- `63_dirsize`:遍历子目录算每个目录大小 + 总大小(用 AutoLang 遍历 + shell du)
+- `64_count_lines`:递归统计某类文件的总行数(如所有 .txt 的行数)
+- `65_batch_grep`:对多个文件执行 grep,汇总匹配数
+
+这些 case 用 `bash_compat` 标记(结构化命令走纯文本),实测对齐 bash 脚本输出。
