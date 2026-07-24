@@ -183,12 +183,39 @@ R4 原修复只改了脚本路径(`execute_script_content`/`execute_with_stdin`)
 
 ---
 
-## ⚠️ 计划范围内未完成项(诚实记录)
+## ⚠️ 计划范围内未完成项(已调研,待修复)
 
-036 目标是"验证 ash 脚本与 bash 的跨 shell 行为一致性"。以下 parity 缺口是**计划范围内发现但尚未修复的真实缺陷**(非"超范围"),修复后应补对应 case:
+036 目标是"验证 ash 脚本与 bash 的跨 shell 行为一致性"。以下 parity 缺口是**计划范围内发现但尚未修复的真实缺陷**。三项均已调研清楚根因和修复路径(2026-07-24),修复后补对应 case。
 
-1. **`ls -l` 长格式**:`--bash-compat` 未实现 permissions/size/time 列渲染(属 P1 未完成部分)
-2. **`ls -a` 的 `.`/`..`**:ash ls 不输出 `.`/`..` 条目(bash `ls -a` 含)
-3. **`uniq` 管道末端输出空**:疑似 ash uniq 实现 bug(**uniq 是 036 F 类第 44 项,明确在范围内**)
+### 缺口 1: `uniq` 不去重(优先级最高,真实 bug)
 
-这三项当前未建 parity case(因未修复);修复后补 `60_ls_long`/`61_ls_all`/`62_uniq`。
+**实测**:`cat sorted.txt | uniq` 输出**原样不去重**(`a\na\nb\nb\nc`),bash 应输出 `a\nb\nc`。**且非 bash-compat 模式也不去重**——所以这不是 bash-compat 渲染问题,是 uniq 命令本身的管道桥接 bug。`sort|uniq` 管道末端则输出空。
+
+**根因(已定位)**:`uniq_lines` 算法正确(单测全过),问题在数据流。`uniq.rs:37-47` 的 `run_atom` 调 `atom_to_pipeline_data(input)` → `get_text(input)`,但实测表明 uniq 收到的 input 与它返回的不是同一份去重数据——疑似管道执行把 cat 的输出直接透传,或 uniq 的 run_atom 未真正生效。需进一步调试 `cat|uniq` 的管道串联(shell.rs 管道执行逻辑)确认精确机制。
+
+**修复方向**:先调试确认 uniq run_atom 是否被调用、input 数据是否正确传入;若桥接断裂则在 uniq.rs run_atom 修正。另:`uniq_lines` 行 112 `output.join("\n")` 丢尾随换行,需补回以匹配 bash parity。
+- **附带 bug**:`echo -e "..."` 报 `Unknown flag`(echo.rs 未注册 `-e`),独立于 uniq,顺带修。
+
+### 缺口 2: `ls -a` 缺 `.`/`..`(低风险,明确该修)
+
+**实测**:ash `ls -a` 不输出 `.`/`..`,bash 含。
+
+**根因(已定位)**:Rust `std::fs::read_dir` 不返回 `.`/`..`,ash 未注入。`ls.rs:32/48` 把 `-a`/`--all` 和 `-A`/`--almost-all` 折叠成同一个 `all` 布尔(两者行为相同,都=bash `-A`)。但 `ls.rs:17-18` 的文档字符串明确承诺 `-a` 含 `.`/`..` 而 `-A` 不含——**实现与文档不符,是 bug**。
+
+**修复方向**(低风险,机械化):
+1. `ls.rs` 区分 `-a`(`include_dots=true`)与 `-A`(`include_dots=false`),传 `include_dots` 给 `collect_ls_value`/`ls_command_value`
+2. `fs.rs:222` read_dir 后,若 `include_dots`,用 `metadata_to_entry` 构造 `.`(当前目录)和 `..`(parent,带 root 防护)两个 Dir 条目,prepend 到结果(参与既有排序,自然浮顶)
+3. `ls_command`(表格路径 fs.rs:13-80)同步处理
+
+### 缺口 3: `ls -l` 长格式(中等,有 parity 残差)
+
+**实测**:ash `--bash-compat ls -l` 输出每行一个 name(忽略 `-l`),bash 输出 `total` + 权限/链接/owner/group/size/日期/name 列。
+
+**根因(已定位)**:`format_file_list_as_bash`(value_helpers.rs:213)无条件输出 name。且 `ls_command_value`(fs.rs:185)的 `long` 参数被忽略(命名 `_long`,未用)——但数据本身**已含** permissions/owner/size/modified 字段(metadata_to_entry 无条件填充),只是 `-l` 没控制渲染。
+
+**修复方向**(参照 ps 长格式先例):
+1. 让 `ls_command_value` 真正用 `long` 参数(仅 `-l` 时在 Obj 里设 permissions/owner——当前总是设,需改为条件性,或保留总是设但渲染器据字段判断)
+2. `format_file_list_as_bash` 检测首条目有无 `permissions` 字段决定长格式(参照 `format_process_list_as_bash` 检测 `command` 字段的先例)
+3. **parity 残差**:bash ls -l 还需 links 计数、group、owner 用户名(uid→name 解析)、bash 日期格式(`Mon DD HH:MM`)——ash 数据缺这些,严格字节级 parity 需另扩 AshFileEntry。MVP 可先做"视觉合理"长格式,严格 parity 留后续。
+
+**验收**:三项修复后补 case `60_uniq`/`61_ls_all`/`62_ls_long`,纳入 parity(strict)。建议顺序:uniq(真实 bug,优先)→ ls -a(低风险)→ ls -l(有残差)。
