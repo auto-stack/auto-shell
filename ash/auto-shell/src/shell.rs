@@ -2417,7 +2417,24 @@ impl Shell {
             }
 
             // Plan 303 Step 5: Assignment capture — let/var name = > cmd
-            if let Some(captured) = self.try_capture_assignment(trimmed) {
+            //
+            // Two cases depending on brace_depth:
+            // - brace_depth > 0 (inside fn/if/for body): rewrite to
+            //   `var x = system("cmd")` and inject into the AutoLang block,
+            //   mirroring how bare `> cmd` is handled (Plan 034 Bug 3).
+            //   Flushing+executing separately would truncate the block body.
+            // - brace_depth == 0 (top level): execute the command now and
+            //   capture its stdout into the variable (original behavior).
+            if brace_depth > 0 {
+                if let Some((keyword, var_name, cmd)) = Self::parse_capture_parts(trimmed) {
+                    let cmd = self.interpolate_auto_vars(&cmd);
+                    let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+                    auto_block.push_str(&format!(
+                        "{} {} = system(\"{}\")\n", keyword, var_name, escaped
+                    ));
+                    continue;
+                }
+            } else if let Some(captured) = self.try_capture_assignment(trimmed) {
                 self.flush_auto_block(&mut auto_block)?;
                 let _ = self.session_run(&captured);
                 continue;
@@ -2595,6 +2612,50 @@ impl Shell {
     /// Returns `Some(auto_code)` if the pattern matches, where `auto_code` is
     /// an Auto `let`/`var` statement with the captured stdout as a string value.
     /// Returns `None` if this is a regular Auto line.
+    /// Parse a capture-assignment line (`var x = > cmd` / `let x = > cmd`)
+    /// into its parts: (keyword, var_name, raw_command). Unlike
+    /// `try_capture_assignment`, this does NOT execute the command — it
+    /// returns the raw command text so the caller can rewrite it (e.g. into
+    /// `system("cmd")` for injection into an AutoLang block body).
+    fn parse_capture_parts(line: &str) -> Option<(&'static str, String, String)> {
+        let (keyword, rest) = if let Some(r) = line.strip_prefix("let ") {
+            ("let", r)
+        } else if let Some(r) = line.strip_prefix("var ") {
+            ("var", r)
+        } else {
+            return None;
+        };
+        // Find '=' followed (after spaces) by '>'.
+        let bytes = rest.as_bytes();
+        let mut eq_pos = None;
+        let mut gt_pos = None;
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'=' && eq_pos.is_none() {
+                eq_pos = Some(i);
+                i += 1;
+                while i < bytes.len() && bytes[i] == b' ' { i += 1; }
+                if i < bytes.len() && bytes[i] == b'>' {
+                    gt_pos = Some(i);
+                    break;
+                }
+                eq_pos = None;
+            }
+            i += 1;
+        }
+        let eq_pos = eq_pos?;
+        let gt_pos = gt_pos?;
+        let var_name = rest[..eq_pos].trim();
+        if var_name.is_empty() || var_name.chars().next()?.is_ascii_digit() {
+            return None;
+        }
+        let cmd = rest[gt_pos + 1..].trim();
+        if cmd.is_empty() {
+            return None;
+        }
+        Some((keyword, var_name.to_string(), cmd.to_string()))
+    }
+
     fn try_capture_assignment(&mut self, line: &str) -> Option<String> {
         // Check for `let ` or `var ` prefix
         let rest = if let Some(r) = line.strip_prefix("let ") {
