@@ -1001,30 +1001,46 @@ impl Shell {
     ) -> Result<Option<String>> {
         let mut last_success = true;
         let mut final_output: Option<String> = None;
+        // `prev_op` is the chain operator that PRECEDES the current group
+        // (i.e. the separator between the previous group and this one).
+        // groups[i].1 (next_op) is the operator AFTER group i, so for group i
+        // the preceding operator is groups[i-1].1.
+        let mut prev_op: Option<ChainOp> = None;
 
         for (pipe_cmds, next_op) in groups {
-            match next_op {
-                Some(ChainOp::And) if !last_success => {
-                    // && but previous failed → skip this group
-                    continue;
-                }
-                Some(ChainOp::Or) if last_success => {
-                    // || but previous succeeded → skip this group
-                    continue;
-                }
-                _ => {
-                    // Execute this pipe group
-                    if pipe_cmds.len() == 1 {
-                        final_output = self.execute_single_command(&pipe_cmds[0])?;
-                    } else {
-                        final_output = self.execute_pipeline_with_auto(pipe_cmds)?;
-                    }
-                    last_success = self.last_exit_code == 0;
-                }
+            // Short-circuit based on the operator BEFORE this group:
+            // - && preceding: skip if previous failed
+            // - || preceding: skip if previous succeeded
+            let skip = match prev_op {
+                Some(ChainOp::And) if !last_success => true,
+                Some(ChainOp::Or) if last_success => true,
+                _ => false,
+            };
+            if skip {
+                prev_op = next_op.clone();
+                continue;
             }
+
+            // Execute this pipe group
+            let output = if pipe_cmds.len() == 1 {
+                self.execute_single_command(&pipe_cmds[0])?
+            } else {
+                self.execute_pipeline_with_auto(pipe_cmds)?
+            };
+            // Print each segment's output immediately, like bash does
+            // (each command in a &&/|| chain outputs to stdout in real
+            // time, not just the last one).
+            if let Some(ref s) = output {
+                print_command_output(s);
+            }
+            final_output = output;
+            last_success = self.last_exit_code == 0;
+            prev_op = next_op.clone();
         }
 
-        Ok(final_output)
+        // Return None — each segment already printed its output above.
+        // Returning final_output would cause the caller to print it again.
+        Ok(None)
     }
 
     /// Execute a pipeline with Auto function support
