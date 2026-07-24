@@ -1,12 +1,6 @@
-fn main() {
-    // Emulate `printf 'a\nb\nc\n' | grep b` by filtering in-language,
-    // because ash builtins render structured tables (not raw lines).
-    var data = "a\nb\nc"
-    var lines = data.split("\n")
-    for line in lines {
-        if line.contains("b") {
-            print(line)
-        }
-    }
-}
-main()
+# Real shell command (Plan 036 workaround-1 fix): uses real pipe
+# cat | grep with --bash-compat, not AutoLang simulation.
+> echo "a" > p04pipe.txt
+> echo "b" >> p04pipe.txt
+> echo "c" >> p04pipe.txt
+> cat p04pipe.txt | grep b

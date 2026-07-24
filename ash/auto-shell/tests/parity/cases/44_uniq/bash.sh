@@ -1,2 +1,7 @@
 #!/bin/bash
-printf 'a\na\nb\nb\na\n' | uniq
+echo "apple" > p44uniq.txt
+echo "apple" >> p44uniq.txt
+echo "banana" >> p44uniq.txt
+echo "banana" >> p44uniq.txt
+echo "apple" >> p44uniq.txt
+cat p44uniq.txt | sort | uniq

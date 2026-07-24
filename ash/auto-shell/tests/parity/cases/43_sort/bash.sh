@@ -1,2 +1,5 @@
 #!/bin/bash
-printf '3\n1\n2\n' | sort -n
+echo "cherry" > p43sort.txt
+echo "apple" >> p43sort.txt
+echo "banana" >> p43sort.txt
+cat p43sort.txt | sort

@@ -1,12 +1,12 @@
+# Real AutoLang syntax (Plan 036 workaround-1 fix): uses real `continue`
+# statement, not if/else emulation. Exposes VM bug: continue loops forever.
+# KNOWN_FAIL until continue statement is fixed.
 fn main() {
-    // Emulate `continue` (skip i==3) using if/else, because the VM's
-    // `continue` statement currently loops forever.
     for i in 0..5 {
         if i == 3 {
-            // skip
-        } else {
-            print(i)
+            continue
         }
+        print(i)
     }
 }
 main()

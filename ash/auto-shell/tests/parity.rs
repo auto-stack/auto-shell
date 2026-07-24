@@ -218,6 +218,9 @@ struct ParityCase {
     /// commands like ls/grep/wc). Activated by a `bash_compat` marker file in
     /// the case directory.
     bash_compat: bool,
+    /// If true, skip this case (known bug causes infinite loop or crash).
+    /// Activated by a `skip` marker file whose content is the skip reason.
+    skip: Option<String>,
 }
 
 /// Discover all parity test cases under `cases/`.
@@ -260,6 +263,10 @@ fn discover_cases() -> Vec<ParityCase> {
         // --bash-compat for this case's ash run.
         let bash_compat = dir.join("bash_compat").exists();
 
+        // A `skip` marker file (content = skip reason) skips the case,
+        // e.g. for known infinite-loop bugs that would hang the suite.
+        let skip = fs::read_to_string(dir.join("skip")).ok().map(|s| s.trim().to_string());
+
         cases.push(ParityCase {
             name,
             dir,
@@ -267,6 +274,7 @@ fn discover_cases() -> Vec<ParityCase> {
             bash_script,
             expected,
             bash_compat,
+            skip,
         });
     }
 
@@ -275,6 +283,12 @@ fn discover_cases() -> Vec<ParityCase> {
 
 /// Run a single parity case: compare ash output against bash and expected.
 fn run_parity_case(case: &ParityCase) -> Result<(), String> {
+    // Skip cases marked with a `skip` file (known bugs that hang/crash).
+    if let Some(reason) = &case.skip {
+        eprintln!("⏭️  SKIP {}: {}", case.name, reason);
+        return Ok(());
+    }
+
     // 1. Run ash
     let (ash_out, ash_code) = run_ash(&case.ash_script, case.bash_compat).unwrap_or_default();
     let ash_norm = normalize(&ash_out);

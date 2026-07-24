@@ -1,10 +1,4 @@
-fn main() {
-    // Emulate: echo first && echo second
-    var s1 = system("echo first")
-    print(s1)
-    if system_status() == 0 {
-        var s2 = system("echo second")
-        print(s2)
-    }
-}
-main()
+# Real shell command (Plan 036 workaround-1 fix): uses real && chain,
+# not AutoLang system() emulation. Exposes ash's && chain bug (first
+# command output lost). KNOWN_FAIL until && chain is fixed.
+> echo "first" && echo "second"

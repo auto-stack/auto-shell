@@ -1,18 +1,6 @@
-fn main() {
-    var data = "one two\nthree four five"
-    var lines = data.split("\n")
-    var lc = 0
-    var wc = 0
-    for l in lines {
-        lc = lc + 1
-        var words = l.split(" ")
-        for w in words {
-            if w.len() > 0 {
-                wc = wc + 1
-            }
-        }
-    }
-    print("lines: " + lc)
-    print("words: " + wc)
-}
-main()
+# Real shell command (Plan 036 workaround-1 fix): uses real wc -l/-w
+# with --bash-compat, not AutoLang loop-counting simulation.
+> echo "one two" > p46wc.txt
+> echo "three four five" >> p46wc.txt
+> cat p46wc.txt | wc -l
+> cat p46wc.txt | wc -w

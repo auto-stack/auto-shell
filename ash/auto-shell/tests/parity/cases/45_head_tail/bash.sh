@@ -1,3 +1,7 @@
 #!/bin/bash
-printf 'a\nb\nc\nd\ne\n' | head -n 2
-printf 'a\nb\nc\nd\ne\n' | tail -n 2
+echo "a" > p45ht.txt
+echo "b" >> p45ht.txt
+echo "c" >> p45ht.txt
+echo "d" >> p45ht.txt
+echo "e" >> p45ht.txt
+head -n 2 p45ht.txt

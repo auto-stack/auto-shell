@@ -1,7 +1,5 @@
 #!/bin/bash
-printf 'one two\nthree four five\n' > /tmp/_wc_$$.txt
-lc=$(wc -l < /tmp/_wc_$$.txt | tr -d ' ')
-wc_out=$(wc -w < /tmp/_wc_$$.txt | tr -d ' ')
-echo "lines: $lc"
-echo "words: $wc_out"
-rm -f /tmp/_wc_$$.txt
+echo "one two" > p46wc.txt
+echo "three four five" >> p46wc.txt
+cat p46wc.txt | wc -l
+cat p46wc.txt | wc -w

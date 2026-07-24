@@ -1,2 +1,5 @@
 #!/bin/bash
-printf 'a\nb\nc\n' | grep b
+echo "a" > p04pipe.txt
+echo "b" >> p04pipe.txt
+echo "c" >> p04pipe.txt
+cat p04pipe.txt | grep b

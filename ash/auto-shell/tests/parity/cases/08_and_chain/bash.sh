@@ -1,2 +1,2 @@
 #!/bin/bash
-echo first && echo second
+echo "first" && echo "second"

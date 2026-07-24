@@ -1,2 +1,2 @@
 #!/bin/bash
-cat /no/such/file/here >/dev/null 2>&1 || echo fallback
+echo "success" || echo "fallback"

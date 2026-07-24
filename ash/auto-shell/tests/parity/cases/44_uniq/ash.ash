@@ -1,20 +1,8 @@
-fn main() {
-    // Remove adjacent duplicates in-language.
-    var data = "a\na\nb\nb\na"
-    var lines = data.split("\n")
-    var prev = ""
-    var first = 1
-    for line in lines {
-        if first == 1 {
-            print(line)
-            prev = line
-            first = 0
-        } else {
-            if line != prev {
-                print(line)
-                prev = line
-            }
-        }
-    }
-}
-main()
+# Real shell command (Plan 036 workaround-1 fix): uses real sort|uniq
+# with --bash-compat, not AutoLang simulation.
+> echo "apple" > p44uniq.txt
+> echo "apple" >> p44uniq.txt
+> echo "banana" >> p44uniq.txt
+> echo "banana" >> p44uniq.txt
+> echo "apple" >> p44uniq.txt
+> cat p44uniq.txt | sort | uniq
