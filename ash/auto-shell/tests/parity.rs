@@ -79,10 +79,11 @@ fn normalize(output: &str) -> String {
 /// Execute an ash script via subprocess. Returns (stdout, exit_code).
 /// When `bash_compat` is true, passes `--bash-compat` so structured commands
 /// (ls/grep/wc) render as bash-style plain text (Plan 036 P1).
-fn run_ash(script_path: &Path, bash_compat: bool) -> Option<(String, i32)> {
+/// `cwd` sets the working directory (for per-case isolation).
+fn run_ash(script_path: &Path, bash_compat: bool, cwd: &Path) -> Option<(String, i32)> {
     let bin = ash_binary_path();
     let mut cmd = Command::new(&bin);
-    cmd.arg(script_path);
+    cmd.arg(script_path).current_dir(cwd);
     if bash_compat {
         cmd.arg("--bash-compat");
     }
@@ -110,12 +111,13 @@ fn ash_binary_path() -> PathBuf {
 /// candidates first, falling back to `"bash"` only on Unix (where it is the
 /// real bash). A candidate is accepted only if it actually emits the expected
 /// `$BASH_VERSION` probe output, proving it is a functional bash.
-fn run_bash(script_path: &Path) -> Option<(String, i32)> {
+fn run_bash(script_path: &Path, cwd: &Path) -> Option<(String, i32)> {
     let script_content = fs::read_to_string(script_path).ok()?;
 
     let bash = resolve_bash()?;
     let output = Command::new(&bash)
         .args(["-c", &script_content])
+        .current_dir(cwd)
         .output()
         .ok()?;
     Some((
@@ -158,10 +160,11 @@ fn resolve_bash() -> Option<PathBuf> {
 }
 
 /// Execute a PowerShell script via subprocess. Returns (stdout, exit_code).
-fn run_pwsh(script_path: &Path) -> Option<(String, i32)> {
+fn run_pwsh(script_path: &Path, cwd: &Path) -> Option<(String, i32)> {
     let output = Command::new("pwsh")
         .args(["-NoProfile", "-File"])
         .arg(script_path)
+        .current_dir(cwd)
         .output()
         .ok()?;
     Some((
@@ -171,9 +174,10 @@ fn run_pwsh(script_path: &Path) -> Option<(String, i32)> {
 }
 
 /// Execute a fish script via subprocess. Returns (stdout, exit_code).
-fn run_fish(script_path: &Path) -> Option<(String, i32)> {
+fn run_fish(script_path: &Path, cwd: &Path) -> Option<(String, i32)> {
     let output = Command::new("fish")
         .arg(script_path)
+        .current_dir(cwd)
         .output()
         .ok()?;
     Some((
@@ -183,9 +187,10 @@ fn run_fish(script_path: &Path) -> Option<(String, i32)> {
 }
 
 /// Execute a nu (nushell) script via subprocess. Returns (stdout, exit_code).
-fn run_nu(script_path: &Path) -> Option<(String, i32)> {
+fn run_nu(script_path: &Path, cwd: &Path) -> Option<(String, i32)> {
     let output = Command::new("nu")
         .arg(script_path)
+        .current_dir(cwd)
         .output()
         .ok()?;
     Some((
@@ -282,6 +287,8 @@ fn discover_cases() -> Vec<ParityCase> {
 }
 
 /// Run a single parity case: compare ash output against bash and expected.
+/// Each case runs in its own isolated temp directory so file-based cases
+/// don't pollute each other (Plan 036 workaround-4 fix).
 fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // Skip cases marked with a `skip` file (known bugs that hang/crash).
     if let Some(reason) = &case.skip {
@@ -289,14 +296,21 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
         return Ok(());
     }
 
+    // Create an isolated temp directory for this case.
+    let cwd = std::env::temp_dir().join(format!("ash_parity_{}", case.name));
+    let _ = fs::remove_dir_all(&cwd); // clean any leftover
+    fs::create_dir_all(&cwd).map_err(|e| format!("failed to create temp dir: {}", e))?;
+
     // 1. Run ash
-    let (ash_out, ash_code) = run_ash(&case.ash_script, case.bash_compat).unwrap_or_default();
+    let (ash_out, ash_code) =
+        run_ash(&case.ash_script, case.bash_compat, &cwd).unwrap_or_default();
     let ash_norm = normalize(&ash_out);
 
     // 2. Compare against expected.txt (golden) if present
     if let Some(expected) = &case.expected {
         let exp_norm = normalize(expected);
         if ash_norm != exp_norm {
+            let _ = fs::remove_dir_all(&cwd);
             return Err(format!(
                 "ash output != expected\n\
                  --- ash (normalized) ---\n{}\n\
@@ -309,9 +323,15 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 3. Compare against bash if present and bash is available
     if let Some(bash_path) = &case.bash_script {
         if resolve_bash().is_some() {
-            let (bash_out, bash_code) = run_bash(bash_path).unwrap_or_default();
+            // Clean temp dir before bash run so ash's file side-effects
+            // don't influence bash (each gets a fresh dir).
+            let _ = fs::remove_dir_all(&cwd);
+            fs::create_dir_all(&cwd).map_err(|e| format!("recreate temp dir: {}", e))?;
+
+            let (bash_out, bash_code) = run_bash(bash_path, &cwd).unwrap_or_default();
             let bash_norm = normalize(&bash_out);
             if ash_norm != bash_norm {
+                let _ = fs::remove_dir_all(&cwd);
                 return Err(format!(
                     "ash output != bash output\n\
                      --- ash (normalized) ---\n{}\n\
@@ -321,6 +341,7 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
             }
             // R3: exit-code parity — compare against bash exit code.
             if ash_code != bash_code {
+                let _ = fs::remove_dir_all(&cwd);
                 return Err(format!(
                     "ash exit-code != bash exit-code: {} != {}",
                     ash_code, bash_code
@@ -332,7 +353,9 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 4. PowerShell comparison (best-effort)
     let pwsh_path = case.dir.join("pwsh.ps1");
     if pwsh_path.exists() && command_exists("pwsh") {
-        let (pwsh_out, _) = run_pwsh(&pwsh_path).unwrap_or_default();
+        let _ = fs::remove_dir_all(&cwd);
+        fs::create_dir_all(&cwd).map_err(|e| format!("recreate temp dir: {}", e))?;
+        let (pwsh_out, _) = run_pwsh(&pwsh_path, &cwd).unwrap_or_default();
         let pwsh_norm = normalize(&pwsh_out);
         if ash_norm != pwsh_norm {
             eprintln!(
@@ -346,7 +369,9 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 5. fish comparison (best-effort)
     let fish_path = case.dir.join("fish.fish");
     if fish_path.exists() && command_exists("fish") {
-        let (fish_out, _) = run_fish(&fish_path).unwrap_or_default();
+        let _ = fs::remove_dir_all(&cwd);
+        fs::create_dir_all(&cwd).map_err(|e| format!("recreate temp dir: {}", e))?;
+        let (fish_out, _) = run_fish(&fish_path, &cwd).unwrap_or_default();
         let fish_norm = normalize(&fish_out);
         if ash_norm != fish_norm {
             eprintln!(
@@ -360,7 +385,9 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
     // 6. nu comparison (best-effort)
     let nu_path = case.dir.join("nu.nu");
     if nu_path.exists() && command_exists("nu") {
-        let (nu_out, _) = run_nu(&nu_path).unwrap_or_default();
+        let _ = fs::remove_dir_all(&cwd);
+        fs::create_dir_all(&cwd).map_err(|e| format!("recreate temp dir: {}", e))?;
+        let (nu_out, _) = run_nu(&nu_path, &cwd).unwrap_or_default();
         let nu_norm = normalize(&nu_out);
         if ash_norm != nu_norm {
             eprintln!(
@@ -370,6 +397,9 @@ fn run_parity_case(case: &ParityCase) -> Result<(), String> {
             );
         }
     }
+
+    // Clean up the temp directory.
+    let _ = fs::remove_dir_all(&cwd);
 
     Ok(())
 }
@@ -428,7 +458,12 @@ fn bootstrap_expected() {
     for case in &cases {
         if let Some(bash_path) = &case.bash_script {
             if resolve_bash().is_some() {
-                let (bash_out, _) = run_bash(bash_path).unwrap_or_default();
+                // Use an isolated temp dir (same as run_parity_case).
+                let cwd = std::env::temp_dir().join(format!("ash_parity_{}", case.name));
+                let _ = fs::remove_dir_all(&cwd);
+                let _ = fs::create_dir_all(&cwd);
+                let (bash_out, _) = run_bash(bash_path, &cwd).unwrap_or_default();
+                let _ = fs::remove_dir_all(&cwd);
                 let normalized = normalize(&bash_out);
                 let expected_path = case.dir.join("expected.txt");
                 fs::write(&expected_path, &normalized).unwrap();
