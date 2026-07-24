@@ -256,3 +256,42 @@ R4 原修复只改了脚本路径(`execute_script_content`/`execute_with_stdin`)
 - `65_batch_grep`:对多个文件执行 grep,汇总匹配数
 
 这些 case 用 `bash_compat` 标记(结构化命令走纯文本),实测对齐 bash 脚本输出。
+
+### ⚠️ 规避手段统计与对应缺陷(2026-07-24 审计)
+
+parity 测试的目标是**发现 ash/AutoLang 在脚本方面的真实缺陷**。但当前 case 存在 5 类规避手段,绕开了缺陷而非暴露它们。以下是完整审计,每类对应应修复的真实缺陷:
+
+**规避 1:用 AutoLang 模拟 shell 命令(影响 case 01-50 多数)— 最严重**
+
+case 01-50 几乎全部用 AutoLang 原生代码模拟 shell 命令,而非真正调用 ash 命令:
+- `04_pipe`:用 `for + .contains()` 模拟 grep,而非 `> cat | grep`
+- `42_grep`/`43_sort`/`44_uniq`/`45_head_tail`/`46_wc`:全部用 AutoLang 循环/排序/去重/计数模拟
+
+**对应缺陷**:这些 case 在 `--bash-compat` 存在之前写的,当时只能模拟。**现已可用 `--bash-compat` + 真实命令**。应把 case 01-50 中涉及 shell 命令的改成真实命令版(加 `bash_compat` 标记),让它们真正测试 shell 命令 parity。
+
+**规避 2:字符串比较替代整数算术(影响 case 68/69)**
+
+`68`/`69` 用 `if ns == "3"` 代替 `ns.to_int()` 算术。
+
+**对应缺陷**:`.to_int()`/`.to_uint()` VM Bug 1(返回 None/0)。auto-lang codegen 的 native ID 分发问题——`shim_str_to_int_nv` override(ID 1516)未被调用,codegen 发的 CALL_NAT 用了不同 ID。已有 `fix/to-uint-codegen` worktree,但修复不完整。**待 auto-lang 修复后,case 68/69 应改用真正的 `.to_int()` 算术**。
+
+**规避 3:echo 逐行写替代 printf 多行(影响多数文件类 case)**
+
+**诊断结论**:经实测确认,`> printf "x\ny"` 在脚本文件里(`\n` 字面两字符)**完全正常工作**。之前的"printf 坏了"是测试文件创建方式的 bug(bash printf 把 `\\n` 转成真换行)。**这不是 ash 缺陷,echo 方式只是更清晰,无需改**。
+
+**规避 4:唯一前缀文件名(影响多数文件类 case)**
+
+case 用 `p51ls_unique.txt` 等唯一前缀,因 harness 不隔离 cwd。
+
+**对应缺陷**:**harness 不隔离工作目录**——所有 case 在同一 cwd 跑,文件互相污染。spec §3.1 规约 5 要求工作目录隔离但未实现。**应让 harness 为每个 case 创建独立临时目录**。
+
+**规避 5:HashMap 词频改用简单计数(影响潜在词频 case)**
+
+**对应缺陷**:`HashMap.get_str()` 返回 None 而非空字符串,AutoLang 对 None 调 `.len()` 报错。**HashMap API 不健全,待 auto-lang 修复**。
+
+### 下阶段工作优先级(基于规避审计)
+
+1. **修 case 01-50 的规避 1**(最高价值):改成真实 shell 命令 + `--bash-compat`,真正测 shell 命令 parity
+2. **修 harness 工作目录隔离**(规避 4):每个 case 独立临时目录,消除文件污染
+3. **等 auto-lang 修 `.to_int()`**(规避 2):修后改 case 68/69 用真正算术
+4. **等 auto-lang 修 HashMap**(规避 5):修后可加词频统计类 case
