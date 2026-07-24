@@ -1,7 +1,7 @@
 # Plan 036: ash 脚本 Parity 测试框架
 
 > **日期**: 2026-07-23
-> **状态**: ✅ 全部完成(MVP + Phase 2 P1-P5)— 59/59 用例通过(strict 模式)
+> **状态**: MVP + Phase 2(P1-P5)已完成,59/59 用例通过(strict)。⚠️ 仍有 3 项范围内 parity 缺口(ls -l/ls -a/uniq)未修复,见文末"计划范围内未完成项"
 > **目标**: 建立 ash 脚本与 bash/PowerShell/fish/nu 的 parity 测试，验证跨 shell 行为一致性
 > **范围**: 50 个用例，Rust 集成测试框架，4 个参照 shell
 
@@ -145,7 +145,12 @@ ash/auto-shell/tests/parity/
 
 **验收**:`cargo test --test parity`(strict)→ **59/59 全过**(原 50 AutoLang + 9 真实命令)。
 
-**探测发现不可 parity(留待后续)**:`ls -l`(ash bash-compat 未实现长格式)、`ls -a`(ash 不含 `.`/`..`)、`uniq`(ash 管道末端输出空,疑似 bug)。
+**⚠️ 范围内未完成的 parity 缺口(036 目标是 ash↔bash 一致,这些是真实缺陷,待修复)**:
+- `ls -l`:ash `--bash-compat` 未实现长格式渲染(权限/大小/时间列)。属 P1 的未完成部分。
+- `ls -a`:ash 不含 `.`/`..` 条目(bash `ls -a` 含)。属 ls 命令行为差异。
+- `uniq`:ash 管道末端输出空(疑似 ash uniq 实现 bug)。**uniq 是 036 F 类第 44 项,明确在计划范围内**。
+
+这三项因当前未修复,暂未建对应 case;修复后应补 case `60_ls_long`/`61_ls_all`/`62_uniq` 并纳入 parity。
 
 ### P3: fish/nu shell 变体覆盖 — ✅ 已完成(2026-07-24)
 
@@ -174,4 +179,16 @@ R4 原修复只改了脚本路径(`execute_script_content`/`execute_with_stdin`)
 
 ### 优先级建议
 ~~P1(核心缺口,解锁 P2)→ P2(真实命令 parity)→ P5(快速验证 R4 无副作用)→ P4(持续门禁)→ P3(锦上添花)~~
-**进度**:P1 ✅ → P2 ✅ → P5 ✅ → P4 ✅ → P3 ✅ — **Phase 2 全部完成**
+**进度**:P1 ✅ → P2 ✅ → P5 ✅ → P4 ✅ → P3 ✅
+
+---
+
+## ⚠️ 计划范围内未完成项(诚实记录)
+
+036 目标是"验证 ash 脚本与 bash 的跨 shell 行为一致性"。以下 parity 缺口是**计划范围内发现但尚未修复的真实缺陷**(非"超范围"),修复后应补对应 case:
+
+1. **`ls -l` 长格式**:`--bash-compat` 未实现 permissions/size/time 列渲染(属 P1 未完成部分)
+2. **`ls -a` 的 `.`/`..`**:ash ls 不输出 `.`/`..` 条目(bash `ls -a` 含)
+3. **`uniq` 管道末端输出空**:疑似 ash uniq 实现 bug(**uniq 是 036 F 类第 44 项,明确在范围内**)
+
+这三项当前未建 parity case(因未修复);修复后补 `60_ls_long`/`61_ls_all`/`62_uniq`。
