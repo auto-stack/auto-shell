@@ -2404,14 +2404,16 @@ impl Shell {
             }
 
             // Plan 034 Bug 3: `> cmd` inside a fn/if/for body (brace_depth > 0).
-            // Rewrite it to `system("cmd")` and inject into the AutoLang block
+            // Rewrite it to `system(...)` and inject into the AutoLang block
             // instead of flushing the incomplete block.
+            // Note: $var references are rewritten to AutoLang string concat
+            // (e.g. `cat $f` → system("cat " + f)) because the variable's value
+            // is only known at runtime when the loop runs, not at parse time.
             if trimmed.starts_with('>') && brace_depth > 0 {
                 let cmd = trimmed[1..].trim();
                 if !cmd.is_empty() {
-                    // Escape double quotes in the command for the system() call
-                    let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
-                    auto_block.push_str(&format!("system(\"{}\")\n", escaped));
+                    let system_expr = Self::rewrite_shell_cmd_to_system(cmd);
+                    auto_block.push_str(&format!("{}\n", system_expr));
                 }
                 continue;
             }
@@ -2427,10 +2429,9 @@ impl Shell {
             //   capture its stdout into the variable (original behavior).
             if brace_depth > 0 {
                 if let Some((keyword, var_name, cmd)) = Self::parse_capture_parts(trimmed) {
-                    let cmd = self.interpolate_auto_vars(&cmd);
-                    let escaped = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+                    let system_expr = Self::rewrite_shell_cmd_to_system(&cmd);
                     auto_block.push_str(&format!(
-                        "{} {} = system(\"{}\")\n", keyword, var_name, escaped
+                        "{} {} = {}\n", keyword, var_name, system_expr
                     ));
                     continue;
                 }
@@ -2654,6 +2655,73 @@ impl Shell {
             return None;
         }
         Some((keyword, var_name.to_string(), cmd.to_string()))
+    }
+
+    /// Rewrite a shell command (from a `> cmd` line inside an AutoLang body)
+    /// into an AutoLang `system(...)` expression. `$var` references become
+    /// AutoLang string concatenation because the variable's value is only
+    /// known at runtime (loop iteration), not at parse time.
+    ///
+    /// Examples:
+    ///   `echo hello`        → `system("echo hello")`
+    ///   `cat $f`            → `system("cat " + f)`
+    ///   `ls $dir/$name`     → `system("ls " + dir + "/" + name)`
+    ///   `grep $pat $f`      → `system("grep " + pat + " " + f)`
+    fn rewrite_shell_cmd_to_system(cmd: &str) -> String {
+        // Walk the command, splitting on $var references.
+        // Literal segments are escaped and quoted; $var becomes `+ var +`.
+        let chars: Vec<char> = cmd.chars().collect();
+        let mut i = 0;
+        let mut literal = String::new();
+        // Build a list of parts: alternating literal-strings and var-names.
+        // Then assemble the system(...) expression.
+        // We accumulate into an expression string.
+        let mut expr = String::from("system(");
+        let mut first = true;
+
+        macro_rules! flush_literal {
+            () => {
+                if !literal.is_empty() {
+                    let escaped = literal.replace('\\', "\\\\").replace('"', "\\\"");
+                    if !first { expr.push_str(" + "); }
+                    expr.push('"');
+                    expr.push_str(&escaped);
+                    expr.push('"');
+                    first = false;
+                    literal.clear();
+                }
+            };
+        }
+
+        while i < chars.len() {
+            if chars[i] == '$' && i + 1 < chars.len()
+                && (chars[i + 1].is_alphabetic() || chars[i + 1] == '_')
+            {
+                flush_literal!();
+                // Read variable name
+                i += 1;
+                let mut name = String::new();
+                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                    name.push(chars[i]);
+                    i += 1;
+                }
+                if !first { expr.push_str(" + "); }
+                expr.push_str(&name);
+                first = false;
+            } else {
+                literal.push(chars[i]);
+                i += 1;
+            }
+        }
+        flush_literal!();
+
+        // Edge case: cmd was empty or only whitespace
+        if first {
+            expr.push_str("\"\"");
+        }
+
+        expr.push(')');
+        expr
     }
 
     fn try_capture_assignment(&mut self, line: &str) -> Option<String> {
