@@ -76,6 +76,13 @@ impl ShellCompleter {
         {
             return;
         }
+        // Plan 036: Don't probe script file paths — running `./script.ash --help`
+        // would trigger the Windows "Open with" dialog instead of producing help
+        // output. Paths (containing / or \) and known script extensions are
+        // excluded from the `--help` probe.
+        if is_likely_script_path(cmd) {
+            return;
+        }
         // 1. Cache tier.
         if let Some(spec) = crate::completions::spec_tiers::load_cache(cmd) {
             self.provider.register(spec);
@@ -274,6 +281,32 @@ impl Completer for ShellCompleter {
             })
             .collect()
     }
+}
+
+/// Plan 036: Returns true if `cmd` looks like a script file path rather than
+/// a CLI command in PATH. Probing `./script.ash --help` for completions would
+/// trigger the Windows "Open with" dialog instead of producing help text.
+fn is_likely_script_path(cmd: &str) -> bool {
+    // Path separators — definitely a file path, not a command name
+    if cmd.contains('/') || cmd.contains('\\') {
+        return true;
+    }
+    // Common script extensions — running these without a proper handler
+    // would open a file dialog or produce garbage.
+    let lower = cmd.to_ascii_lowercase();
+    lower.ends_with(".ash")
+        || lower.ends_with(".sh")
+        || lower.ends_with(".bash")
+        || lower.ends_with(".zsh")
+        || lower.ends_with(".ps1")
+        || lower.ends_with(".bat")
+        || lower.ends_with(".cmd")
+        || lower.ends_with(".py")
+        || lower.ends_with(".rb")
+        || lower.ends_with(".js")
+        || lower.ends_with(".at")
+        || lower.ends_with(".as")
+        || lower.ends_with(".au")
 }
 
 #[cfg(test)]
