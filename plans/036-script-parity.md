@@ -1,7 +1,7 @@
 # Plan 036: ash 脚本 Parity 测试框架
 
 > **日期**: 2026-07-23
-> **状态**: ✅ 全部完成(MVP + Phase 2 P1-P5 + 3 缺口修复)— 62/62 用例通过(strict 模式)
+> **状态**: 脚本级 parity 推进中 — 72/72 通过(strict)。3 个规避手段待消除(to_int 变量 receiver / HashMap 显示 / cwd 隔离已完成)。详见"优先级 3 调研"
 > **目标**: 建立 ash 脚本与 bash/PowerShell/fish/nu 的 parity 测试，验证跨 shell 行为一致性
 > **范围**: 50 个用例，Rust 集成测试框架，4 个参照 shell
 
@@ -295,3 +295,26 @@ case 用 `p51ls_unique.txt` 等唯一前缀,因 harness 不隔离 cwd。
 2. **修 harness 工作目录隔离**(规避 4):每个 case 独立临时目录,消除文件污染
 3. **等 auto-lang 修 `.to_int()`**(规避 2):修后改 case 68/69 用真正算术
 4. **等 auto-lang 修 HashMap**(规避 5):修后可加词频统计类 case
+
+### 优先级 3 深度调研与修复方案(2026-07-29)
+
+**调研结论**:两个 bug 都不是 native shim 分发优先级问题。
+
+**Bug A:`.to_int()` 在变量 receiver 上返回 None**
+
+- 字面量 `"42".to_int()` 正常(codegen 编译成 CALL_NAT 1516,命中 override shim)。
+- 变量 `var n="42"; n.to_int()` 返回 None。根因:变量 receiver 的方法调用走 `CALL_SPEC` 操作码(engine.rs:4651-4805 的 str 内联分发表)。`to_int`/`parse_int`/`to_uint` 不在内联表里,命中 `_ =>` 分支(engine.rs:4801-4804),直接 `push_nv(encode_null())`——注释说"fall through to other handlers"但代码没做。
+- **修复方案 B(推荐)**:在 engine.rs str 内联表的 match 里加 `"to_int"|"parse_int"` 和 `"to_uint"` 分支,直接内联 parse 逻辑(参照现有 str 方法如 `trim`/`len` 的模式)。
+
+**Bug B:`HashMap.get_str("missing")` 改动看似不生效**
+
+- 实际上改动**已生效**(native.rs:2722-2731 推空字符串)。误判来自 `last_result: Option<i32>` 把字符串索引(idx=6,nanbox payload=-7)误读成了 `-7`。
+- 直接链式调用验证:`m.get_str("missing") + "]"` 拼出 `[]`(空字符串),证明 get_str 返回空字符串。
+- 但经变量存储(`var x = m.get_str("missing"); print(x)`)时,变量槽按 i32 存储,破坏了 nanbox TAG_STRING → 显示为 None。这是更广的 nanbox 变量存储一致性问题。
+- **修复方案**:get_str 的 shim 改动保持(已生效)。变量存储破坏 tag 的问题单独记录,不在本计划范围。
+
+**实施步骤**:
+1. (auto-lang)engine.rs str 内联表加 `to_int`/`parse_int`/`to_uint` 分支(方案 B)
+2. (auto-lang)cherry-pick 到主仓库
+3. (auto-shell)case 68/69 改用 `.to_int()` 真正算术(去掉字符串比较规避)
+4. 验证 parity 全通过
