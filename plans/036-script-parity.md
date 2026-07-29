@@ -1,7 +1,7 @@
 # Plan 036: ash 脚本 Parity 测试框架
 
-> **日期**: 2026-07-23
-> **状态**: ✅ 全部通过 — 79/79 用例通过(strict 模式，0 skip)。原 74/80 钉住的 3 个 find/system 缺陷已修复，用例转绿。详见各 Phase
+> **日期**: 2026-07-23 (updated 2026-07-29)
+> **状态**: ✅ 全部通过 — 79/79 用例通过(strict 模式，0 skip)。全部 5 类规避已清零:规避 1(真实命令)✅、规避 2(.to_int)✅、规避 3(伪缺陷)✅、规避 4(cwd 隔离)✅、规避 5(HashMap)✅(2026-07-29)。详见各 Phase
 > **目标**: 建立 ash 脚本与 bash/PowerShell/fish/nu 的 parity 测试，验证跨 shell 行为一致性
 > **范围**: 79 个用例(72 命令级 + 7 脚本级常见场景)，Rust 集成测试框架，4 个参照 shell
 
@@ -261,13 +261,21 @@ R4 原修复只改了脚本路径(`execute_script_content`/`execute_with_stdin`)
 
 parity 测试的目标是**发现 ash/AutoLang 在脚本方面的真实缺陷**。但当前 case 存在 5 类规避手段,绕开了缺陷而非暴露它们。以下是完整审计,每类对应应修复的真实缺陷:
 
-**规避 1:用 AutoLang 模拟 shell 命令(影响 case 01-50 多数)— 最严重**
-
-case 01-50 几乎全部用 AutoLang 原生代码模拟 shell 命令,而非真正调用 ash 命令:
-- `04_pipe`:用 `for + .contains()` 模拟 grep,而非 `> cat | grep`
-- `42_grep`/`43_sort`/`44_uniq`/`45_head_tail`/`46_wc`:全部用 AutoLang 循环/排序/去重/计数模拟
-
-**对应缺陷**:这些 case 在 `--bash-compat` 存在之前写的,当时只能模拟。**现已可用 `--bash-compat` + 真实命令**。应把 case 01-50 中涉及 shell 命令的改成真实命令版(加 `bash_compat` 标记),让它们真正测试 shell 命令 parity。
+	**规避 1:用 AutoLang 模拟 shell 命令(影响 case 01-50 多数)— ✅ 已修复(2026-07-29)**
+	
+	case 01-50 几乎全部用 AutoLang 原生代码模拟 shell 命令,而非真正调用 ash 命令。现已全部改为真实 `> command` + `bash_compat`:
+	- `04_pipe`: ~~`for + .contains()` 模拟 grep~~ → `> cat | grep`(bash_compat)
+	- `42_grep`/`43_sort`/`44_uniq`/`45_head_tail`/`46_wc`: ~~AutoLang 循环/排序/去重/计数模拟~~ → 真实 `> grep`/`> sort`/`> uniq`/`> sed`/`> wc`(bash_compat)
+	- `34_create_file`/`35_read_file`/`36_append_file`: ~~`system("echo...|tee")`~~ → `> echo > file` + `> cat`
+	- `39_line_count`: ~~AutoLang for 循环计数~~ → `> cat | wc -l`(bash_compat)
+	- `40_copy_file`: ~~`system("cp...")`~~ → `> cp`(bash_compat)
+	- `41_mkdir`: ~~`system("mkdir...")`~~ → `> mkdir`(bash_compat)
+	- `08_and_chain`/`09_or_chain`: 真实 `&&`/`||` 链
+	- `25_continue`: 真实 `continue` 语句
+	
+	**保留 system() 的 case**(测试 system/system_status API,属语言特性测试而非命令模拟):`03_command_sub`/`05_redirect`/`06_exit_code`/`07_env_var`/`10_group`/`27_file_test`/`37_file_exists`/`38_file_size`/`48_cmd_fail`/`49_empty_input`。
+	
+	**验收**:`cargo test --test parity` strict → 79/79 全过,无回归。
 
 **规避 2:字符串比较替代整数算术(影响 case 68/69)**
 
@@ -285,16 +293,22 @@ case 用 `p51ls_unique.txt` 等唯一前缀,因 harness 不隔离 cwd。
 
 **对应缺陷**:**harness 不隔离工作目录**——所有 case 在同一 cwd 跑,文件互相污染。spec §3.1 规约 5 要求工作目录隔离但未实现。**应让 harness 为每个 case 创建独立临时目录**。
 
-**规避 5:HashMap 词频改用简单计数(影响潜在词频 case)**
-
-**对应缺陷**:`HashMap.get_str()` 返回 None 而非空字符串,AutoLang 对 None 调 `.len()` 报错。**HashMap API 不健全,待 auto-lang 修复**。
+	**规避 5:HashMap 词频改用简单计数(影响潜在词频 case) — ✅ 已修复(2026-07-29)**
+	
+	**原缺陷**:`HashMap.get_str("missing")` 经 `var x = ...` 存储后 `print(x)` 显示 None。
+	
+	**根因(两层)**:
+	1. `native_catalog.rs`: `auto.hashmap.get_str` 返回类型注册为 `Void` → codegen 推断变量为 Int → `print()` 调用 `print_i32()` → 丢失 nanbox 类型标签。**修复**:get_str→String, get_int→Int, contains→Bool, size→Int, keys→List, is_empty→Bool。
+	2. `autovm_persistent.rs`: `last_result: Option<i32>` 用 `pop_i32()` 捕获 REPL 结果 → 永远丢失 nanbox 标签。**修复**:last_result 改为 `Option<NanoValue>`，用 `pop_nv()` 保留标签；`format_last_result()` 改为调用已有的 `decode_nv_value()` (支持所有 nanbox 类型)。
+	
+	**验收**:`var x = m.get_str("missing"); print("[" + x + "]")` → 输出 `[]`(空字符串)✅。`var x = m.get_str("a"); print("value=" + x)` → 输出 `value=hello`✅。parity 79/79 无回归。
 
 ### 下阶段工作优先级(基于规避审计)
 
-1. **修 case 01-50 的规避 1**(最高价值):改成真实 shell 命令 + `--bash-compat`,真正测 shell 命令 parity
-2. **修 harness 工作目录隔离**(规避 4):每个 case 独立临时目录,消除文件污染
-3. **等 auto-lang 修 `.to_int()`**(规避 2):修后改 case 68/69 用真正算术
-4. **等 auto-lang 修 HashMap**(规避 5):修后可加词频统计类 case
+1. ~~**修 case 01-50 的规避 1**(最高价值)~~ → ✅ 已完成(2026-07-29):6 个 case(34/35/36/39/40/41)从 system() 改为真实 `> command`;此前 04/08/09/25/42-46 也已转换。保留 10 个测试 system API 的 case 不变。
+2. ~~**修 harness 工作目录隔离**(规避 4)~~ → ✅ 已完成(commit `24d7509`):每个 case 独立临时目录
+3. ~~**等 auto-lang 修 `.to_int()`**(规避 2)~~ → ✅ 已完成(commit `d23f091`):case 68/69 已改用真正 `.to_int()` 算术
+4. **等 auto-lang 修 HashMap**(规避 5):修后可加词频统计类 case(当前非阻塞)
 
 ### 优先级 3 深度调研与修复方案(2026-07-29)
 
@@ -369,7 +383,7 @@ case 用 `p51ls_unique.txt` 等唯一前缀,因 harness 不隔离 cwd。
 ### 不做的事(YAGNI)
 
 - ~~不修复 system 桥缺陷 A / `> find` 捕获缺陷 B~~ — **已在 Phase 4 后续修复,见下节"缺陷修复(2026-07-29)"**。
-- 不改造早期 01-50 的"规避 1"(用 AutoLang 模拟 shell 命令)——独立大任务,本次不混入。
+- ~~不改造早期 01-50 的"规避 1"(用 AutoLang 模拟 shell 命令)~~ — **已完成(2026-07-29)**:6 个 case(34/35/36/39/40/41)从 system() 改为真实 `> command`;此前的 ca0e239 已转换 04/08/09/25/42-46。详见上节"规避 1"更新。
 
 ---
 

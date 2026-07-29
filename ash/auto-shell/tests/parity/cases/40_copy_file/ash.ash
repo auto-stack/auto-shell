@@ -1,10 +1,5 @@
-fn main() {
-    var tmp = system("echo $TEMP").trim()
-    var src = tmp + "/ash_copy_src.txt"
-    var dst = tmp + "/ash_copy_dst.txt"
-    var w = system("echo copy me | tee " + src)
-    var cp = system("cp " + src + " " + dst)
-    var c = system("cat " + dst)
-    print(c.trim())
-}
-main()
+# Real ash commands (Plan 036 workaround-1 fix): use ash built-in echo/cp/cat,
+# not system() through bash.
+> echo "copy me" > src.txt
+> cp src.txt dst.txt
+> cat dst.txt
