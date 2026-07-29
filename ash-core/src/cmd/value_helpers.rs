@@ -228,13 +228,21 @@ fn format_file_list_as_bash(value: &Value) -> Option<String> {
         return format_file_list_long_as_bash(value);
     }
 
-    // Short format: one name per line (ls -1 style).
+    // Short format: one entry per line. ls entries carry `name` (bare
+    // filename); find entries carry `path` (relative path like `./a.log`).
+    // Fall back to `path` when `name` is absent so find prints paths (what
+    // bash `find` does) while ls prints filenames (Plan 036 defect-B).
     let names: Vec<String> = match value {
         Value::Array(arr) => arr
             .iter()
-            .filter_map(|item| obj_field_str(item, "name"))
+            .filter_map(|item| {
+                obj_field_str(item, "name").or_else(|| obj_field_str(item, "path"))
+            })
             .collect(),
-        Value::Obj(_) => obj_field_str(value, "name").into_iter().collect(),
+        Value::Obj(_) => obj_field_str(value, "name")
+            .or_else(|| obj_field_str(value, "path"))
+            .into_iter()
+            .collect(),
         _ => return None,
     };
     if names.is_empty() {

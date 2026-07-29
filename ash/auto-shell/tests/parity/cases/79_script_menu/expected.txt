@@ -1,0 +1,5 @@
+[1] status: service running
+[2] service restarted
+[3] files in dir: 1
+[4] exit
+invalid option: 9

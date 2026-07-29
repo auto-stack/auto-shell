@@ -964,6 +964,25 @@ impl Shell {
         result
     }
 
+    /// Execute a command in bash-compatible capture mode and return its
+    /// stdout (Plan 036 defect-A fix).
+    ///
+    /// Used by the `system()` host bridge (AutoLang `system("cmd")`) so that
+    /// structured commands (find/ls/wc/grep) render as bash-style plain text
+    /// instead of interactive ratatui tables. This separates "programmatic
+    /// capture" (machine-readable stdout for `system()` callers) from
+    /// "interactive display" (`execute`). Mirrors `execute_for_agent`'s
+    /// bash_compat toggling, but restores the prior state rather than forcing
+    /// false, so it is safe to nest inside an already-bash_compat context
+    /// (e.g. a `--bash-compat` script).
+    pub fn execute_capture(&mut self, input: &str) -> Result<Option<String>> {
+        let was_compat = self.bash_compat;
+        self.bash_compat = true;
+        let result = self.execute(input);
+        self.bash_compat = was_compat;
+        result
+    }
+
     /// Enable/disable JSON output for non-interactive script execution
     /// (Plan 007: `ash -s --json` / `ash script.ash --json`). Each command's
     /// output is serialized to a JSON line (NDJSON), since format_output

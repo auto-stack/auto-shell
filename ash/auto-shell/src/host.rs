@@ -122,9 +122,11 @@ impl auto_lang::host::ShellHost for ShellHostBridge {
         unsafe {
             match s.shell() {
                 Some(shell) => {
-                    // Shell::execute returns Result<Option<String>>; we want
-                    // the rendered output. On error, return empty string.
-                    match shell.execute(cmd) {
+                    // execute_capture runs in bash-compat mode so structured
+                    // commands (find/ls/wc) return bash-style plain text
+                    // instead of ratatui tables — `system()` callers expect
+                    // machine-readable stdout (Plan 036 defect-A fix).
+                    match shell.execute_capture(cmd) {
                         Ok(Some(out)) => out.trim_end_matches('\n').to_string(),
                         Ok(None) => String::new(),
                         Err(_) => String::new(),
