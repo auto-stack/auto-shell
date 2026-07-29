@@ -86,22 +86,28 @@ impl AshPrompt {
 
     /// Render left prompt (parallel module computation)
     fn render_left(&self, ctx: &AshContext) -> String {
-        let newline = if self.config.add_newline { "\n" } else { "" };
+        let newline_before = if self.config.add_newline { "\n" } else { "" };
         let segments: Vec<_> = self
             .modules
             .par_iter()
             .filter_map(|m| m.render(ctx))
             .collect();
 
-        format!(
-            "{}{}",
-            newline,
-            segments
-                .iter()
-                .map(|s| s.to_ansi_string())
-                .collect::<Vec<_>>()
-                .join("")
-        )
+        let content: String = segments
+            .iter()
+            .map(|s| s.to_ansi_string())
+            .collect::<Vec<_>>()
+            .join("");
+
+        // Plan 036: multi-line prompt — move indicator to next line so
+        // long directory paths don't squeeze the command input area.
+        let newline_after = if self.config.multiline && !content.is_empty() {
+            "\n"
+        } else {
+            ""
+        };
+
+        format!("{}{}{}", newline_before, content, newline_after)
     }
 
     /// Render right prompt (parallel module computation)
