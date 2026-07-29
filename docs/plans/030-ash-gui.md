@@ -1662,7 +1662,7 @@ Decision required: continue to M3-M5 (if M2 excites) or stop here."
 
 ## 执行交接
 
-Plan 完成并保存到 `plans/030-ash-gui.md`。两种执行方式:
+Plan 完成并保存到 `docs/plans/030-ash-gui.md`。两种执行方式:
 
 **1. Subagent-Driven(推荐)** —— 每个 task 派一个新 subagent 执行,任务间我做 review。M2 是关键检查点,到 M2 后需要真人决策。
 

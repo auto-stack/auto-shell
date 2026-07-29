@@ -5,7 +5,7 @@
 //! REPL: callers build the system prompt and pass it in, so this module is
 //! fully unit-testable without a network or a `Repl`.
 //!
-//! v1 is chat-only (no tools). See `plans/027-ash-ai-chat-mode.md`.
+//! v1 is chat-only (no tools). See `docs/plans/027-ash-ai-chat-mode.md`.
 
 use auto_ai_client::{AiClient, CompletionRequest, CompletionResponse, Message};
 use std::future::Future;

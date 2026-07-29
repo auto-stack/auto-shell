@@ -528,7 +528,7 @@ Format 在 lazy 链的两端,不在中间。
 
 ## 参考
 
-- `plans/024-ash-structured-pipeline-dsl.md` —— Plan 024/320,本 Plan 升级它的执行模型
+- `docs/plans/024-ash-structured-pipeline-dsl.md` —— Plan 024/320,本 Plan 升级它的执行模型
 - `designs/028-agent-execution-engine.md`(已删除)—— Stream bug 影响信封渲染
 - `designs/029-ai-capabilities.md` —— NL→AutoLang 生成的脚本可用 lazy
 - `designs/030-ash-gui.md` —— lazy 结果渲染走 Renderer trait

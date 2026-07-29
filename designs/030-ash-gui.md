@@ -1038,7 +1038,7 @@ Plan 014(2026-06-10)早就设计了:
 
 ## 参考
 
-- `plans/014-ash-layered-architecture-ratatui.md` —— 分层架构(GUI 前端位置已预留)
+- `docs/plans/014-ash-layered-architecture-ratatui.md` —— 分层架构(GUI 前端位置已预留)
 - `designs/028-agent-execution-engine.md` —— Plan 028,GUI 消费它的信封和 Tool Registry
 - `designs/029-smartcommand.md` —— Plan 029,M5 集成它的 SmartCommand
 - `D:\autostack\auto-lang\crates\auto-lang\src\ui\` —— AutoUI 模块(iced/gpui/headless 后端)

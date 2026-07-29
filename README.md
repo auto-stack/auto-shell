@@ -210,8 +210,8 @@ auto-shell/
 │   └── auto-shell/    ash 二进制 crate
 ├── ash-gui/           GUI workspace（iced/AutoUI，Plan 030 设计中）
 ├── designs/           设计文档（Plan 029-035）
-├── plans/             实施计划（Plan 014-030）
 ├── docs/              用户文档
+│   └── plans/         实施计划（Plan 014-030）
 └── examples/          脚本实例
 ```
 
@@ -232,7 +232,7 @@ cargo run -- -c "ls | sort .size | head"
 
 ### 设计与计划文档
 
-所有扩展方向的设计文档在 [designs/](designs/)，实施计划在 [plans/](plans/)。横向一致性检查见 [designs/000-cross-cutting-review.md](designs/000-cross-cutting-review.md)。
+所有扩展方向的设计文档在 [designs/](designs/)，实施计划在 [docs/plans/](docs/plans/)。横向一致性检查见 [designs/000-cross-cutting-review.md](designs/000-cross-cutting-review.md)。
 
 ---
 

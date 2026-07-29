@@ -256,7 +256,7 @@ fn format_file_list_as_bash(value: &Value) -> Option<String> {
 /// Note: ash's AshFileEntry lacks links count and group, so those are filled
 /// with placeholders (`1` for links, owner reused for group). This yields a
 /// visually-correct but not byte-identical bash ls -l; strict parity would
-/// require extending AshFileEntry (tracked as a residual gap in plans/036).
+/// require extending AshFileEntry (tracked as a residual gap in docs/plans/036).
 fn format_file_list_long_as_bash(value: &Value) -> Option<String> {
     let arr = match value {
         Value::Array(arr) => arr,

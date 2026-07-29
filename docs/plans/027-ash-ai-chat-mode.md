@@ -1,6 +1,6 @@
 # 027 — ash AI Chat Mode (`?` mode)
 
-**Status:** Design + Implementation Plan
+**Status:** ✅ Done — v1 chat-only 全部实现（`frontend/ai.rs` ChatSession + 流式输出 + F4 接入 REPL）
 **Date:** 2026-07-16
 **Author:** ash
 **Depends on:** 025 (REPL input modes), `auto-ai` (`auto-ai-client`)
@@ -322,7 +322,7 @@ Expected: builds clean.
 //! REPL: callers build the system prompt and pass it in, so this module is
 //! fully unit-testable without a network or a `Repl`.
 //!
-//! v1 is chat-only (no tools). See `plans/027-ash-ai-chat-mode.md`.
+//! v1 is chat-only (no tools). See `docs/plans/027-ash-ai-chat-mode.md`.
 
 #[cfg(test)]
 mod tests {

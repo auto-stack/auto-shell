@@ -75,7 +75,7 @@
 
 ### 2.2 零现有插件机制
 
-grep `plugin|dlopen|libloading|wasm|linkme|inventory` 全零命中。唯一提及是 `plans/017` 的 `[plugins]` 占位注释("未来插件系统")。
+grep `plugin|dlopen|libloading|wasm|linkme|inventory` 全零命中。唯一提及是 `docs/plans/017` 的 `[plugins]` 占位注释("未来插件系统")。
 
 ### 2.3 安装现状(影响分发)
 
@@ -433,5 +433,5 @@ fn cmd_install(args: &[String]) -> i32 {
 ## 参考
 
 - `designs/029-ai-capabilities.md` —— SmartCommand 是插件内容类型;command.at 格式共用
-- `plans/021-ash-arbitrary-command-completion.md` —— 补全 spec 格式 + 三层目录(扩展为四层)
+- `docs/plans/021-ash-arbitrary-command-completion.md` —— 补全 spec 格式 + 三层目录(扩展为四层)
 - `designs/032-intelligent-completion.md` —— 插件贡献动态源

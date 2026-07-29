@@ -13,7 +13,7 @@
 //! 3. Capability switches (`no_exec` / `no_network` / `read_only`)
 //! 4. dry-run is handled by the caller (policy only reports intent)
 //!
-//! See `plans/008-ms2a-security-policy.md`.
+//! See `docs/plans/008-ms2a-security-policy.md`.
 
 use std::path::PathBuf;
 

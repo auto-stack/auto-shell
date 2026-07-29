@@ -3,7 +3,7 @@
 验证 ash 脚本与 bash/PowerShell 的输出一致性。同一逻辑用不同 shell 语言编写,执行后比较 stdout + exit-code 是否一致。
 
 - 设计文档:`designs/036-script-parity.md`
-- 实施计划:`plans/036-script-parity.md`
+- 实施计划:`docs/plans/036-script-parity.md`
 - 框架来源:Plan 036(50 case 骨架,扩展至 79 case)
 
 ## 运行
@@ -19,7 +19,7 @@ ASH_PARITY_STRICT=1 cargo test --test parity
 cargo test --test parity -- bootstrap_expected --nocapture
 ```
 
-**当前状态:79/79 通过(0 skip)**(`✓ All 79 parity cases passed`,strict 模式验证)。原 74/80 钉住的 find/system 桥缺陷已修复(见 plans/036 "Phase 4 后续:缺陷修复")。
+**当前状态:79/79 通过(0 skip)**(`✓ All 79 parity cases passed`,strict 模式验证)。原 74/80 钉住的 find/system 桥缺陷已修复(见 docs/plans/036 "Phase 4 后续:缺陷修复")。
 
 ## 用例编写规范
 
@@ -32,7 +32,7 @@ cargo test --test parity -- bootstrap_expected --nocapture
 
 ### 标记文件(每个 case 目录下)
 
-- **`bash_compat`**(空文件):用了 `> ls`/`> grep`/`> wc` 等结构化命令时**必须加**,让 harness 给 ash 传 `--bash-compat`,输出 bash 风格纯文本而非 ratatui 表格。漏加会导致 ash 输出表格、parity 失败(见 plans/036 Phase 4 的 77 调试插曲)。
+- **`bash_compat`**(空文件):用了 `> ls`/`> grep`/`> wc` 等结构化命令时**必须加**,让 harness 给 ash 传 `--bash-compat`,输出 bash 风格纯文本而非 ratatui 表格。漏加会导致 ash 输出表格、parity 失败(见 docs/plans/036 Phase 4 的 77 调试插曲)。
 - **`skip`**(内容=跳过原因):已知缺陷导致 ash 跑不通时加,harness 跳过该 case 并打印原因。缺陷修复后**删除此文件**即自动纳入回归。
 - `pwsh.ps1`/`fish.fish`/`nu.nu`(可选,best-effort WARNING,不 fail)。
 
@@ -47,7 +47,7 @@ cargo test --test parity -- bootstrap_expected --nocapture
 
 **无。** 79 个 case 全部通过。
 
-原由 case 74/80 钉住的 4 个 find/system 桥缺陷已全部修复(`execute_capture` 让 system 桥返回纯文本;find 的 `-name`/`-type` 改为带值 option;find 路径格式与 bash 对齐;FileList 渲染回退 `path` 字段)。详见 plans/036 "Phase 4 后续:缺陷修复"。
+原由 case 74/80 钉住的 4 个 find/system 桥缺陷已全部修复(`execute_capture` 让 system 桥返回纯文本;find 的 `-name`/`-type` 改为带值 option;find 路径格式与 bash 对齐;FileList 渲染回退 `path` 字段)。详见 docs/plans/036 "Phase 4 后续:缺陷修复"。
 
 遗留的非阻塞项(未影响任何用例,记录待后续):
 - 单横杠长选项(`-type`):ash parser 只认 `--type`/`-t`,case 用短选项 `-t` 规避。
@@ -55,4 +55,4 @@ cargo test --test parity -- bootstrap_expected --nocapture
 
 ## 验收
 
-79/79 通过(77 实跑 + 2 skip),超出原 MVP 目标(≥25)。详见 designs/036 §4、plans/036 各 Phase。未来扩展(fish/nu、更多结构化命令)见 designs/036 §6。
+79/79 通过(0 skip),超出原 MVP 目标(≥25)。详见 designs/036 §4、docs/plans/036 各 Phase。未来扩展(fish/nu、更多结构化命令)见 designs/036 §6。

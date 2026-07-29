@@ -343,15 +343,15 @@ case 用 `p51ls_unique.txt` 等唯一前缀,因 harness 不隔离 cwd。
 
 | # | 目录名 | 对应类型 | 状态 |
 |---|---|---|---|
-| 74 | `74_script_logcleanup` | 1. 日志清理(find -mtime) | **skip** |
+| 74 | `74_script_logcleanup` | 1. 日志清理(find -mtime) | ✅ 通过 |
 | 75 | `75_script_deploy` | 2. 应用部署(&& 链 + 健康检查) | ✅ 通过 |
 | 76 | `76_script_backup` | 3. 数据备份(date 时间戳 + gzip) | ✅ 通过 |
 | 77 | `77_script_batchrename` | 4. 文件批量改名(.jpeg→.jpg) | ✅ 通过 |
 | 78 | `78_script_alert` | 5. 日志告警(计数 + 阈值判断) | ✅ 通过 |
 | 79 | `79_script_menu` | 6. 交互菜单(if-elif 模拟 case/select) | ✅ 通过 |
-| 80 | `80_script_scaffold` | 7. 项目脚手架(mkdir-p + touch + find) | **skip** |
+| 80 | `80_script_scaffold` | 7. 项目脚手架(mkdir-p + touch + find) | ✅ 通过 |
 
-**验收**:`cargo test --test parity`(strict)→ **79/79**(77 实跑通过 + 2 skip)。无回归(原 72 全保持绿)。
+**验收**:`cargo test --test parity`(strict)→ **79/79**(79 实跑通过 + 0 skip)。无回归(原 72 全保持绿)。
 
 ### 关键洞察:ash 命令执行模型(实测确认)
 
@@ -361,18 +361,9 @@ case 用 `p51ls_unique.txt` 等唯一前缀,因 harness 不隔离 cwd。
 - **外部命令必须走 `system("...")` 桥**(在 AutoLang 函数体内)。但 `system()` 桥有两个缺陷(见下)。
 - **`>` 内置命令 + `bash_compat` 标记是最可靠的 parity 路径**——这是 case 77 能通过而 74/80 失败的根本原因。`> ls`/`> mv`/`> cat` 在 bash_compat 下输出纯文本;而 `system("ls ...")` 输出 ratatui 表格(ANSI 码 + `╭╮╰╯` 边框),`system("find ... -name ...")` 返回空。
 
-### 新发现并钉住的缺陷(2 个 skip)
+### ~~新发现并钉住的缺陷(2 个 skip)~~ — **已全部修复(2026-07-29),见下节"Phase 4 后续:缺陷修复"**
 
-**缺陷 A:`system()` 桥不能正确转发含 shell 特殊字符的命令**(影响 case 74/80)
-- `system("find . -name '*.log'")` 返回空(glob/引号在桥里丢失)。
-- `system("find ... | sort")` 等含管道的捕获也返回空。
-- 根因:system() 桥的命令字符串解析未正确处理引号/glob/管道。
-- 钉住方式:case 74/80 的 `skip` 文件记录根因,待 system 桥修复后移除。
-
-**缺陷 B:`> find` 内置命令的 stdout 不接入捕获缓冲**(影响 case 80)
-- `> mkdir -p` / `> touch` 副作用生效(文件确实创建),但 `var x = > find ... -type f` 捕获为空。
-- `> ls -R` 报 "program not found",`> ls <subdir>` 报 "os error 5 拒绝访问"——无可用内置命令枚举递归树。
-- 钉住方式:case 80 的 `skip` 文件记录根因。
+> 本节为 Phase 4 实施时的初判记录。当时用 `skip` 钉住的缺陷 A/B,经后续深挖根因,共修复 4 个关联缺陷(初判的 A 拆为 system 桥渲染缺陷 + find 参数绑定缺陷;初判的 B 拆为 FileList 字段缺失 + 路径格式不 parity),case 74/80 已转绿。完整修复记录见下文 **"Phase 4 后续:缺陷修复(2026-07-29)"** 小节。
 
 ### 实施中的调试插曲:77 的 bash_compat 标记疏漏
 

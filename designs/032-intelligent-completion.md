@@ -400,6 +400,6 @@ kubectl resources / cargo metadata targets / npm scripts —— 每个都要写 
 
 ## 参考
 
-- `plans/021-ash-arbitrary-command-completion.md` —— Plan 021/315,B 在其上增强
+- `docs/plans/021-ash-arbitrary-command-completion.md` —— Plan 021/315,B 在其上增强
 - `designs/029-ai-capabilities.md` —— §2.1 OllamaProvider / §2.3 上下文 builder / §5 F3 NL(NL 补全重叠点)
 - `designs/030-ash-gui.md` —— §4.1 补全面板消费 B 的候选
