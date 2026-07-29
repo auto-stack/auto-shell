@@ -240,6 +240,8 @@ impl Shell {
             reg.register(Box::new(commands::less::MoreCommand));
             // Batch 2: Text processing
             reg.register(Box::new(commands::sort::SortCommand));
+            reg.register(Box::new(commands::source::SourceCommand));
+            reg.register(Box::new(commands::source::DotCommand));
             reg.register(Box::new(commands::uniq::UniqCommand));
             reg.register(Box::new(commands::cut::CutCommand));
             reg.register(Box::new(commands::paste::PasteCommand));
