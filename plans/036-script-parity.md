@@ -1,7 +1,7 @@
 # Plan 036: ash 脚本 Parity 测试框架
 
 > **日期**: 2026-07-23
-> **状态**: 脚本级 parity 推进中 — 72/72 通过(strict)。3 个规避手段待消除(to_int 变量 receiver / HashMap 显示 / cwd 隔离已完成)。详见"优先级 3 调研"
+> **状态**: ✅ 全部通过 — 72/72 用例通过(strict 模式)。所有规避手段已消除或澄清为非缺陷。详见各 Phase
 > **目标**: 建立 ash 脚本与 bash/PowerShell/fish/nu 的 parity 测试，验证跨 shell 行为一致性
 > **范围**: 50 个用例，Rust 集成测试框架，4 个参照 shell
 
