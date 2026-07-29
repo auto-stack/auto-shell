@@ -1,5 +1,5 @@
 # Script-level parity (Plan 036 Phase 3): find the file with the most lines.
-# Walks files, compares line counts via string compare (avoids .to_int).
+# Uses real .to_int() arithmetic (no workaround — to_int CALL_SPEC fixed).
 > echo "single" > p69a.txt
 > echo "line1" > p69b.txt
 > echo "line2" >> p69b.txt
@@ -15,8 +15,9 @@ fn main() {
         if f.find("p69") >= 0 {
             if f.find(".txt") >= 0 {
                 var n = > cat $f | wc -l
-                var ns = n.trim()
-                if ns == "3" {
+                var lines = n.trim().to_int()
+                if lines > maxn {
+                    maxn = lines
                     maxfile = f.trim()
                 }
             }

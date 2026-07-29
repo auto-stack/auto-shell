@@ -1,5 +1,5 @@
 # Script-level parity (Plan 036 Phase 3): count total lines across files.
-# Uses string comparison for the per-file count (avoids .to_int VM bug).
+# Uses real .to_int() arithmetic (no workaround — to_int CALL_SPEC fixed).
 > echo "one" > p68a.txt
 > echo "two" > p68b.txt
 > echo "three" >> p68b.txt
@@ -14,10 +14,7 @@ fn main() {
         if f.find("p68") >= 0 {
             if f.find(".txt") >= 0 {
                 var n = > cat $f | wc -l
-                var ns = n.trim()
-                if ns == "1" { total = total + 1 }
-                if ns == "2" { total = total + 2 }
-                if ns == "3" { total = total + 3 }
+                total = total + n.trim().to_int()
             }
         }
     }
