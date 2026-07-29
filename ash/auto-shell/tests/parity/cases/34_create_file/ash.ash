@@ -1,8 +1,4 @@
-fn main() {
-    var tmp = system("echo $TEMP").trim()
-    var f = tmp + "/ash_create.txt"
-    var w = system("echo created line | tee " + f)
-    var c = system("cat " + f)
-    print(c.trim())
-}
-main()
+# Real ash commands (Plan 036 workaround-1 fix): use ash built-in echo/cat
+# with redirect, not system() through bash.
+> echo "created line" > test.txt
+> cat test.txt

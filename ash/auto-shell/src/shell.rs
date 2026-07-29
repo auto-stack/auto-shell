@@ -240,6 +240,8 @@ impl Shell {
             reg.register(Box::new(commands::less::MoreCommand));
             // Batch 2: Text processing
             reg.register(Box::new(commands::sort::SortCommand));
+            reg.register(Box::new(commands::source::SourceCommand));
+            reg.register(Box::new(commands::source::DotCommand));
             reg.register(Box::new(commands::uniq::UniqCommand));
             reg.register(Box::new(commands::cut::CutCommand));
             reg.register(Box::new(commands::paste::PasteCommand));
@@ -763,6 +765,16 @@ impl Shell {
             }
         }
 
+        // Plan 036: If the command looks like a script path (./script.ash,
+        // ../script.ash, /abs/script.ash, or bare script.ash/.at/.as/.au),
+        // auto-source it before falling through to external execution.
+        // This gives bash-like `./script` behaviour for ash scripts.
+        if self.try_source_script_path(cmd_name, args) {
+            // Script was found and sourced; any remaining args after the
+            // script path become $1, $2, ... for the sourced script.
+            return Ok(Some(String::new()));
+        }
+
         // Otherwise, execute as external command
         let result = external::execute_external(input, &self.current_dir, false);
         if let Err(ref e) = result {
@@ -961,6 +973,25 @@ impl Shell {
         let result = self.execute(input);
         self.json_output = false; // always reset (interactive default)
         self.bash_compat = false;
+        result
+    }
+
+    /// Execute a command in bash-compatible capture mode and return its
+    /// stdout (Plan 036 defect-A fix).
+    ///
+    /// Used by the `system()` host bridge (AutoLang `system("cmd")`) so that
+    /// structured commands (find/ls/wc/grep) render as bash-style plain text
+    /// instead of interactive ratatui tables. This separates "programmatic
+    /// capture" (machine-readable stdout for `system()` callers) from
+    /// "interactive display" (`execute`). Mirrors `execute_for_agent`'s
+    /// bash_compat toggling, but restores the prior state rather than forcing
+    /// false, so it is safe to nest inside an already-bash_compat context
+    /// (e.g. a `--bash-compat` script).
+    pub fn execute_capture(&mut self, input: &str) -> Result<Option<String>> {
+        let was_compat = self.bash_compat;
+        self.bash_compat = true;
+        let result = self.execute(input);
+        self.bash_compat = was_compat;
         result
     }
 
@@ -2894,6 +2925,72 @@ impl Shell {
         };
         self.source_file(&path)?;
         Ok(None)
+    }
+
+    /// Plan 036: Try to interpret `cmd_name` as a script path and source it.
+    ///
+    /// Triggered when the first token looks like a path to an ash/Auto script
+    /// (starts with `./`, `../`, `/`, or ends with `.ash`/`.at`/`.as`/`.au`).
+    /// This enables bash-like `./script.ash` and `script.ash` behaviour.
+    ///
+    /// Any extra arguments after the script path are set as positional args
+    /// (`$1`, `$2`, ...) for the sourced script, matching `ash script.ash arg1`
+    /// semantics.
+    ///
+    /// Returns `true` if the path was found and sourced, `false` otherwise.
+    fn try_source_script_path(&mut self, cmd_name: &str, args: &[String]) -> bool {
+        // Quick rejection: must look like a script path
+        let looks_like_path = cmd_name.starts_with("./")
+            || cmd_name.starts_with("../")
+            || cmd_name.starts_with('/')
+            || cmd_name.starts_with(".\\")
+            || cmd_name.starts_with("..\\")
+            || cmd_name.starts_with('\\')
+            || cmd_name.ends_with(".ash")
+            || cmd_name.ends_with(".at")
+            || cmd_name.ends_with(".as")
+            || cmd_name.ends_with(".au");
+
+        if !looks_like_path {
+            return false;
+        }
+
+        // Resolve the path
+        let path = std::path::Path::new(cmd_name);
+        let resolved = if path.is_relative() {
+            self.current_dir.join(path)
+        } else {
+            path.to_path_buf()
+        };
+
+        // Must exist and be a file
+        if !resolved.is_file() {
+            return false;
+        }
+
+        // Save previous script args, set new ones, restore after
+        let prev_args = std::mem::take(&mut self.script_args);
+        self.script_args = args.to_vec();
+
+        let result = self.source_file(&resolved);
+
+        // Restore previous args
+        self.script_args = prev_args;
+
+        match result {
+            Ok(()) => {
+                // success — script was sourced
+                true
+            }
+            Err(e) => {
+                // Report the error but don't fall through to external execution
+                // (which would give a confusing "program not found" for a
+                // script that exists but has errors).
+                eprintln!("ash: {}: {}", resolved.display(), e);
+                self.last_exit_code = 1;
+                true // handled (don't fall through to external exec)
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

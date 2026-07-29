@@ -21,8 +21,12 @@ impl Command for FindCommand {
     fn signature(&self) -> Signature {
         Signature::new("find", "Find files matching criteria")
             .optional("path", "Root path to search (default: .)")
-            .flag_with_short("name", 'n', "Match filename pattern (supports *)")
-            .flag_with_short("type", 't', "Filter by type: f=file, d=dir")
+            // These take a value (e.g. `find . -n '*.log' -t f`), so they are
+            // options, not boolean flags. Declaring them as `flag_with_short`
+            // caused the parser to treat the value as a separate positional,
+            // polluting name_pattern detection (Plan 036 defect-C fix).
+            .option_with_short("name", 'n', "Match filename pattern (supports *)")
+            .option_with_short("type", 't', "Filter by type: f=file, d=dir")
             .flag("max-depth", "Maximum directory depth")
     }
 
@@ -69,7 +73,7 @@ impl Command for FindCommand {
             .and_then(|s| s.parse().ok());
 
         let mut results = Vec::new();
-        find_recursive(&root, &root, name_pattern.as_deref(), type_filter.as_deref(), max_depth, &mut results, 0)?;
+        find_recursive(&root, &root, root_arg, name_pattern.as_deref(), type_filter.as_deref(), max_depth, &mut results, 0)?;
 
         Ok(PipelineData::from_value(Value::Array(Array::from(results))))
     }
@@ -101,6 +105,7 @@ fn looks_like_flag_value(p: &str) -> bool {
 fn find_recursive(
     root: &Path,
     current: &Path,
+    root_arg: &str,
     name_pattern: Option<&str>,
     type_filter: Option<&str>,
     max_depth: Option<usize>,
@@ -149,8 +154,14 @@ fn find_recursive(
         };
 
         if type_match && name_match {
-            let rel = pathdiff(&root, &path);
+            let rel = display_path(root_arg, root, &path);
             let mut obj = Obj::new();
+            // `path` holds the find-style path as bash `find` prints it:
+            // the user-supplied root arg joined with the relative path,
+            // using forward slashes (e.g. `./a.log`, `p80_proj/src/main.py`).
+            // The bash-compat renderer (format_file_list_as_bash) falls back
+            // to `path` when `name` is absent, so find yields paths while ls
+            // (which sets `name`) yields bare filenames (Plan 036 defect-B).
             obj.set("path", Value::str(&rel));
             obj.set("type", Value::str(if is_dir { "dir" } else { "file" }));
             results.push(Value::Obj(obj));
@@ -158,18 +169,35 @@ fn find_recursive(
 
         // Recurse into directories
         if is_dir {
-            find_recursive(root, &path, name_pattern, type_filter, max_depth, results, depth + 1)?;
+            find_recursive(root, &path, root_arg, name_pattern, type_filter, max_depth, results, depth + 1)?;
         }
     }
 
     Ok(())
 }
 
-/// Compute a relative path from root to target.
-fn pathdiff(root: &Path, target: &Path) -> String {
-    match target.strip_prefix(root) {
-        Ok(rel) => rel.to_string_lossy().to_string(),
-        Err(_) => target.to_string_lossy().to_string(),
+/// Build the display path for a found entry, mirroring bash `find` output.
+///
+/// bash `find <root_arg>` prints `<root_arg>/<relative-path>` with forward
+/// slashes, preserving the root prefix the user supplied (e.g. `find .` →
+/// `./a.log`; `find p80_proj` → `p80_proj/src/main.py`). We strip the
+/// resolved `root` from `target` to get the part under the root, then join
+/// it onto `root_arg` with `/`. On failure, fall back to the target's file
+/// name. Backslashes (Windows) are normalized to `/` for bash parity.
+fn display_path(root_arg: &str, root: &Path, target: &Path) -> String {
+    let under_root = target
+        .strip_prefix(root)
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| {
+            target
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
+    if under_root.is_empty() {
+        root_arg.to_string()
+    } else {
+        format!("{}/{}", root_arg, under_root)
     }
 }
 

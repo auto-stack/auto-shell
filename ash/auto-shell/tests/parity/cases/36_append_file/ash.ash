@@ -1,10 +1,6 @@
-fn main() {
-    var tmp = system("echo $TEMP").trim()
-    var f = tmp + "/ash_append.txt"
-    var w1 = system("echo first | tee " + f)
-    var w2 = system("echo second | tee -a " + f)
-    var w3 = system("echo third | tee -a " + f)
-    var c = system("cat " + f)
-    print(c.trim())
-}
-main()
+# Real ash commands (Plan 036 workaround-1 fix): use ash built-in echo/cat
+# with redirect and append, not system() through bash.
+> echo "first" > test.txt
+> echo "second" >> test.txt
+> echo "third" >> test.txt
+> cat test.txt

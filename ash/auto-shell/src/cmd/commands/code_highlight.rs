@@ -47,6 +47,7 @@ pub fn is_code_file(ext: &str) -> bool {
         | "go" | "java" | "kt" | "scala" | "c" | "h" | "cpp" | "hpp" | "cc"
         | "cs" | "rb" | "php" | "swift" | "dart"
         | "sh" | "bash" | "zsh" | "fish" | "ps1"
+        | "ash" | "at" | "as" | "au"
         | "sql" | "graphql" | "proto"
         | "html" | "css" | "scss" | "less"
         | "md" | "markdown"
@@ -327,20 +328,35 @@ fn find_syntax_by_extension<'a>(
     if let Some(s) = ps.find_syntax_by_extension(ext) {
         return Some(s);
     }
-    let alias = match ext {
-        "dockerfile" => "dockerfile",
-        "gitignore" | "gitattributes" => "gitignore",
-        "sh" | "bash" => "shell",
-        "zsh" => "bash",
-        "ps1" => "powershell",
-        "md" | "markdown" => "markdown",
-        "cc" => "cpp",
-        "h" => "c",
-        "hpp" => "cpp",
-        _ => return None,
-    };
-    ps.find_syntax_by_token(alias)
-        .or_else(|| ps.find_syntax_by_name(alias))
+        let alias = match ext {
+            "dockerfile" => "dockerfile",
+            "gitignore" | "gitattributes" => "gitignore",
+            "sh" | "bash" => "shell",
+            "zsh" => "bash",
+            "ps1" => "powershell",
+            // Plan 036: .ash scripts mix shell commands (>) with AutoLang blocks.
+            // Map to "sh" so syntect's built-in Shell Script syntax applies.
+            "ash" => "sh",
+            // Auto-lang (*.at, *.as, *.au): Rust-inspired syntax (fn, var, if,
+            // for, struct, impl, match, etc.). "Rust" syntax gives reasonable
+            // highlighting until a dedicated AutoLang syntax is authored.
+            // Unlike "shell", syntect DOES know about the "rs" extension,
+            // so we map to "rs" directly.
+            "at" | "as" | "au" => "rs",
+            "md" | "markdown" => "markdown",
+            "cc" => "cpp",
+            "h" => "c",
+            "hpp" => "cpp",
+            _ => return None,
+        };
+        // Retry with the aliased extension first
+        if let Some(s) = ps.find_syntax_by_extension(alias) {
+            return Some(s);
+        }
+        // Fall back to token/name lookup for non-extension aliases
+        // like "dockerfile", "gitignore", "powershell"
+        ps.find_syntax_by_token(alias)
+            .or_else(|| ps.find_syntax_by_name(alias))
 }
 
 #[cfg(test)]
@@ -384,6 +400,31 @@ mod tests {
         let input = "hello world";
         let result = highlight_code(input, "xyz");
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_is_code_file_new_extensions() {
+        // Plan 036: ash / auto-lang file types
+        assert!(is_code_file("ash"));
+        assert!(is_code_file("at"));
+        assert!(is_code_file("as"));
+        assert!(is_code_file("au"));
+    }
+
+    #[test]
+    fn test_highlight_ash() {
+        let input = "> echo hello\n> cat file | grep foo\nfn main() {\n    print(\"hi\")\n}";
+        let result = highlight_code(input, "ash");
+        assert!(result.contains("\x1b["), "ash scripts should be highlighted as shell");
+        assert!(result.contains("echo"));
+    }
+
+    #[test]
+    fn test_highlight_at() {
+        let input = "fn main() {\n    var x = \"hello\"\n    if x.len() > 0 {\n        print(x)\n    }\n}";
+        let result = highlight_code(input, "at");
+        assert!(result.contains("\x1b["), "auto-lang code should be highlighted as Rust");
+        assert!(result.contains("fn"));
     }
 
     #[test]

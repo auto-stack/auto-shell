@@ -1,0 +1,2 @@
+archives: 1
+source kept: INSERT INTO t VALUES(1);

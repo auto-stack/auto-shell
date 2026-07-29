@@ -16,6 +16,10 @@ pub struct AshConfig {
     pub right_format: String,
     /// Add newline before prompt
     pub add_newline: bool,
+    /// Plan 036: Put indicator on a new line (multi-line prompt).
+    /// When the left prompt has content, appends a newline so the
+    /// `> ` / `❯` indicator always gets a full line for command input.
+    pub multiline: bool,
     /// Minimum command duration (ms) to show cmd_duration module
     pub cmd_duration_threshold: u64,
     /// Per-module config: module_name → (key → string value).
@@ -28,6 +32,7 @@ impl Default for AshConfig {
             format: "$directory$git_branch$git_status$cmd_duration$character".to_string(),
             right_format: "$time".to_string(),
             add_newline: false,
+            multiline: true,  // Plan 036: default on for better long-path UX
             cmd_duration_threshold: 2000,
             module_configs: HashMap::new(),
         }

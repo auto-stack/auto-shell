@@ -52,6 +52,7 @@ pub mod select;
 pub mod show;
 pub mod sleep;
 pub mod sort;
+pub mod source;
 pub mod split;
 pub mod stat;
 pub mod str_case;

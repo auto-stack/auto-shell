@@ -1,10 +1,5 @@
-fn main() {
-    var tmp = system("echo $TEMP").trim()
-    var d = tmp + "/ash_mkdir_dir"
-    var md = system("mkdir " + d)
-    var f = d + "/inside.txt"
-    var w = system("echo in dir | tee " + f)
-    var c = system("cat " + f)
-    print(c.trim())
-}
-main()
+# Real ash commands (Plan 036 workaround-1 fix): use ash built-in mkdir/echo/cat,
+# not system() through bash.
+> mkdir testdir
+> echo "in dir" > testdir/inside.txt
+> cat testdir/inside.txt

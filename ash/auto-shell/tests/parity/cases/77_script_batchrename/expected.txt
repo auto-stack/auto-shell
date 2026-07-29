@@ -1,0 +1,2 @@
+p77_one.jpeg -> p77_one.jpg
+p77_two.jpeg -> p77_two.jpg
