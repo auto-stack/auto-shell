@@ -39,11 +39,11 @@
 
 ## 延续计划（独立成篇，本路线图指向其详细设计）
 
-- **[Plan 021：Ash 任意命令补全](021-ash-arbitrary-command-completion.md)** —— 把补全从「手写 5 个命令」
+- **[Plan 021：Ash 任意命令补全](old/021-ash-arbitrary-command-completion.md)** —— 把补全从「手写 5 个命令」
   扩到「任意命令」：三层 spec 目录（user/generated/cache）+ 优先级链 + Help/Man 自动解析 + 运行时
-  probe（零配置）+ `completions generate` 离线生成。直接延续 [Plan 015（补全系统）](015-ash-completion-system.md)。
+  probe（零配置）+ `completions generate` 离线生成。直接延续 [Plan 015（补全系统）](old/015-ash-completion-system.md)。
   spec 格式为 Auto/Atom（.at）。
-- **[Plan 022：Ash 24-bit Truecolor 支持](022-ash-24bit-truecolor.md)** —— 渲染管线已能发 24-bit 序列，
+- **[Plan 022：Ash 24-bit Truecolor 支持](old/022-ash-24bit-truecolor.md)** —— 渲染管线已能发 24-bit 序列，
   但无色彩源使用、无终端能力检测、无降级。补齐「检测（镜像 Fish `update_fish_color_support`）+ 使用（24-bit 主题）+ 优雅降级（256/16 降采样）」三件套，达到 Fish「monospaced rainbow」水平。
 
 ---
@@ -51,7 +51,7 @@
 ## Phase 1: 核心阻塞项（P0 — Daily Driver 硬阻塞）
 
 ### Task 1.1 — 真正的 OS Pipe ✅ 已完成（2026-06-15）
-- **引用**：[304 §二.1 管道没有真正的 OS Pipe](019-ash-production-gap-analysis.md)；[291 §管线架构](013-autoshell-warp-design.md)
+- **引用**：[304 §二.1 管道没有真正的 OS Pipe](old/019-ash-production-gap-analysis.md)；[291 §管线架构](013-autoshell-warp-design.md)
 - **目标**：外部命令间用 `Stdio::piped()` 流式连接，`a | b | c` 不再串行字符串中转
 - **核查结论**：实际已实现于真实执行路径 `Shell::execute_pipeline_with_auto` 的 Phase 2
   （`shell.rs:622-647`，调用 `spawn_external_chained` → `Stdio::from(prev_stdout)`）。
@@ -63,7 +63,7 @@
 - **验收**：✅ OS Pipe 在 external→external 链路上成立。
 
 ### Task 1.2 — 环境变量 / PATH 系统（进行中）
-- **引用**：[301 整篇](016-ash-environment-variable-system.md)（§一语法 / §二持久化 / §三架构 / §四实现 Phase 1-6）；[304 §二.9 环境变量 PATH 管理不完善](019-ash-production-gap-analysis.md)
+- **引用**：[301 整篇](old/016-ash-environment-variable-system.md)（§一语法 / §二持久化 / §三架构 / §四实现 Phase 1-6）；[304 §二.9 环境变量 PATH 管理不完善](old/019-ash-production-gap-analysis.md)
 - **目标**：落地 301 的全部 6 个 Phase
   - P1 `ShellVars` 升级：`scope_stack` + `push/pop_scope` + `set_env_scoped` + 全套 `path_*` 方法（301 §3.2 / §四 Phase 1）
   - P2 `env` / `env.path` 命令族 + `EnvCommand`/`EnvPathCommand` + 表格渲染（301 §3.3 / §四 Phase 2）
@@ -95,7 +95,7 @@
 > ⚠️ **重要发现（影响路线图准确性）**：实施 P2 时发现 shell.rs 的 builtin 分发表（222-239）**已实现** `def`（shell 函数）、`hook`（事件钩子）、`abbr`（缩写）、`config`（配置命令）、`bind`（键绑定）、`path`（PATH 管理）。这与 304 §二 / 本计划 Phase 4 把它们标为「未完成」**不符**——之前的状态分析漏看了这张 builtin 分发表。建议在 Task 1.2 收尾后，重新核实 Phase 4 各项（4.1-4.5）的真实完成度，相应修订路线图。
 
 ### Task 1.3 — 错误信息上下文（部分完成）
-- **引用**：[304 §二.3 错误信息缺乏上下文](019-ash-production-gap-analysis.md)
+- **引用**：[304 §二.3 错误信息缺乏上下文](old/019-ash-production-gap-analysis.md)
 - **目标**：did-you-mean 模糊建议、统一 exit code 语义、`$?` 全命令一致
 - **进度**：
   - ✅ `$? $@ $# $!` 特殊变量展开已修复（`expand_variables` 现正确路由非字母数字特殊参数；`get_variable` 早已映射）。`$_` 经普通路径可用。
@@ -109,13 +109,13 @@
 ## Phase 2: 脚本完整性（P1）
 
 ### Task 2.1 — Here Document
-- **引用**：[304 §二.5 没有 Here Document](019-ash-production-gap-analysis.md)
+- **引用**：[304 §二.5 没有 Here Document](old/019-ash-production-gap-analysis.md)
 - **目标**：支持 `cmd <<EOF ... EOF` 与 `<<'EOF'`（禁插值）、`<<-EOF`（去前导 tab）
 - **关键改动**：pipeline 预处理 / Shell Lexer 层
 - **验收**：`cat <<EOF` 多行写入、`<<'EOF'` 不展开 `$var`
 
 ### Task 2.2 — Shell 函数定义 ✅ 已完成
-- **引用**：[304 §二.7 没有 Shell 函数定义](019-ash-production-gap-analysis.md)
+- **引用**：[304 §二.7 没有 Shell 函数定义](old/019-ash-production-gap-analysis.md)
 - **目标**：REPL/脚本内 `fn name(args) { ... }`（shell 层）定义后可作命令调用，支持 alias 优先级
 - **核查结论**：已实现为 builtin `def`（`shell.rs::cmd_def`，注册于 builtin 分发表）。
   支持 `def name [params] { body }`，转译为 Auto `fn`；`def ll [] { ls -la }` 等。
@@ -129,7 +129,7 @@
 - **验收**：`echo a \↵ b` 输出 `a b`；未闭合 `"` 自动等下一行
 
 ### Task 2.4 — 特殊变量与语法糖 ✅ 已完成
-- **引用**：[304 §二.19 完善特殊变量和语法糖](019-ash-production-gap-analysis.md)
+- **引用**：[304 §二.19 完善特殊变量和语法糖](old/019-ash-production-gap-analysis.md)
 - **目标**：`$@ $# $_ $! $?`、brace expansion `{a,b,c}`、算术 `$(())`、`~user`
 - **进度**：
   - ✅ 特殊变量 `$? $@ $# $! $_` 已可用（见 Task 1.3）。
@@ -139,7 +139,7 @@
 - **验收**：✅ `echo file.{txt,md}` → 两文件；`echo $((1+2))` → 3；`echo ~root` → /home/root
 
 ### Task 2.5 — `let x = > cmd` 赋值捕获（可选）
-- **引用**：[303 §Step 5 赋值捕获（可选增强）](018-ash-script-execution-shell-syntax.md)
+- **引用**：[303 §Step 5 赋值捕获（可选增强）](old/018-ash-script-execution-shell-syntax.md)
 - **目标**：脚本中把 `>` 行 stdout 赋给 Auto VM 变量
 - **关键改动**：`shell.rs` `interpolate_auto_vars` 附近 + `>` 行模式解析
 - **验收**：`let out = > ls` 后 `print(out)` 输出 ls 结果
@@ -149,13 +149,13 @@
 ## Phase 3: 数据流与框架（P2）
 
 ### Task 3.1 — 结构化数据管道激活（Atom 接入管道）
-- **引用**：[304 §二.10 结构化数据管道](019-ash-production-gap-analysis.md)；[291 §Phase 0 Atom 管线 / §管线架构](013-autoshell-warp-design.md)
+- **引用**：[304 §二.10 结构化数据管道](old/019-ash-production-gap-analysis.md)；[291 §Phase 0 Atom 管线 / §管线架构](013-autoshell-warp-design.md)
 - **目标**：管道数据从 `ShellValue::String` 升级为 Atom（`pipeline.rs:37` 当前仍 String），让 `ls | grep | select` 类型安全
 - **关键改动**：`ash-core/src/pipeline.rs` + 内置命令的 Atom 输出/消费
 - **验收**：`ls | where size > 1k` 结构化过滤可行；旧字符串管道向后兼容
 
 ### Task 3.2 — 统一命令参数解析框架
-- **引用**：[304 §二.8 没有命令参数解析框架](019-ash-production-gap-analysis.md)
+- **引用**：[304 §二.8 没有命令参数解析框架](old/019-ash-production-gap-analysis.md)
 - **目标**：Command trait 统一签名系统，`-n5`/`--num=5` 一致解析、`--help` 自动生成
 - **关键改动**：`cmd/` trait 重构（影响全部 74 命令，需渐进迁移）
 - **验收**：任意命令 `--help` 输出统一格式；新参数风格一致
@@ -172,11 +172,11 @@
 
 | Task | 状态 | 引用 | 目标 |
 |---|---|---|---|
-| 4.1 REPL 配置命令 | ✅ 已完成 | [304 §二.11](019-ash-production-gap-analysis.md) | `config` builtin：`config list/get/set`，写入 `~/.config/ash.toml` |
-| 4.2 `bind` 键绑定 | ✅ 已完成 | [304 §二.16](019-ash-production-gap-analysis.md) | `bind` builtin：`bind list`、`bind <key> <action>` |
-| 4.3 Abbreviation | ✅ 已完成 | [304 §二.13](019-ash-production-gap-analysis.md) | `abbr` builtin：`-a/-r/-l`，输入时展开 |
-| 4.4 事件钩子 | ✅ 已完成 | [304 §二.14](019-ash-production-gap-analysis.md) | `hook` builtin：chdir / preexec / precmd |
-| 4.5 插件系统 | ⬜ 待做 | [304 §二.12 插件/扩展系统](019-ash-production-gap-analysis.md) | Fish 式函数文件自动加载 + 外部插件协议 |
+| 4.1 REPL 配置命令 | ✅ 已完成 | [304 §二.11](old/019-ash-production-gap-analysis.md) | `config` builtin：`config list/get/set`，写入 `~/.config/ash.toml` |
+| 4.2 `bind` 键绑定 | ✅ 已完成 | [304 §二.16](old/019-ash-production-gap-analysis.md) | `bind` builtin：`bind list`、`bind <key> <action>` |
+| 4.3 Abbreviation | ✅ 已完成 | [304 §二.13](old/019-ash-production-gap-analysis.md) | `abbr` builtin：`-a/-r/-l`，输入时展开 |
+| 4.4 事件钩子 | ✅ 已完成 | [304 §二.14](old/019-ash-production-gap-analysis.md) | `hook` builtin：chdir / preexec / precmd |
+| 4.5 插件系统 | ⬜ 待做 | [304 §二.12 插件/扩展系统](old/019-ash-production-gap-analysis.md) | Fish 式函数文件自动加载 + 外部插件协议 |
 
 > 4.1–4.4 此前被状态分析误标为「未完成」——它们其实已作为 builtin 实现（注册于 `shell.rs` builtin 分发表，各含 usage 帮助与子命令逻辑）。**Phase 4 仅剩 4.5 插件系统。**
 
@@ -199,8 +199,8 @@
 
 | Task | 引用 | 目标 |
 |---|---|---|
-| 6.1 文档体系 | [304 §二.20 文档和帮助系统](019-ash-production-gap-analysis.md) | 每个内建命令 `--help` 标准化、`man ash`、cookbook |
-| 6.2 性能基准 | [304 §二.18 性能优化](019-ash-production-gap-analysis.md) | 启动时间 / 命令延迟 / 内存基准 + 优化 |
+| 6.1 文档体系 | [304 §二.20 文档和帮助系统](old/019-ash-production-gap-analysis.md) | 每个内建命令 `--help` 标准化、`man ash`、cookbook |
+| 6.2 性能基准 | [304 §二.18 性能优化](old/019-ash-production-gap-analysis.md) | 启动时间 / 命令延迟 / 内存基准 + 优化 |
 
 ---
 

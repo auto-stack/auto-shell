@@ -1,6 +1,8 @@
 # Plan 016: ASH 环境变量系统设计
 > 迁入自 auto-lang `docs/plans/301-ash-environment-variable-system.md`（原 Plan 301），已重编号为 Plan 016。
 
+> **Status:** ✅ COMPLETE — 已实现。`set`/`export`/`unset` 命令、`VAR=val cmd` 内联语法、PATH 一等公民（`shell/vars.rs` get_path_list/set_path_list）、`env` 命令。
+
 ## Context
 
 ASH shell 目前有基础的 `ShellVars`（`crates/ash-core/src/shell/vars.rs`），支持 `set_local`/`set_env`/`unset`，但缺少：

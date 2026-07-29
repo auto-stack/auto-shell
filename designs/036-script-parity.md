@@ -2,7 +2,7 @@
 
 > **日期**: 2026-07-23
 > **状态**: ✅ MVP 已实施 — 50/50 case 通过(strict 模式验证),超出验收目标(原 ≥25)
-> **关系**: 细化并扩展 [plans/036-script-parity.md](../docs/plans/036-script-parity.md);本套件在 Plan 036 已建的框架骨架上落地
+> **关系**: 细化并扩展 [plans/036-script-parity.md](../docs/plans/old/036-script-parity.md);本套件在 Plan 036 已建的框架骨架上落地
 > **目标**: 为 ash 的"跨平台脚本替代 bash/powershell"能力建立可执行、可验证的 parity 测试套件
 
 ---

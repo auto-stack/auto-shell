@@ -3,7 +3,7 @@
 
 > **Status**: ✅ Implemented (2026-06-16)
 > **关系**: 直接延续 [Plan 015（补全系统）](015-ash-completion-system.md)。297 实现了声明式 `CompletionSpec` + `CompletionProvider` 引擎 + 内置 5 命令定义；本计划把补全**从「手写 5 个命令」扩到「任意命令」**。
-> **路线图位置**: 在 [Plan 020](020-ash-remaining-features-roadmap.md) 里作为补全系统的延伸项（加一行指针）。
+> **路线图位置**: 在 [Plan 020](../020-ash-remaining-features-roadmap.md) 里作为补全系统的延伸项（加一行指针）。
 
 ---
 

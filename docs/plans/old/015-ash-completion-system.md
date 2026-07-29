@@ -1,6 +1,8 @@
 # Plan 015: ASH 外部命令参数自动补全系统
 > 迁入自 auto-lang `docs/plans/297-ash-completion-system.md`（原 Plan 297），已重编号为 Plan 015。
 
+> **Status:** ✅ COMPLETE — 已实现。声明式 `CompletionSpec` + `CompletionProvider` 引擎（`ash-core/src/completions/`），后续由 Plan 021 扩展至任意命令。
+
 ## Context
 
 ASH shell 的补全系统存在严重断层：

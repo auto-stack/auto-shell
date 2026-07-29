@@ -1,6 +1,8 @@
 # Plan 012: ASH Fish-style History Autosuggestion
 > 迁入自 auto-lang `docs/plans/281-ash-history-autosuggestion.md`（原 Plan 281），已重编号为 Plan 012。
 
+> **Status:** ✅ COMPLETE — 已实现。reedline `CwdAwareHinter` 装配至 REPL（`frontend/repl.rs`），config 支持 `autosuggestion`/`autosuggestion_min_chars`。
+
 ## Context
 
 ASH 当前没有基于历史的快速提示功能。用户必须完整输入命令或使用 Tab 补全。Fish Shell、PowerShell PSReadLine、zsh-autosuggestions 都提供了"灰色幽灵文字"——根据历史记录自动提示完整命令，按一个键即可接受。
