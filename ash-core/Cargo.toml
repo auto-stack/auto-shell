@@ -36,3 +36,7 @@ criterion = "0.5"
 [[bench]]
 name = "batom_bench"
 harness = false
+
+[[bench]]
+name = "pipeline_bench"
+harness = false

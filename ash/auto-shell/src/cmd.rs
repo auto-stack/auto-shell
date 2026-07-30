@@ -17,6 +17,7 @@ pub use crate::core::cmd::value_helpers;
 pub mod auto;
 pub mod builtin;
 pub mod commands;
+pub mod format;
 pub mod fs;
 pub mod parser;
 pub mod pipeline_convert;
