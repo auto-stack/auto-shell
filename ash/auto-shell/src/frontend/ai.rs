@@ -267,30 +267,35 @@ fn load_messages(path: &Path) -> Vec<Message> {
     }
 }
 
-/// Register the ash command tools an agent can call during F4 tool-calling.
+/// Register every ash command as a tool the agent can call during F4
+/// tool-calling (Plan 029 `register_all`).
 ///
 /// All tools share one [`AshCommandShellThread`] so they operate on the same
-/// session state (cwd, variables). v1 registers a small, safe command set;
-/// Plan 029's `register_all` (full 80 commands) is deferred.
-fn register_ash_tools(agent: &mut Agent, tx: std::sync::mpsc::Sender<crate::ash_command_tool::CmdRequest>) {
-    agent.register_tool(AshCommandTool::new(
-        "pwd", "print the current working directory", tx.clone(),
-    ));
-    agent.register_tool(AshCommandTool::new(
-        "ls", "list directory contents (names + types + sizes)", tx.clone(),
-    ));
-    agent.register_tool(AshCommandTool::new(
-        "cat", "print a file's contents", tx.clone(),
-    ));
-    agent.register_tool(AshCommandTool::new(
-        "cd", "change the current directory", tx.clone(),
-    ));
-    agent.register_tool(AshCommandTool::new(
-        "echo", "print text", tx.clone(),
-    ));
-    agent.register_tool(AshCommandTool::new(
-        "grep", "search for a pattern in files", tx,
-    ));
+/// session state (cwd, variables). The command list is read from the caller's
+/// Shell registry (passed in as `signatures`) so this stays in sync as
+/// commands are added — no manual list to maintain.
+///
+/// `signatures` must be obtained on a synchronous thread (Shell::new() does
+/// AutoLang VM init that can't run inside a tokio runtime), which is why the
+/// caller passes it in rather than this fn building a Shell itself.
+fn register_ash_tools(
+    agent: &mut Agent,
+    signatures: &[crate::cmd::Signature],
+    tx: std::sync::mpsc::Sender<crate::ash_command_tool::CmdRequest>,
+) {
+    for sig in signatures {
+        // Skip commands with empty names defensively (shouldn't happen, but a
+        // bad name would collide in the ToolRegistry).
+        if sig.name.is_empty() {
+            continue;
+        }
+        let desc = if sig.description.is_empty() {
+            format!("ash command: {}", sig.name)
+        } else {
+            sig.description.clone()
+        };
+        agent.register_tool(AshCommandTool::new(sig.name.clone(), desc, tx.clone()));
+    }
 }
 
 /// A persistent, agent-backed chat conversation.
@@ -314,6 +319,9 @@ pub struct ChatSession {
     /// Keeps the dedicated shell thread alive — if dropped, the tools' sender
     /// goes dead and calls fail with "shell thread has exited".
     shell_thread: AshCommandShellThread,
+    /// Cached command signatures (read once at construction). clear() reuses
+    /// these instead of rebuilding a Shell (which can't run in a tokio ctx).
+    command_signatures: Vec<crate::cmd::Signature>,
 }
 
 impl ChatSession {
@@ -337,8 +345,13 @@ impl ChatSession {
         let shell_thread = AshCommandShellThread::start();
         let tx = shell_thread.sender();
 
+        // Read the full command set from a fresh Shell. This is a synchronous
+        // context (load() is called from the sync REPL), and Shell::new() does
+        // AutoLang VM init that can't run inside a tokio runtime — so we fetch
+        // the signatures here, not inside register_ash_tools.
+        let command_signatures = crate::shell::Shell::new().registry().params();
         let mut agent = Agent::new(Assistant, client.clone());
-        register_ash_tools(&mut agent, tx);
+        register_ash_tools(&mut agent, &command_signatures, tx);
         // Replay persisted text turns into the agent's memory. preload skips
         // tool-role messages, so it's safe even with mixed histories.
         agent.preload_messages(messages);
@@ -348,6 +361,7 @@ impl ChatSession {
             client,
             history_path: path,
             shell_thread,
+            command_signatures,
         }
     }
 
@@ -389,7 +403,10 @@ impl ChatSession {
     pub fn clear(&mut self) {
         let tx = self.shell_thread.sender();
         let mut agent = Agent::new(Assistant, self.client.clone());
-        register_ash_tools(&mut agent, tx);
+        // Reuse the cached signatures — rebuilding a Shell here would do
+        // AutoLang VM init that can't run inside a tokio runtime (clear() may
+        // be reached via an async test path).
+        register_ash_tools(&mut agent, &self.command_signatures, tx);
         self.agent = agent;
     }
 
@@ -605,8 +622,8 @@ mod tests {
 
     /// The shell thread must survive clear() — otherwise tools would report
     /// "shell thread has exited" after a /clear.
-    #[tokio::test]
-    async fn clear_keeps_shell_thread_alive() {
+    #[test]
+    fn clear_keeps_shell_thread_alive() {
         use auto_ai_agent::tool::Tool;
 
         let tmp = std::env::temp_dir().join("ash_ai_clearthread_test");
@@ -614,12 +631,17 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let path = tmp.join("chat.json");
 
+        // Construct on a SYNCHRONOUS thread — Shell::new() (called inside
+        // with_client_and_path to read command signatures) does AutoLang VM
+        // init that can't run inside a tokio runtime.
         let mut s = session_at(path.clone());
         s.clear();
-        // Build a tool on the surviving shell thread and run it — if the
-        // thread died, this errors with "shell thread has exited".
+        // Build a tool on the surviving shell thread and run it via a one-shot
+        // runtime (mirrors how the sync REPL drives async tool calls).
         let tool = AshCommandTool::new("pwd", "print cwd", s.shell_thread.sender());
-        let result = tool.execute(&serde_json::Value::Null).await;
+        let result = block_on_async(async {
+            tool.execute(&serde_json::Value::Null).await
+        });
         assert!(result.is_ok(), "tool should still work after clear: {:?}", result);
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -664,5 +686,24 @@ mod tests {
         assert_eq!(reloaded[0].role, "user");
         assert_eq!(reloaded[1].role, "assistant");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── register_all (Plan 029) ────────────────────────────────────────
+
+    #[test]
+    fn registry_has_many_commands_not_just_six() {
+        // register_ash_tools now reads every command from the registry, so
+        // this count is the lower bound on how many tools the agent gets.
+        let sigs = crate::shell::Shell::new().registry().params();
+        assert!(
+            sigs.len() > 6,
+            "registry should expose far more than the old hardcoded 6, got {}",
+            sigs.len()
+        );
+        // Spot-check that key commands are present (the old hardcoded set).
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        for key in &["pwd", "ls", "cat", "cd", "echo", "grep"] {
+            assert!(names.contains(key), "registry should include '{key}'");
+        }
     }
 }
