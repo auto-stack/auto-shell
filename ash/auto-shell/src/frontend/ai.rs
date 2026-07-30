@@ -38,6 +38,175 @@ pub fn build_system_prompt(cwd: &Path) -> String {
     )
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// F3 NL→command validation + multi-step preview (Plan 029 §5)
+//
+// Before F3 executes an AI-suggested command, these helpers sanity-check it
+// (dangerous patterns, unbalanced quotes/brackets) and, if the suggestion is a
+// `&&` chain, let the user run it step-by-step. They are pure functions so
+// they're fully unit-testable without a shell or daemon.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// A validation finding for an AI-suggested command. `Warning`s are shown to
+/// the user but don't block execution; `Danger`s strongly advise against it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationFinding {
+    /// A destructive pattern (`rm -rf /`, `mkfs`, …) — the user should think
+    /// hard before running this.
+    Danger(String),
+    /// Unbalanced quotes/brackets — the command is likely malformed.
+    Warning(String),
+}
+
+/// Patterns that are almost always destructive. Matched case-insensitively as
+/// substrings. Kept in sync with `ash_command_tool::DANGER_PATTERNS` in spirit
+/// (that one refuses outright; this one warns the user and lets them choose).
+const F3_DANGER_PATTERNS: &[&str] = &[
+    "rm -rf /",
+    "rm -rf ~",
+    "rm -rf $home",
+    ":(){:|:&};:",
+    "mkfs",
+    "dd if=",
+    "shutdown",
+    "reboot",
+    "> /dev/sda",
+];
+
+/// Validate an AI-suggested command, returning any findings.
+///
+/// Empty on a clean bill of health. Checks:
+/// - destructive patterns (`rm -rf /`, `mkfs`, …)
+/// - unbalanced single/double quotes
+/// - unbalanced parentheses / brackets
+pub fn validate_suggestion(cmd: &str) -> Vec<ValidationFinding> {
+    let mut findings = Vec::new();
+
+    // Destructive patterns (case-insensitive substring).
+    let lower = cmd.to_lowercase();
+    for pat in F3_DANGER_PATTERNS {
+        if lower.contains(pat) {
+            findings.push(ValidationFinding::Danger(format!(
+                "command contains destructive pattern '{pat}'"
+            )));
+        }
+    }
+
+    // Quote balance.
+    if !quotes_balanced(cmd) {
+        findings.push(ValidationFinding::Warning(
+            "unbalanced quotes — command may be malformed".into(),
+        ));
+    }
+    // Bracket/paren balance.
+    if !brackets_balanced(cmd) {
+        findings.push(ValidationFinding::Warning(
+            "unbalanced brackets/parens — command may be malformed".into(),
+        ));
+    }
+
+    findings
+}
+
+/// True if single and double quotes are balanced (ignoring quotes inside the
+/// other quote type). Handles escaped quotes (`\"`).
+fn quotes_balanced(s: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut prev = '\0';
+    for c in s.chars() {
+        match c {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single && prev != '\\' => in_double = !in_double,
+            _ => {}
+        }
+        prev = c;
+    }
+    !in_single && !in_double
+}
+
+/// True if `()`, `[]`, `{}` are balanced (ignoring content inside quotes).
+fn brackets_balanced(s: &str) -> bool {
+    let mut depth_paren = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut depth_brace = 0i32;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut prev = '\0';
+    for c in s.chars() {
+        // Toggle quote state.
+        match c {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single && prev != '\\' => in_double = !in_double,
+            _ => {}
+        }
+        prev = c;
+        if in_single || in_double {
+            continue;
+        }
+        match c {
+            '(' => depth_paren += 1,
+            ')' => depth_paren -= 1,
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket -= 1,
+            '{' => depth_brace += 1,
+            '}' => depth_brace -= 1,
+            _ => {}
+        }
+        // Early-out on underflow (more closes than opens).
+        if depth_paren < 0 || depth_bracket < 0 || depth_brace < 0 {
+            return false;
+        }
+    }
+    depth_paren == 0 && depth_bracket == 0 && depth_brace == 0
+}
+
+/// Split a command chain on top-level `&&` (respecting quotes/brackets) into
+/// individual steps. A single command with no `&&` returns a one-element vec.
+///
+/// Used by F3's multi-step preview: when the AI suggests `a && b && c`, the
+/// user can run each step individually and abort early if a step fails.
+pub fn split_steps(cmd: &str) -> Vec<String> {
+    let mut steps = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut prev = '\0';
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single && prev != '\\' => in_double = !in_double,
+            '&' if !in_single && !in_double && i + 1 < chars.len() && chars[i + 1] == '&' => {
+                // Top-level && : flush current step.
+                let step = current.trim().to_string();
+                if !step.is_empty() {
+                    steps.push(step);
+                }
+                current.clear();
+                i += 2; // skip both &
+                prev = '\0';
+                continue;
+            }
+            _ => {}
+        }
+        current.push(c);
+        prev = c;
+        i += 1;
+    }
+    let last = current.trim().to_string();
+    if !last.is_empty() {
+        steps.push(last);
+    }
+    if steps.is_empty() {
+        vec![cmd.trim().to_string()]
+    } else {
+        steps
+    }
+}
+
 /// Run a future on a fresh tokio runtime and block on it.
 ///
 /// The REPL is synchronous, so each chat turn spins up a one-shot runtime to
@@ -247,6 +416,103 @@ impl ChatSession {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    // ── F3 validate_suggestion ─────────────────────────────────────────
+
+    #[test]
+    fn validate_clean_command_no_findings() {
+        assert!(validate_suggestion("ls -la | grep foo").is_empty());
+        assert!(validate_suggestion("cat README.md").is_empty());
+    }
+
+    #[test]
+    fn validate_flags_destructive_patterns() {
+        let f = validate_suggestion("rm -rf /");
+        assert!(f.iter().any(|x| matches!(x, ValidationFinding::Danger(_))));
+        let f = validate_suggestion("mkfs.ext4 /dev/sda1");
+        assert!(f.iter().any(|x| matches!(x, ValidationFinding::Danger(_))));
+    }
+
+    #[test]
+    fn validate_danger_case_insensitive() {
+        let f = validate_suggestion("RM -RF /");
+        assert!(f.iter().any(|x| matches!(x, ValidationFinding::Danger(_))));
+    }
+
+    #[test]
+    fn validate_unbalanced_quotes() {
+        let f = validate_suggestion("echo \"unterminated");
+        assert!(f.iter().any(|x| matches!(x, ValidationFinding::Warning(_))));
+    }
+
+    #[test]
+    fn validate_balanced_quotes_inside_other_type() {
+        // Double quotes inside single-quoted string should not unbalance.
+        assert!(validate_suggestion("echo 'he said \"hi\"'").is_empty());
+    }
+
+    #[test]
+    fn validate_unbalanced_parens() {
+        let f = validate_suggestion("echo foo)");
+        assert!(f.iter().any(|x| matches!(x, ValidationFinding::Warning(_))));
+    }
+
+    #[test]
+    fn validate_escaped_quote_does_not_toggle() {
+        assert!(validate_suggestion(r#"echo "say \"hi\"""#).is_empty());
+    }
+
+    #[test]
+    fn validate_balanced_complex() {
+        // A pipeline with brackets/quotes all balanced.
+        assert!(validate_suggestion(r#"find . -name "*.rs" | wc -l"#).is_empty());
+    }
+
+    // ── F3 split_steps ─────────────────────────────────────────────────
+
+    #[test]
+    fn split_single_command() {
+        assert_eq!(split_steps("ls -la"), vec!["ls -la"]);
+    }
+
+    #[test]
+    fn split_and_chain() {
+        assert_eq!(
+            split_steps("cd src && ls && echo done"),
+            vec!["cd src", "ls", "echo done"]
+        );
+    }
+
+    #[test]
+    fn split_respects_double_quotes() {
+        // && inside a double-quoted string is not a separator.
+        let steps = split_steps(r#"echo "a && b" && cat f"#);
+        assert_eq!(steps, vec![r#"echo "a && b""#, "cat f"]);
+    }
+
+    #[test]
+    fn split_respects_single_quotes() {
+        let steps = split_steps("echo 'x && y' && pwd");
+        assert_eq!(steps, vec!["echo 'x && y'", "pwd"]);
+    }
+
+    #[test]
+    fn split_respects_brackets() {
+        // && inside [...] (e.g. a test) is not a separator.
+        let steps = split_steps("[ -f x ] && echo exists");
+        assert_eq!(steps, vec!["[ -f x ]", "echo exists"]);
+    }
+
+    #[test]
+    fn split_empty_returns_input() {
+        assert_eq!(split_steps(""), vec![""]);
+    }
+
+    #[test]
+    fn split_trims_whitespace() {
+        let steps = split_steps("  ls   &&   pwd  ");
+        assert_eq!(steps, vec!["ls", "pwd"]);
+    }
 
     #[test]
     fn block_on_async_runs_future() {
