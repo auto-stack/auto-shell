@@ -994,8 +994,9 @@ fn read_history_file(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
-/// Render tool-call args as a brief one-line summary (for F4 StreamEvent).
-fn brief_args(args: &serde_json::Value) -> String {
+/// Render tool-call args as a brief one-line summary (for StreamEvent rendering).
+/// Shared by F4 (handle_chat_turn) and `ash ask`.
+pub fn brief_args(args: &serde_json::Value) -> String {
     let s = match args {
         serde_json::Value::Null => String::new(),
         serde_json::Value::Object(map) => {
@@ -1015,7 +1016,8 @@ fn brief_args(args: &serde_json::Value) -> String {
 }
 
 /// Render a tool result as a brief one-line summary (first non-empty line).
-fn brief_result(result: &str) -> String {
+/// Shared by F4 (handle_chat_turn) and `ash ask`.
+pub fn brief_result(result: &str) -> String {
     let first_line = result.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     brief_truncate(first_line.trim(), 80)
 }

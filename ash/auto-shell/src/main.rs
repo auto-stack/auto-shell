@@ -55,6 +55,12 @@ fn main() -> Result<()> {
                 let smart_args: Vec<String> = args[i + 1..].to_vec();
                 return auto_shell::smart_command::cli::run(&smart_args);
             }
+            // Plan 029 §6: `ash ask "<nl>"` — NL→AutoLang. Generates and runs
+            // an AutoLang script via the cloud model + eval_auto tool.
+            "ask" => {
+                let ask_args: Vec<String> = args[i + 1..].to_vec();
+                return auto_shell::frontend::ask::run(&ask_args);
+            }
             "--json" => {
                 // Already handled by the global pre-scan; skip here.
                 i += 1;

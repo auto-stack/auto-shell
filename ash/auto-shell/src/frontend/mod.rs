@@ -17,3 +17,4 @@ pub mod term;
 pub mod completions_reedline;
 pub mod ai;
 pub mod ai_context;
+pub mod ask;
