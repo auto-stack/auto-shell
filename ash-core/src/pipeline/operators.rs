@@ -297,7 +297,10 @@ pub fn apply(op: &PipelineOp, data: &Value) -> Value {
 ///
 /// `.user.name` splits on `.` and descends through nested `Obj`s. Returns
 /// `Value::Nil` as soon as any segment is missing or non-Obj.
-fn get_field(item: &Value, field: &str) -> Value {
+///
+/// Plan 031 M1.0: promoted to `pub` so the lazy pipeline (`pipeline::lazy`)
+/// can reuse the same field-access logic instead of duplicating it.
+pub fn get_field(item: &Value, field: &str) -> Value {
     let mut cur = item.clone();
     for part in field.split('.') {
         cur = match cur {
