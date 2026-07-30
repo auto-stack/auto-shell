@@ -9,6 +9,7 @@ use crate::shell::Shell;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::{Array, Obj, Value};
 use miette::Result;
+use crate::cmd::format::Format;
 
 pub struct ToTomlCommand;
 
@@ -38,13 +39,15 @@ impl Command for ToTomlCommand {
 
     fn run_atom(
         &self,
-        args: &ParsedArgs,
+        _args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        _shell: &mut Shell,
     ) -> Result<AtomPipeline> {
-        let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
-        let legacy_out = self.run(args, legacy_in, shell)?;
-        Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy_out))
+        // Plan 031 M0.3: operate directly on AtomPipeline via the Format trait
+        // instead of routing through the lossy atom_to_pipeline_data bridge.
+        let value = input.into_value().unwrap_or(Value::Nil);
+        let toml = crate::cmd::format::TomlFormat.serialize(&value);
+        Ok(AtomPipeline::text(toml))
     }
 }
 

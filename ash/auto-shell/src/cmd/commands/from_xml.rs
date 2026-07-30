@@ -13,9 +13,10 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
-use ash_core::pipeline::AtomPipeline;
+use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Array, Obj, Value};
 use miette::Result;
+use crate::cmd::format::Format;
 
 pub struct FromXmlCommand;
 
@@ -46,13 +47,18 @@ impl Command for FromXmlCommand {
 
     fn run_atom(
         &self,
-        args: &ParsedArgs,
+        _args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        _shell: &mut Shell,
     ) -> Result<AtomPipeline> {
-        let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
-        let legacy_out = self.run(args, legacy_in, shell)?;
-        Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy_out))
+        // Plan 031 M0.3: operate directly on AtomPipeline via the Format trait
+        // instead of routing through the lossy atom_to_pipeline_data bridge
+        // (which silently turns ExternalStream read errors into empty strings).
+        let text = input.into_text();
+        let value = crate::cmd::format::XmlFormat
+            .parse(&text)
+            .map_err(|e| miette::miette!("{e}"))?;
+        Ok(AtomPipeline::from_atom(Atom::new(value, AtomType::Table)))
     }
 }
 

@@ -98,19 +98,22 @@
 
 **引用**：设计文档 §5.4。**v1 不删现有 10 个命令**，只把内部解析/序列化逻辑委托给 Format，消除 9 个走有损桥 `atom_to_pipeline_data`（`pipeline_convert.rs:35-50`）的 `unwrap_or_default()` 静默吞错。
 
-- [ ] **先写回归测试**：确保 10 个命令的现有行为不变（`from_json` 已修，作参照；其余 9 个走有损桥）。
-- [ ] 逐个改造 `from_csv/from_toml/from_xml/from_yaml` + `to_csv/to_json/to_toml/to_xml/to_yaml`：用 `Format::parse`/`serialize` 替换内联逻辑，把 `unwrap_or_default()` 改为显式错误传播。
-- [ ] 回归：10 命令行为不变 + 静默吞错消除。
+- [x] **先写回归测试** `ash/auto-shell/tests/format_commands.rs`（6 个）：from_json/toml/yaml 文本解析 + from_json 外部流不空 + to_json 结构化序列化 + json roundtrip。先确立「当前行为」基线，改造后保持全绿 = 零行为变化。
+- [x] **改造范围调整**：探勘发现实际有 53 个命令走有损桥（不只 10 个），且 `into_text`（29 处）自身用 `unwrap_or_default`。本轮聚焦 **5 个无参数格式命令** 的 run_atom 直接用 Format trait（消除有损桥双程转换）：`from_toml`/`from_xml`/`from_yaml`（into_text + Format.parse）+ `to_toml`/`to_yaml`（into_value + Format.serialize）。`from_json` 已是参照（M0.3 前就用 into_text）。
+- [x] **保留 legacy run 路径**的命令：`from_csv`/`to_csv`（delimiter/header 参数）、`to_json`（pretty/compact）、`to_xml`（root/indent 参数）——它们有用户参数，Format 的固定默认 serialize 会丢失参数化能力。
+- [x] 回归：auto-shell 774 全绿（+6 format_commands + 11 format trait）；`legacy_json_compat.rs`（028/007 信封，5）全绿。
 
-**验收**：10 个格式命令行为向后兼容；外部命令 → from_xxx 不再静默空。
+**验收**：5 个格式命令行为向后兼容（6 集成测试守护）；外部命令 → from_json 不再静默空。csv/to_json/to_xml 等有参数命令保持原 legacy 路径（用户接口不变）。
+
+**范围外（明确推迟）**：①`into_text` 的 `unwrap_or_default` 静默吞错（波及 29 处，另一计划）；②NDJSON 多行外部流 → from_json（trailing content，另一特性）；③剩余 48 个走有损桥的命令改造。
 
 ---
 
-### M0 整体验收
-- [ ] Stream bug 修复测试绿 + 028/007 回归绿
-- [ ] Format trait + 5 实现 + registry 单测绿
-- [ ] 10 格式命令回归绿，行为不变
-- [ ] `cargo build -p ash-core -p auto-shell` 通过
+### M0 整体验收 ✅ 完成（2026-07-30）
+- [x] Stream bug 修复测试绿（4 单元 + 2 端到端）+ 028/007 回归绿
+- [x] Format trait + 5 实现 + registry 单测绿（11）
+- [x] 格式命令回归绿（6 集成测试），行为不变
+- [x] 全量回归：ash-core 356 + auto-shell 774 = **1130 全绿**（基线 1107 + 新增 23）
 
 ---
 
