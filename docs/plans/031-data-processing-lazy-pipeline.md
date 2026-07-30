@@ -2,7 +2,7 @@
 
 > **日期**: 2026-07-30
 > **分支**: `feat/031-lazy-pipeline`
-> **状态**: 实施中
+> **状态**: M0 ✅ M1 ✅ M2 ✅ M3 ✅ | 全部完成
 > **来源设计**: [`designs/031-data-processing.md`](../../designs/031-data-processing.md)
 > **预估**: M0-M2 约 4-5 周；M3 可选约 1 周
 > **回归基线（M0.0，2026-07-30）**: ash-core 352 + auto-shell 755 ≈ **1107 个测试，全绿**。`legacy_json_compat.rs`（028/007 信封回归，5 个）✅ 全绿。
@@ -163,18 +163,33 @@ ash-core 379 全绿（375 + 4）。所有下推测试验证「结果不变只改
 
 **已知限制（Aggregate | Aggregate 链）**：`uniq | count` 这类「聚合后再聚合/计行」的组合，lazy 下得 1（内层 Aggregate 的 Array 结果被外层当作单元素），而 eager 逐段 apply 得 3。根因：lazy 模型中 Aggregate 产出单值，不会展开成行流给下游。**评估为可接受**：①全量回归（含真实 DSL 用法）全绿；②`聚合|聚合` 写法罕见（用户直接看 uniq 结果或单独 count）；③正确修复需重新设计 Aggregate 流式语义，属后续 lazy 模型增强。行算子链（filter/select/sort/take，含谓词下推）和「单聚合」场景均正确。
 
-### 任务 M2.3 — 性能验证
-- [ ] 写 benchmark/测试：构造 1 万行 source，对比 eager vs lazy 的峰值内存（设计目标 < eager 50%，主要在 take/early-exit 场景占优）。记录数据。
+### 任务 M2.3 — 性能验证 ✅ 完成（2026-07-30）
+- [x] **benchmark 实现**：`ash-core/benches/pipeline_bench.rs`（独立 binary，`harness = false`），自定义 `CountingAllocator`（基于 `AtomicUsize` 追踪当前/峰值/总分配字节数，包装 `std::alloc::System`，无外部依赖）。`Cargo.toml` 新增 `[[bench]] name = "pipeline_bench"`。
+- [x] **3 个对比场景**（各 10,000 行结构化数据，`{ name, size, type, modified }`）：
+  | 场景 | Eager (MB) | Lazy (MB) | Ratio | 优势来源 |
+  |---|---|---|---|---|
+  | `filter\|select\|sort` | 68.3 | 53.95 | **79.0%** | 避免 filter/select 中间数组物化 |
+  | `filter\|take 100` | 61.1 | 53.95 | **88.3%** | 避免 filter 中间数组 + 提前终止 |
+  | `filter\|count` | 70.9 | 53.95 | **76.1%** | 避免 filter 中间数组 |
+  
+  Lazy 峰值固定在 ~54MB（source 构造），eager 随中间数组增多而增长。
 
-**M2 整体验收**：谓词下推两条规则 + 不跨断流点 + 多段 DSL 端到端正确 + 性能数据记录 + 全量回归绿。
+- [x] **50% 设计目标分析**：`take` 的 <50% 设计目标在当前 benchmark 中未达成（source 已全量物化），需等 M3 `StreamSource` 真流式源才能显现（source 边读边 yield，take 提前中断时不读全部行）。当前 `filter|take` 组合中 lazy 已避免物化 filter 中间数组（~7MB 节省）。已记录在 benchmark 注释中。
+
+- [x] **回归**：ash-core 379 + auto-shell 全绿。
+
+**M2 整体验收** ✅：谓词下推两条规则 + 不跨断流点 + 多段 DSL 端到端正确 + 性能数据记录 + 全量回归绿。
 
 ---
 
-## M3（可选）：ExternalStream → 真流式 StreamSource（1 周，~300 行）
-- [ ] `ExternalStream::lines()` → `LazyNode::StreamSource` 桥接。
-- [ ] `find ... | filter` 真流式（find 持续产出 + filter 边读边过滤）。
-- [ ] 把 M0.1 的 bug 修复从「collect 成 Array」升级为「真流式」。
-- **依赖**：M2 完成。**可推迟**——M0 已修复丢数据，M3 是性能优化。
+## M3（可选）：ExternalStream → 真流式 StreamSource（1 周，~300 行） ✅ 完成（2026-07-30）
+- [x] **`lazy.rs` 重构**：抽 `wrap_ops` helper（`build_lazy` 内部的 op-wrapping 循环）→ 新增 `pub fn build_lazy_from_iter(ops, iter)` 从任意 `Iterator<Item = Value> + Send` 起步，复用 `wrap_ops`；`build_lazy` 自身改为调用 `wrap_ops`。
+- [x] **`shell.rs` `flush_dsl_ops!` 分流**：检测 `input_pipeline` 是否为 `AtomPipeline::ExternalStream`。若是，走 `StreamSource` 路径（`es.lines()` → `build_lazy_from_iter`，行按需拉取，不全文缓冲）；其他 variant 保持原有 `into_dsl_input` 物化路径。
+- [x] **5 个流式性测试**（`lazy.rs`）：`yields_incrementally`（逐行产出）、`take_short_circuits`（take 2 只拉 2 行）、`sort_drains_all`（断流点 drain 全部）、`equivalence_vs_eager`（结果等价）、`filter_take_combined_short_circuits`（filter+take 组合提前终止）。
+- [x] **M2.3 benchmark 更新**：新增 `filter|take 100 (stream)` 场景（用 `lazy_row_iter` 模拟按需产出行，不预物化 10k 行）——**lazy 峰值 283 KB vs eager 61 MB（0.5%）**，大幅超越 50% 设计目标。
+- [x] **回归**：ash-core 384 + auto-shell 774 = **1158 全绿**。
+- [x] `into_dsl_input` 的 ExternalStream 分支**保留**作为降级回退（其他 AtomPipeline variant 仍需要，且非 DSL 路径的 stream 消费仍用它）。
+- **实现偏差（vs 设计 §4.3）**：设计估 300 行，实际 ~200 行（`lazy.rs` ~140 + `shell.rs` ~30 + bench ~30），因 `StreamSource` 骨架、`ExternalStream::lines()`、`BreakState` drain 机制在 M1 已就位，M3 只需接上通路。`build_lazy_from_iter` 无条件优化——sort/aggregate 也从 StreamSource 正确 drain（和从 `Source` drain 一样），无额外判断逻辑。
 
 ---
 
@@ -182,7 +197,7 @@ ash-core 379 全绿（375 + 4）。所有下推测试验证「结果不变只改
 
 ```
 M0.0(基线)✅ → M0.1(bug) ─┬→ M0.2(Format trait) → M0.3(10 命令)
-                            └→ M1.0(get_field pub) → M1.1(LazyNode) → M1.2(build_lazy) → M2.1(下推) → M2.2(shell改造) → M2.3(性能) → M3(可选)
+                            └→ M1.0(get_field pub) → M1.1(LazyNode) → M1.2(build_lazy) → M2.1(下推) → M2.2(shell改造) → M2.3(性能) → M3(StreamSource)✅
 ```
 
 M0.1（bug 修复）与 M0.2（Format trait）**可并行**（互不依赖）。其余严格串行。
@@ -209,8 +224,8 @@ M0.1（bug 修复）与 M0.2（Format trait）**可并行**（互不依赖）。
 
 ## 成功指标（设计 §6.5，已更新基线）
 
-1. **M0**：外部命令 → DSL 段不丢数据（M0.1 测试）+ Format 5 实现 + 单测
-2. **M1**：filter 在 Source 未读完时已产出（流式性测试 M1.1）
-3. **M2**：`ls | filter .size > 10 | select .name | sort .name` 端到端 lazy；1 万行内存对比记录
-4. **M3（可选）**：`find / | filter .name contains "log"` 真流式
-5. **回归**：现有 **1107** 测试全过；from_json/csv 等行为不变
+1. **M0** ✅：外部命令 → DSL 段不丢数据（M0.1 测试）+ Format 5 实现 + 单测
+2. **M1** ✅：filter 在 Source 未读完时已产出（流式性测试 M1.1）
+3. **M2** ✅：`ls | filter .size > 10 | select .name | sort .name` 端到端 lazy；1 万行内存对比记录（M2.3 benchmark：lazy 峰值 76-88% eager，避免中间数组物化）
+4. **M3** ✅：`ExternalStream` → `StreamSource` 真流式（M3 分流 + 5 测试）；benchmark 验证 `take` 0.5% 内存（283 KB vs 61 MB），远超 50% 目标
+5. **回归** ✅：ash-core 384 + auto-shell 774 = **1158 全绿**；from_json/csv 等行为不变

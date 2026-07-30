@@ -1115,16 +1115,46 @@ impl Shell {
 
         // Flush accumulated DSL stages through the lazy pipeline, writing the
         // resulting Value back into `input_pipeline` as a structured Atom.
+        //
+        // Plan 031 M3: when the source is an ExternalStream (output from an
+        // external command), build a streaming lazy pipeline via
+        // `build_lazy_from_iter` instead of first buffering the entire output
+        // into memory via `into_dsl_input`. Streaming operators (Filter, Take,
+        // Select) can then short-circuit without reading the full stream.
+        // Pipeline-breaking operators (SortBy, aggregate) still drain the
+        // stream internally and produce equivalent results.
         macro_rules! flush_dsl_ops {
             () => {{
                 if !pending_dsl_ops.is_empty() {
                     let ops = std::mem::take(&mut pending_dsl_ops);
-                    let source = match input_pipeline.take() {
-                        Some(p) => p.into_dsl_input(),
-                        None => auto_val::Value::Array(auto_val::Array::new()),
+                    let pipeline = input_pipeline.take();
+
+                    let is_external_stream =
+                        matches!(&pipeline, Some(AtomPipeline::ExternalStream(_)));
+
+                    let result_val = if is_external_stream {
+                        // Streaming path: wrap ExternalStream::lines() as a
+                        // StreamSource — rows are pulled on demand, not
+                        // buffered upfront.
+                        let es = match pipeline.unwrap() {
+                            AtomPipeline::ExternalStream(es) => es,
+                            _ => unreachable!(),
+                        };
+                        let iter = es
+                            .lines()
+                            .filter_map(|r| r.ok())
+                            .map(|line| auto_val::Value::str(&line));
+                        ash_core::pipeline::lazy::build_lazy_from_iter(&ops, iter).collect()
+                    } else {
+                        // Materialized path: existing behaviour for Atom,
+                        // Stream, Text, Empty, and None sources.
+                        let source = match pipeline {
+                            Some(p) => p.into_dsl_input(),
+                            None => auto_val::Value::Array(auto_val::Array::new()),
+                        };
+                        ash_core::pipeline::lazy::build_lazy(&ops, source).collect()
                     };
-                    let result_val =
-                        ash_core::pipeline::lazy::build_lazy(&ops, source).collect();
+
                     input_pipeline = Some(ash_core::pipeline::AtomPipeline::from_atom(
                         ash_core::pipeline::Atom::new(
                             result_val,

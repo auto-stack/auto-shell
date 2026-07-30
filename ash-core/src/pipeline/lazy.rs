@@ -120,9 +120,10 @@ impl LazyNode {
 /// `Map`/`SkipBack`/`Reverse`) have no lazy node yet — they fall back to eager
 /// `apply`: the lazy chain built so far is collected, the unsupported op is
 /// applied eagerly, and the remaining ops continue lazily from that point.
-pub fn build_lazy(ops: &[PipelineOp], source: Value) -> LazyNode {
-    let mut node = LazyNode::from_vec(source_to_rows(source));
-
+/// Wrap a chain of [`PipelineOp`]s around an existing [`LazyNode`], building
+/// a pull-based iterator tree. Shared by [`build_lazy`] (materialized source)
+/// and [`build_lazy_from_iter`] (streaming source).
+fn wrap_ops(mut node: LazyNode, ops: &[PipelineOp]) -> LazyNode {
     for op in ops {
         node = match op {
             PipelineOp::Filter { field, op, value } => LazyNode::Filter {
@@ -183,6 +184,27 @@ pub fn build_lazy(ops: &[PipelineOp], source: Value) -> LazyNode {
     // Plan 031 M2.1: apply the predicate-pushdown optimization pass. Result of
     // collect() is unchanged; only execution order is improved.
     predicate_pushdown(node)
+}
+
+/// Build a lazy pipeline from a materialized `Value` source.
+pub fn build_lazy(ops: &[PipelineOp], source: Value) -> LazyNode {
+    let node = LazyNode::from_vec(source_to_rows(source));
+    wrap_ops(node, ops)
+}
+
+/// Build a lazy pipeline from a streaming iterator source (Plan 031 M3).
+///
+/// Unlike [`build_lazy`], this does not materialize the full source upfront.
+/// Each row is pulled from `iter` on demand — streaming operators (`Filter`,
+/// `Take`, `Select`) can short-circuit without consuming the whole iterator.
+/// Pipeline-breaking operators (`SortBy`, `Aggregate`) still drain the full
+/// stream internally (via [`BreakState`]), returning equivalent results.
+pub fn build_lazy_from_iter(
+    ops: &[PipelineOp],
+    iter: impl Iterator<Item = Value> + Send + 'static,
+) -> LazyNode {
+    let node = LazyNode::StreamSource(Box::new(iter));
+    wrap_ops(node, ops)
 }
 
 /// Extract a `Vec<Value>` of rows from a source Value.
@@ -836,6 +858,174 @@ mod tests {
         let node = LazyNode::StreamSource(Box::new(iter));
         if let Value::Array(a) = node.collect() {
             assert_eq!(a.len(), 2);
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    // ── Plan 031 M3: build_lazy_from_iter streaming tests ────────
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Helper: creates a finite iterator that records how many items were
+    /// actually pulled before being dropped. The counter is shared via `Arc`
+    /// so tests can inspect it after the iterator is moved into the pipeline.
+    struct CountingIter {
+        remaining: Vec<Value>,
+        pulled: Arc<AtomicUsize>,
+    }
+
+    impl CountingIter {
+        fn new(items: Vec<Value>) -> (Self, Arc<AtomicUsize>) {
+            let pulled = Arc::new(AtomicUsize::new(0));
+            (
+                CountingIter {
+                    remaining: items,
+                    pulled: pulled.clone(),
+                },
+                pulled,
+            )
+        }
+    }
+
+    impl Iterator for CountingIter {
+        type Item = Value;
+        fn next(&mut self) -> Option<Value> {
+            if self.remaining.is_empty() {
+                return None;
+            }
+            self.pulled.fetch_add(1, Ordering::SeqCst);
+            Some(self.remaining.remove(0))
+        }
+    }
+
+    #[test]
+    fn stream_source_yields_incrementally() {
+        let (iter, _pulled) = CountingIter::new(vec![
+            row("a", 1),
+            row("b", 2),
+            row("c", 3),
+        ]);
+        let node = build_lazy_from_iter(&[], iter);
+        let mut node_iter = node;
+        let first = node_iter.next().unwrap();
+        assert_eq!(get_field(&first, "name"), Value::str("a"));
+        let second = node_iter.next().unwrap();
+        assert_eq!(get_field(&second, "name"), Value::str("b"));
+        let third = node_iter.next().unwrap();
+        assert_eq!(get_field(&third, "name"), Value::str("c"));
+        assert!(node_iter.next().is_none());
+    }
+
+    #[test]
+    fn stream_source_take_short_circuits() {
+        let (iter, pulled) = CountingIter::new(
+            (0..10)
+                .map(|i| row(&format!("item{}", i), i))
+                .collect(),
+        );
+        let ops = vec![PipelineOp::Take(2)];
+        let node = build_lazy_from_iter(&ops, iter);
+        let result = node.collect();
+        assert_eq!(pulled.load(Ordering::SeqCst), 2, "take(2) should only pull 2 items");
+        if let Value::Array(a) = &result {
+            assert_eq!(a.len(), 2);
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn stream_source_sort_drains_all() {
+        let (iter, pulled) = CountingIter::new(vec![
+            row("c", 3),
+            row("a", 1),
+            row("b", 2),
+        ]);
+        let ops = vec![PipelineOp::SortBy {
+            field: "name".into(),
+            descending: false,
+        }];
+        let node = build_lazy_from_iter(&ops, iter);
+        let result = node.collect();
+        assert_eq!(pulled.load(Ordering::SeqCst), 3, "sort should drain all items");
+        if let Value::Array(a) = &result {
+            let names: Vec<Value> = a
+                .iter()
+                .map(|v| get_field(v, "name"))
+                .collect();
+            assert_eq!(
+                names,
+                vec![Value::str("a"), Value::str("b"), Value::str("c")]
+            );
+        } else {
+            panic!("expected Array");
+        }
+    }
+
+    #[test]
+    fn stream_source_equivalence_vs_eager() {
+        let rows: Vec<Value> = vec![
+            row("c", 10),
+            row("a", 5),
+            row("d", 10),
+            row("b", 3),
+        ];
+        let ops = vec![
+            PipelineOp::Filter {
+                field: "size".into(),
+                op: CmpOp::Ge,
+                value: Value::Int(5),
+            },
+            PipelineOp::Select {
+                fields: vec!["name".into(), "size".into()],
+            },
+            PipelineOp::SortBy {
+                field: "name".into(),
+                descending: false,
+            },
+        ];
+
+        let iter = rows.clone().into_iter();
+        let lazy_result = build_lazy_from_iter(&ops, iter).collect();
+
+        let source = Value::Array(Array::from_vec(rows));
+        let mut current = source;
+        for op in &ops {
+            current = operators::apply(op, &current);
+        }
+        let eager_result = current;
+
+        assert_eq!(lazy_result, eager_result);
+    }
+
+    #[test]
+    fn stream_source_filter_take_combined_short_circuits() {
+        let (iter, pulled) = CountingIter::new(vec![
+            row("skip1", 0),
+            row("skip2", 0),
+            row("match", 5),
+            row("never1", 10),
+            row("never2", 10),
+        ]);
+        let ops = vec![
+            PipelineOp::Filter {
+                field: "size".into(),
+                op: CmpOp::Gt,
+                value: Value::Int(0),
+            },
+            PipelineOp::Take(1),
+        ];
+        let node = build_lazy_from_iter(&ops, iter);
+        let result = node.collect();
+        assert_eq!(pulled.load(Ordering::SeqCst), 3, "should pull 3 items (2 skip + 1 match)");
+        if let Value::Array(a) = &result {
+            assert_eq!(a.len(), 1);
+            assert_eq!(
+                get_field(&a.get(0).unwrap(), "name"),
+                Value::str("match")
+            );
         } else {
             panic!("expected Array");
         }
