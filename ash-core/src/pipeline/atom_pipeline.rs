@@ -185,6 +185,33 @@ impl AtomPipeline {
         }
     }
 
+    /// Extract the `Value` a structured-pipeline DSL stage should operate on.
+    ///
+    /// This is the input source for `Shell::execute_pipeline_with_auto`'s DSL
+    /// dispatch (filter/sort/count/uniq/...). Critically, unlike `into_value`
+    /// (which returns the whole external output as a single `Value::Str`), this
+    /// splits an `ExternalStream` into its **lines as a `Value::Array`** so that
+    /// row-oriented operators (`count`, `sort`, `uniq`, `reverse`, ...) see the
+    /// rows instead of silently dropping them to an empty array.
+    ///
+    /// Plan 031 M0.1 — fixes the silent-data-loss bug where `printf '...' | count`
+    /// returned `0` because the external command's stream was discarded.
+    pub fn into_dsl_input(self) -> Value {
+        use auto_val::Array;
+        match self {
+            AtomPipeline::Atom(a) => a.value,
+            AtomPipeline::Stream(s) => s.into_atom_list().value,
+            AtomPipeline::ExternalStream(es) => {
+                // Split the streamed output into one `Value` per line, matching
+                // how a list of rows would flow through `operators::apply`.
+                let text = es.read_all().unwrap_or_default();
+                Value::str_array(text.lines().map(|l| l.to_string()).collect::<Vec<_>>())
+            }
+            AtomPipeline::Text(s) => Value::str(&s),
+            AtomPipeline::Empty => Value::Array(Array::new()),
+        }
+    }
+
     /// Collect a Stream variant into an Atom (no-op for other variants).
     pub fn collect_stream(self) -> Self {
         match self {
@@ -299,5 +326,67 @@ mod tests {
     fn test_atom_pipeline_empty_into_value() {
         let p = AtomPipeline::empty();
         assert!(p.into_value().is_none());
+    }
+
+    // ── Plan 031 M0.1: into_dsl_input (Stream bug fix) ──
+    //
+    // `into_dsl_input` extracts the `Value` a DSL stage (filter/sort/count/...)
+    // should operate on. The critical regression it fixes: an `ExternalStream`
+    // (output of an external command like `git ls-files | sort .field`) used to
+    // be silently dropped to an empty array by the DSL dispatch in
+    // `Shell::execute_pipeline_with_auto`, losing all data. It must instead be
+    // split into lines as a `Value::Array` so operators (count/sort/uniq/...)
+    // see the rows.
+
+    #[test]
+    fn dsl_input_external_stream_becomes_line_array() {
+        // `sort` is available cross-platform (System32\sort.exe on Windows,
+        // coreutils on Unix) and already used by external_stream.rs tests.
+        // It reads N lines from stdin and emits N sorted lines, giving a
+        // reliable multi-line ExternalStream without shell-specific commands.
+        use std::process::{Command, Stdio};
+        let child = Command::new("sort")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("sort should spawn");
+        let es = ExternalStream::new_with_stdin(child, "cherry\napple\nbanana\n".to_string());
+        let p = AtomPipeline::ExternalStream(es);
+
+        let value = p.into_dsl_input();
+
+        // Must be an Array whose length is the number of emitted lines — NOT
+        // an empty array (the bug) nor a single Value::Str.
+        match value {
+            Value::Array(a) => {
+                assert_eq!(a.len(), 3, "external stream lines must be preserved");
+            }
+            other => panic!("expected Value::Array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dsl_input_atom_passes_value_through() {
+        let p = AtomPipeline::atom(Value::Int(42), AtomType::Nothing);
+        let value = p.into_dsl_input();
+        assert!(matches!(value, Value::Int(42)));
+    }
+
+    #[test]
+    fn dsl_input_text_stays_string() {
+        let p = AtomPipeline::text("hello");
+        let value = p.into_dsl_input();
+        assert!(matches!(value, Value::Str(_)));
+    }
+
+    #[test]
+    fn dsl_input_empty_yields_empty_array() {
+        let p = AtomPipeline::empty();
+        let value = p.into_dsl_input();
+        match value {
+            Value::Array(a) => assert_eq!(a.len(), 0),
+            other => panic!("expected empty Value::Array, got {other:?}"),
+        }
     }
 }

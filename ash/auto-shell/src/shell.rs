@@ -1120,12 +1120,14 @@ impl Shell {
 
             // Plan 320: structured-pipeline DSL stage (filter/sort/select/...)?
             if let Some(op) = ash_core::parser::pipe_stages::parse_pipe_stage(cmd) {
+                // Plan 031 M0.1: extract the DSL input via `into_dsl_input`,
+                // which splits an ExternalStream (and Stream) into lines as a
+                // Value::Array. Previously the match only handled Atom/Text and
+                // silently dropped Stream/ExternalStream/Empty to an empty
+                // array — so `printf '...' | count` returned 0 (data loss).
                 let input_val = match input_pipeline.take() {
-                    Some(ash_core::pipeline::AtomPipeline::Atom(atom)) => atom.value,
-                    // Text pipeline (e.g. from `cat | sort`) — feed as Str so
-                    // text-line operators (uniq) work, matching bash semantics.
-                    Some(ash_core::pipeline::AtomPipeline::Text(s)) => auto_val::Value::str(&s),
-                    _ => auto_val::Value::Array(auto_val::Array::new()),
+                    Some(p) => p.into_dsl_input(),
+                    None => auto_val::Value::Array(auto_val::Array::new()),
                 };
                 let result_val = ash_core::pipeline::operators::apply(&op, &input_val);
                 input_pipeline = Some(ash_core::pipeline::AtomPipeline::from_atom(
