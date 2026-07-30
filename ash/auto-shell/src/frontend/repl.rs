@@ -517,16 +517,42 @@ impl Repl {
         Ok(())
     }
 
-    /// Plan 027: send one chat turn using the current cwd. Mirrors `ask_ai`'s
-    /// runtime pattern (one-shot current-thread tokio runtime).
+    /// Plan 027/029: send one chat turn through the agent's ReAct loop. The
+    /// agent may call ash command tools (pwd/ls/cat/...) mid-turn; tool events
+    /// are rendered inline so the user sees what the agent is doing.
     fn handle_chat_turn(&mut self, user: &str) -> Result<()> {
-        let system = crate::frontend::ai::build_system_prompt(&self.shell.pwd());
+        let on_event: Arc<dyn Fn(auto_ai_agent::agent::StreamEvent) + Send + Sync> = Arc::new(
+            |ev| match ev {
+                auto_ai_agent::agent::StreamEvent::Delta { text } => {
+                    use std::io::Write;
+                    print!("{text}");
+                    let _ = std::io::stdout().flush();
+                }
+                auto_ai_agent::agent::StreamEvent::ToolStart { tool, args } => {
+                    println!("\n  \x1b[2m\u{2699} {tool} {}\x1b[0m", brief_args(&args));
+                }
+                auto_ai_agent::agent::StreamEvent::Tool { tool, result, .. } => {
+                    println!("\n  \x1b[2m\u{2190} {tool}: {}\x1b[0m", brief_result(&result));
+                }
+                auto_ai_agent::agent::StreamEvent::Warning { text } => {
+                    println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m");
+                }
+                auto_ai_agent::agent::StreamEvent::Done { .. } => {} // keep chat output clean
+                auto_ai_agent::agent::StreamEvent::Error { message } => {
+                    println!("\n  [error] {message}");
+                }
+                auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
+                    println!("\n  [cancelled]");
+                }
+            },
+        );
         let session = self.chat.as_mut().expect("chat session initialized in run_chat_loop");
         let result = crate::frontend::ai::block_on_async(
-            session.send_turn_streaming(user, &system),
+            session.send_turn_streaming(user, on_event),
         );
         match result {
             Ok(_full_text) => {
+                println!(); // newline after the streamed reply
                 let _ = session.save();
             }
             Err(e) => {
@@ -903,4 +929,40 @@ fn read_history_file(path: &std::path::Path) -> Vec<String> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| line.to_string())
         .collect()
+}
+
+/// Render tool-call args as a brief one-line summary (for F4 StreamEvent).
+fn brief_args(args: &serde_json::Value) -> String {
+    let s = match args {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Object(map) => {
+            // Show {"key": value, ...} compactly, focusing on string args.
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(k, v)| match v {
+                    serde_json::Value::String(s) => format!("{k}: {s}"),
+                    _ => format!("{k}: {v}"),
+                })
+                .collect();
+            parts.join(", ")
+        }
+        other => other.to_string(),
+    };
+    brief_truncate(&s, 80)
+}
+
+/// Render a tool result as a brief one-line summary (first non-empty line).
+fn brief_result(result: &str) -> String {
+    let first_line = result.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    brief_truncate(first_line.trim(), 80)
+}
+
+/// Truncate to `max` chars, appending an ellipsis if cut.
+fn brief_truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max).collect();
+        format!("{cut}\u{2026}")
+    }
 }

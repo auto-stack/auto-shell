@@ -45,8 +45,9 @@ const DANGER_PATTERNS: &[&str] = &[
 ];
 
 /// A request sent to the dedicated shell thread: the command string plus a
-/// one-shot channel to return the result on. Both are `Send`.
-struct CmdRequest {
+/// one-shot channel to return the result on. Both are `Send`. Public so
+/// callers that hold an [`AshCommandShellThread`] sender can name the type.
+pub struct CmdRequest {
     cmd: String,
     respond: oneshot::Sender<Result<String, ToolError>>,
 }
