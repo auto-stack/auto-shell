@@ -3,9 +3,12 @@
 //! Invoked from `main.rs` when the first CLI arg is `smart`. Supports:
 //! - `ash smart list` — list discovered SmartCommands
 //! - `ash smart run <name> [args...]` — run a command's body with args
-//! - `ash smart "<nl>"` — NLU match (v1 stub: not yet implemented)
+//! - `ash smart "<nl>"` — natural-language routing: the local Ollama model
+//!   picks a command and fills args, then the body runs
 //!
 //! The remaining argv after `smart` is passed here as `args`.
+
+use std::sync::Arc;
 
 use miette::Result;
 
@@ -13,6 +16,7 @@ use crate::shell::Shell;
 
 use super::executor;
 use super::loader;
+use super::nlu;
 
 /// Dispatch the `ash smart` subcommand. `args` is everything after `smart`
 /// (e.g. `["list"]` or `["run", "git.finish-worktree", "main"]`).
@@ -38,16 +42,10 @@ pub fn run(args: &[String]) -> Result<()> {
             print_usage();
             Ok(())
         }
-        other => {
-            // Could be natural-language input ("ash smart deploy to prod"),
-            // but v1 has no NLU routing yet.
-            eprintln!(
-                "ash smart: unknown subcommand '{other}'.\n\
-                 Natural-language routing is not yet implemented; use 'ash smart run <name>'."
-            );
-            print_usage();
-            std::process::exit(2);
-        }
+        // Anything else is treated as natural-language input. Rejoin the args
+        // into the user's request and route it via the local Ollama model.
+        // e.g. `ash smart finish the worktree with message fix bug`
+        _ => cmd_nlu(&args.join(" ")),
     }
 }
 
@@ -84,12 +82,48 @@ fn cmd_run(name: &str, args: &[String]) -> Result<()> {
     executor::execute(spec, args, &mut shell)
 }
 
+/// `ash smart "<nl>"` — natural-language routing. The local Ollama model picks
+/// a SmartCommand and fills args, then the body runs.
+fn cmd_nlu(nl: &str) -> Result<()> {
+    let specs = loader::load_all();
+    if specs.is_empty() {
+        eprintln!("No SmartCommands found — nothing to route to.");
+        eprintln!("Add .at files to ./smart/ or ~/.config/ash/smart/");
+        std::process::exit(1);
+    }
+
+    // Build the client synchronously (daemon probe blocks; can't be in async).
+    let client = auto_ai_client::AiClient::new().map_err(|e| {
+        miette::miette!(
+            "AI client init: {}\n  (start the aaid daemon or set an API key)",
+            e
+        )
+    })?;
+    let client: Arc<dyn auto_ai_agent::Client> = Arc::new(client);
+
+    // Route via the local Ollama model.
+    let result = nlu::route(nl, &specs, client)
+        .map_err(|e| miette::miette!("NLU routing failed: {}", e))?;
+    println!("  AI: {} {}", result.command, result.args.join(" "));
+
+    // Find the chosen spec and run its body.
+    let spec = specs
+        .iter()
+        .find(|s| s.name == result.command)
+        .expect("nlu::route validated the command exists");
+    let mut shell = Shell::new();
+    shell.load_env_persistence();
+    executor::execute(spec, &result.args, &mut shell)
+}
+
 fn print_usage() {
     println!("usage: ash smart <subcommand> [args]");
+    println!("       ash smart \"<natural language>\"");
     println!();
     println!("subcommands:");
     println!("  list              list discovered SmartCommands");
     println!("  run <name> [args] run a SmartCommand's body with positional args");
+    println!("  \"<nl>\"            route natural language to a command via the local Ollama model");
     println!("  help              show this help");
 }
 
