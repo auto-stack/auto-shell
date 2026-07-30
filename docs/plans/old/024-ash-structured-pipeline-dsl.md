@@ -1,8 +1,12 @@
 # Plan 024: Ash 结构化管道 DSL（Shell-Level Predicate / Sort / Select）
 > 迁入自 auto-lang `docs/plans/archive/320-ash-structured-pipeline-dsl.md`（原 Plan 320），已重编号为 Plan 024。
 
-> **Status**: ✅ Phase 1-4 implemented (2026-06-17). Tier 1 shell DSL 全部完成（filter/compound filter/sort/select/map/take/count/uniq/reverse/group-by/sum/avg/min/max + 单位展开 + && 复合谓词）。Tier 2 Auto 闭包 + `\|\|` OR 谓词 + 嵌套字段 deferred。
-> **关系**: 落地 [Plan 020 Task 3.1（结构化数据管道激活）](020-ash-remaining-features-roadmap.md)。
+> **Status**: ✅ COMPLETE (2026-07-30). Tier 1 shell DSL 全部完成 + 两个原 deferred 项已落地：嵌套字段 `.user.name`（`get_field` 递归）和复合谓词 `and`/`or`（FilterAll/FilterAny）。仅 Tier 2 Auto 闭包 `where(it => ...)` 仍为长期后续项。
+>
+> **复合谓词语法（重要变更）**：复合谓词用 `and`/`or` 关键字，**不用** `&&`/`||`。原因是 `&&`/`||` 是 shell 命令链操作符（`parse_chain` 在顶层切分），会被当作命令链而非 DSL 谓词——早期 `&&` 复合谓词虽单元测试通过但端到端完全失效（被 `parse_chain` 拦截）。2026-07-30 改用 `and`/`or`（普通标识符，零冲突）并修复端到端。**混合 `and`/`or` 优先级（如 `a and b or c`）暂不支持**，需谓词 AST 树，返回 None 退化为命令处理。
+>
+> **历史**: Phase 1-4 implemented (2026-06-17). Tier 1 shell DSL（filter/sort/select/map/take/count/uniq/reverse/group-by/sum/avg/min/max + 单位展开）。原 Tier 2 deferred 项中的嵌套字段 + OR 谓词于 2026-07-30 补全（见上）；剩余 Tier 2 Auto 闭包仍 deferred。
+> **关系**: 落地 [Plan 020 Task 3.1（结构化数据管道激活）](../020-ash-remaining-features-roadmap.md)。
 > 参考 [Nushell](https://github.com/nushell/nushell) 的 `where` / `sort-by` / `select` 设计,
 > 但语法用 **shell-level DSL**（不经 Auto parser），而非 NuScript 闭包。
 
@@ -198,6 +202,13 @@ MVP 支持**一级**字段（`.size`、`.name`）；嵌套（`.user.name`）作�
 1. `where(it => ...)` / `map(it => ...)` — 用 Auto parser + VM 评价闭包。
 2. 复杂谓词（多条件、函数调用）。
 3. `group-by .field` / `uniq` / `reverse` / `sum .field` / `avg .field`。
+
+> **2026-07-30 更新**：原列在 Tier 2 deferred 的"嵌套字段"与"OR 谓词"两项已在 Tier 1 范围内补全，无需 Auto 闭包：
+> - **嵌套字段** `.user.name`：`get_field` 改为按 `.` 分割递归下降，覆盖 Filter/FilterAll/FilterAny/SortBy/Map/GroupBy/Sum/Avg/Min/Max/Select。
+> - **OR 谓词**：新增 `FilterAny`（`conditions.any`，对称于 `FilterAll` 的 `all`），语法用 `or` 关键字。
+> - **复合谓词语法**：`and`/`or`（非 `&&`/`||`），因 `&&`/`||` 与命令链操作符冲突（见头部说明）。端到端测试见 `ash/auto-shell/tests/pipeline_dsl.rs`。
+>
+> **剩余 Tier 2**（长期后续）：仅 `where(it => ...)` Auto 闭包 + 混合 `and`/`or` 优先级（需谓词 AST 树）。
 
 ---
 

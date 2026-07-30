@@ -1,5 +1,14 @@
 # ash-gui Implementation Plan
 
+> **M0 可行性验证（2026-07-30，基于当前 main 代码）**：下方"关键背景知识"中的 M0 断言（"只有 shell.rs:866 一处 crossterm、约 100 行"）**已过时，勿照搬**。实际核查发现 M0 被低估约 2-2.5 倍：
+> - **crossterm 实际散布 3 个文件 40+ 处**，不是 1 处：`shell.rs:928`（format_output，行号已从 866 变 928）、**`cmd/commands/less.rs`（1197 行、33 处 crossterm 深度耦合，本计划完全没提到）**、`show.rs:149-151`（经 `super::less::*` 间接耦合）。
+> - **shell.rs 对 frontend 有第二处耦合**（计划只识别 format_output）：`cmd_color`（shell.rs:3612-3644）调用 `frontend::term::color` 6 处。
+> - **less.rs 是 M0 真正的大头**：经 `shell.rs:239-240` 命令注册硬依赖，照搬 M0.3 改完 format_output 后 `--no-default-features` 仍会连环失败。
+> - **真实 M0 约 180-250 行**（非 100）。建议拆 **M0a（frontend/ 隔离 ~30 行）+ M0b（less.rs/show.rs/cmd_color 隔离 ~150-200 行）**，M0b 单独评估 less.rs 命运（整模块 cfg / trait 抽象 / 妥协保留三选一）。
+> - **行号普遍偏移约 +47**：format_output 856→903，crossterm 866→928。
+>
+> **仍然成立的论点**：①`ash-core` 真正零终端依赖（M1 的 Renderer trait 基础牢固）；②frontend/ 隔离方向正确；③ash-gui scaffold 已就位。**结论**：M0 仍是 GUI 路线的合理入口，但不是"低成本"，less.rs 的处理策略需先决策。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 为 ash 构建 Shell-native GUI 前端(ash-gui),把结构化输出渲染成 iced widget,验证"Atom → 富 widget"的核心假设。
