@@ -654,6 +654,18 @@ impl Repl {
         crate::prompt::context::on_directory_changed(self.shell.pwd());
 
         loop {
+            // Plan 029 §7.3: if a suggest-next fetch completed, show it before
+            // the next prompt. (Best-effort: if it hasn't finished yet, nothing
+            // shows — the fetch never blocks.)
+            if let Some(suggestions) = crate::frontend::suggest::take_pending() {
+                if !suggestions.is_empty() {
+                    println!("\n  \x1b[2m\u{1f4a1} 接下来可能想:\x1b[0m");
+                    for s in &suggestions {
+                        println!("  \x1b[2m   {s}\x1b[0m");
+                    }
+                }
+            }
+
             // Read input
             let sig = self.line_editor.read_line(&self.prompt);
 
@@ -905,9 +917,13 @@ impl Repl {
                     }
 
                     // Evaluate the line
+                    let mut output_snippet = String::new();
                     match self.shell.execute(&line) {
                         Ok(output) => {
                             if let Some(s) = output {
+                                // Capture a short snippet for the suggest-next
+                                // context (§7.3) before printing.
+                                output_snippet = s.chars().take(200).collect();
                                 // Use print_command_output to avoid a spurious
                                 // trailing blank line when output already ends
                                 // in '\n' (e.g. echo). Same fix as R4/script path.
@@ -927,6 +943,17 @@ impl Repl {
 
                     // Sync completion state (cwd may have changed after cd/pushd)
                     self.sync_completion_state();
+
+                    // Plan 029 §7.3: async-suggest next command (opt-in). Fire
+                    // a background fetch; the result shows before the next prompt
+                    // if it arrived in time. Never blocks the shell.
+                    if crate::frontend::suggest::is_enabled() {
+                        crate::frontend::suggest::suggest_next_async(
+                            self.shell.pwd().to_string_lossy().to_string(),
+                            line.clone(),
+                            output_snippet,
+                        );
+                    }
                 }
                 Ok(Signal::CtrlD) => {
                     println!();
