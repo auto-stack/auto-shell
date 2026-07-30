@@ -21,6 +21,10 @@ pub enum PipelineOp {
     FilterAll {
         conditions: Vec<(String, CmpOp, Value)>,
     },
+    /// `.f1 op1 v1 || .f2 op2 v2 || ...` → any condition holds.
+    FilterAny {
+        conditions: Vec<(String, CmpOp, Value)>,
+    },
     /// `sort .field [desc]`
     SortBy {
         field: String,
@@ -156,6 +160,19 @@ pub fn apply(op: &PipelineOp, data: &Value) -> Value {
                 .collect();
             Value::Array(Array::from_vec(filtered))
         }
+        PipelineOp::FilterAny { conditions } => {
+            let filtered: Vec<Value> = arr
+                .iter()
+                .filter(|item| {
+                    conditions.iter().any(|(field, op, value)| {
+                        let fv = get_field(item, field);
+                        compare(&fv, *op, value)
+                    })
+                })
+                .cloned()
+                .collect();
+            Value::Array(Array::from_vec(filtered))
+        }
         PipelineOp::SortBy { field, descending } => {
             let mut items: Vec<Value> = arr.iter().cloned().collect();
             items.sort_by(|a, b| {
@@ -174,17 +191,21 @@ pub fn apply(op: &PipelineOp, data: &Value) -> Value {
             let selected: Vec<Value> = arr
                 .iter()
                 .map(|item| {
-                    if let Value::Obj(obj) = item {
-                        let mut out = Obj::new();
-                        for f in fields {
-                            if let Some(v) = obj.get(f.as_str()) {
-                                out.set(f.as_str(), v);
-                            }
-                        }
-                        Value::Obj(out)
-                    } else {
-                        item.clone()
+                    // Only project objects; non-objects pass through unchanged.
+                    if !matches!(item, Value::Obj(_)) {
+                        return item.clone();
                     }
+                    let mut out = Obj::new();
+                    for f in fields {
+                        // Nested fields (e.g. ".user.name") keep the leaf value
+                        // under the full dotted key so downstream stages can
+                        // still reference it. A missing leaf is skipped.
+                        let v = get_field(item, f.as_str());
+                        if !matches!(v, Value::Nil) {
+                            out.set(f.as_str(), v);
+                        }
+                    }
+                    Value::Obj(out)
                 })
                 .collect();
             Value::Array(Array::from_vec(selected))
@@ -272,13 +293,19 @@ pub fn apply(op: &PipelineOp, data: &Value) -> Value {
     }
 }
 
-/// Get a field value from a Value (if it's an Obj), or return Nil.
+/// Get a field value from a Value, supporting dotted nested access.
+///
+/// `.user.name` splits on `.` and descends through nested `Obj`s. Returns
+/// `Value::Nil` as soon as any segment is missing or non-Obj.
 fn get_field(item: &Value, field: &str) -> Value {
-    if let Value::Obj(obj) = item {
-        obj.get(field).unwrap_or(Value::Nil)
-    } else {
-        Value::Nil
+    let mut cur = item.clone();
+    for part in field.split('.') {
+        cur = match cur {
+            Value::Obj(obj) => obj.get(part).unwrap_or(Value::Nil),
+            _ => return Value::Nil,
+        };
     }
+    cur
 }
 
 /// Compare two Values using a CmpOp. Returns true if the comparison holds.
@@ -554,5 +581,112 @@ mod tests {
         assert!(min_result.to_string().contains("app")); // size 0
         let max_result = apply(&PipelineOp::Max { field: "size".into() }, &data);
         assert!(max_result.to_string().contains("big.tar")); // size 20000000
+    }
+
+    /// Build an object with a nested {user: {name: .., active: ..}} sub-object.
+    fn nested_obj(name: &str, active: bool) -> Value {
+        let mut user = Obj::new();
+        user.set("name", Value::str(name));
+        user.set("active", Value::Bool(active));
+        let mut o = Obj::new();
+        o.set("user", Value::Obj(user));
+        Value::Obj(o)
+    }
+
+    fn nested_list() -> Value {
+        Value::Array(Array::from_vec(vec![
+            nested_obj("alice", true),
+            nested_obj("bob", false),
+            nested_obj("carol", true),
+        ]))
+    }
+
+    #[test]
+    fn filter_nested_field() {
+        let data = nested_list();
+        let op = PipelineOp::Filter {
+            field: "user.name".into(),
+            op: CmpOp::Eq,
+            value: Value::str("bob"),
+        };
+        let result = apply(&op, &data);
+        if let Value::Array(a) = result {
+            assert_eq!(a.len(), 1);
+            assert!(a.get(0).unwrap().to_string().contains("bob"));
+        } else {
+            panic!("expected Array, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn filter_nested_field_missing_returns_nil_no_match() {
+        // A missing nested segment → Nil → does not equal "x" → filtered out.
+        let data = nested_list();
+        let op = PipelineOp::Filter {
+            field: "user.missing".into(),
+            op: CmpOp::Eq,
+            value: Value::str("x"),
+        };
+        let result = apply(&op, &data);
+        if let Value::Array(a) = result {
+            assert_eq!(a.len(), 0); // none match a missing field
+        }
+    }
+
+    #[test]
+    fn select_nested_field() {
+        let data = nested_list();
+        let op = PipelineOp::Select {
+            fields: vec!["user.name".into()],
+        };
+        let result = apply(&op, &data);
+        if let Value::Array(a) = result {
+            assert_eq!(a.len(), 3);
+            // Each projected object keeps the leaf under the dotted key.
+            let first = a.get(0).unwrap().to_string();
+            assert!(first.contains("alice"));
+        } else {
+            panic!("expected Array, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn filter_any_conditions() {
+        // `.user.name == "alice" or .user.active == false`
+        // → alice (name) + bob (active=false) = 2 matches.
+        let data = nested_list();
+        let op = PipelineOp::FilterAny {
+            conditions: vec![
+                ("user.name".into(), CmpOp::Eq, Value::str("alice")),
+                ("user.active".into(), CmpOp::Eq, Value::Bool(false)),
+            ],
+        };
+        let result = apply(&op, &data);
+        if let Value::Array(a) = result {
+            assert_eq!(a.len(), 2, "or should match alice+bob");
+            let names: String = a.iter().map(|v| v.to_string()).collect();
+            assert!(names.contains("alice"));
+            assert!(names.contains("bob"));
+        } else {
+            panic!("expected Array, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn filter_all_still_works() {
+        // Regression: FilterAll (`and`) still intersects conditions.
+        // active==true (alice, carol) AND name=="carol" → just carol = 1.
+        let data = nested_list();
+        let op = PipelineOp::FilterAll {
+            conditions: vec![
+                ("user.active".into(), CmpOp::Eq, Value::Bool(true)),
+                ("user.name".into(), CmpOp::Eq, Value::str("carol")),
+            ],
+        };
+        let result = apply(&op, &data);
+        if let Value::Array(a) = result {
+            assert_eq!(a.len(), 1);
+            assert!(a.get(0).unwrap().to_string().contains("carol"));
+        }
     }
 }

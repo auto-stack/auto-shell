@@ -66,25 +66,42 @@ pub fn parse_pipe_stage(text: &str) -> Option<PipelineOp> {
 }
 
 /// Parse `.field op value`, `.field` (bare projection), or compound
-/// `.f1 op1 v1 && .f2 op2 v2`.
+/// `.f1 op1 v1 and .f2 op2 v2` / `.f1 op1 v1 or .f2 op2 v2`.
+///
+/// Compound predicates use the `and`/`or` keywords (NOT `&&`/`||`, which are
+/// shell command-chain operators and get split by [`parse_chain`] before this
+/// function ever sees them). Mixed `and`/`or` (e.g. `a and b or c`) is not
+/// supported — it would require a predicate AST with precedence. Such input
+/// returns `None` and falls through to regular command dispatch.
 fn parse_dot_stage(text: &str) -> Option<PipelineOp> {
-    // Compound predicate with &&.
-    if text.contains(" && ") {
-        return parse_compound_filter(text);
+    let has_and = text.contains(" and ");
+    let has_or = text.contains(" or ");
+    if has_and && has_or {
+        // Mixed precedence not supported — bail out to command dispatch.
+        return None;
+    }
+    if has_and {
+        return parse_compound_filter(text, " and ", /*any*/ false);
+    }
+    if has_or {
+        return parse_compound_filter(text, " or ", /*any*/ true);
     }
     parse_single_dot(text)
 }
 
-/// Parse a compound `&&` predicate.
-fn parse_compound_filter(text: &str) -> Option<PipelineOp> {
-    let parts: Vec<&str> = text.split(" && ").collect();
+/// Parse a compound `and`/`or` predicate into FilterAll / FilterAny.
+///
+/// `sep` is the literal separator (`" and "` / `" or "`); `any` selects
+/// FilterAny (true) vs FilterAll (false).
+fn parse_compound_filter(text: &str, sep: &str, any: bool) -> Option<PipelineOp> {
+    let parts: Vec<&str> = text.split(sep).collect();
     let mut conditions = Vec::new();
     for part in parts {
         let part = part.trim();
         let after_dot = part.strip_prefix('.')?;
         let field: String = after_dot
             .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .take_while(|c| is_field_char(*c))
             .collect();
         if field.is_empty() {
             return None;
@@ -101,6 +118,8 @@ fn parse_compound_filter(text: &str) -> Option<PipelineOp> {
     if conditions.len() == 1 {
         let (f, o, v) = conditions.pop().unwrap();
         Some(PipelineOp::Filter { field: f, op: o, value: v })
+    } else if any {
+        Some(PipelineOp::FilterAny { conditions })
     } else {
         Some(PipelineOp::FilterAll { conditions })
     }
@@ -112,7 +131,7 @@ fn parse_single_dot(text: &str) -> Option<PipelineOp> {
     let after_dot = &text[1..];
     let field: String = after_dot
         .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .take_while(|c| is_field_char(*c))
         .collect();
     if field.is_empty() {
         return None;
@@ -142,7 +161,7 @@ fn parse_sort(rest: &str) -> Option<PipelineOp> {
     let after_dot = &rest[1..];
     let field: String = after_dot
         .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .take_while(|c| is_field_char(*c))
         .collect();
     if field.is_empty() {
         return None;
@@ -177,7 +196,7 @@ where
     }
     let field: String = rest[1..]
         .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .take_while(|c| is_field_char(*c))
         .collect();
     if field.is_empty() {
         return None;
@@ -286,6 +305,14 @@ fn parse_number_with_unit(s: &str) -> Option<Value> {
         }
     }
     None
+}
+
+/// Whether a character may appear in a field name.
+///
+/// Includes `.` so that dotted nested paths (`.user.name`) are consumed as a
+/// single field rather than stopping at the first dot.
+fn is_field_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-' || c == '.'
 }
 
 #[cfg(test)]
@@ -414,12 +441,49 @@ mod tests {
 
     #[test]
     fn parse_compound_and_predicate() {
-        let op = parse_pipe_stage(".size > 10 && .type == \"dir\"").unwrap();
+        // `and` keyword (not && — && is split by parse_chain as a command
+        // operator and never reaches a single pipe stage).
+        let op = parse_pipe_stage(".size > 10 and .type == \"dir\"").unwrap();
         match op {
             PipelineOp::FilterAll { conditions } => {
                 assert_eq!(conditions.len(), 2);
             }
             _ => panic!("expected FilterAll, got {:?}", op),
+        }
+    }
+
+    #[test]
+    fn parse_compound_or_predicate() {
+        let op = parse_pipe_stage(".type == \"dir\" or .name contains \"log\"").unwrap();
+        match op {
+            PipelineOp::FilterAny { conditions } => {
+                assert_eq!(conditions.len(), 2);
+            }
+            _ => panic!("expected FilterAny, got {:?}", op),
+        }
+    }
+
+    #[test]
+    fn parse_mixed_and_or_returns_none() {
+        // Mixed precedence not supported — falls through to command dispatch.
+        assert!(parse_pipe_stage(".a > 1 and .b < 2 or .c == 3").is_none());
+    }
+
+    #[test]
+    fn parse_nested_field_filter() {
+        let op = parse_pipe_stage(".user.name > 5").unwrap();
+        match op {
+            PipelineOp::Filter { field, .. } => assert_eq!(field, "user.name"),
+            _ => panic!("expected Filter, got {:?}", op),
+        }
+    }
+
+    #[test]
+    fn parse_nested_field_sort() {
+        let op = parse_pipe_stage("sort .user.name").unwrap();
+        match op {
+            PipelineOp::SortBy { field, .. } => assert_eq!(field, "user.name"),
+            _ => panic!("expected SortBy, got {:?}", op),
         }
     }
 }
