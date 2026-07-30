@@ -39,6 +39,21 @@
 
 reedline `Completer::complete` 纯同步无 async 入口(已勘探确认 reedline 0.44 无 async 依赖)。采用"滞后一次按键"策略:本次按键 `complete()` 先返回静态结果 + fire 后台 AI 线程,**下一次按键**的 `complete()` 读缓存返回 AI 结果。零额外依赖,最低风险。
 
+### 审计修复(2026-07-31):AI 层缓存加固
+
+初版 M2 通过了一次复审,暴露了 AI 缓存/触发层的 4 个真实缺陷(根因是缓存用了"宽松的双向 starts_with + 单全局槽 + 无在途去重"),以及一个完全没覆盖真实路径的测试层。已全部修复(见 commit `e923092`):
+
+| # | 缺陷 | 修复 |
+|---|---|---|
+| 1 | **线程风暴**:每次按键(静态候选 <3)都 `thread::spawn` 一个带独立 tokio runtime 的线程,无任何节流 | 新增 `IN_FLIGHT`(OnceLock<Mutex<HashSet>>)在途去重:同 (slot,key) 在途时跳过 spawn,线程完成时清除标记 |
+| 2 | **过期候选跨位置注入**:`matches_line` 用双向 `starts_with`,使 key=`"git c"` 的子命令结果在用户编辑到 `"git checkout main"` 时泄漏进**参数补全位** | 改为严格完整行相等 + **按位置分槽**(Subcommand / NaturalLanguage 各自独立),结果只在请求它的光标位置合并 |
+| 3 | **破坏性 take**:`take` 无条件清空单槽,任意一次不匹配的按键都会销毁尚未消费的合法结果 | 改为 per-slot;**仅匹配时清空**,不匹配时保留条目供后续按键 |
+| 4 | **槽互相覆盖**:单全局槽让子命令与 NL 结果互相 clobber | 拆为两个独立槽,互不干扰 |
+
+顺带修复:`context_rank` 的 `a==b \|\| b==a` clippy error(eq_op)和 fuzzy hinter 的 unused-assignment warning。
+
+**测试补全**:初版的缓存测试全是"手动 `store` 再 `take`"伪路径,`complete()→Suggestion` 的 AI 合并路径**从未被任何测试执行过**。新增端到端测试:注入已完成的 fake 结果(模拟后台线程完成),走真实 `complete()` 链路断言 Suggestion——含一个回归测试证明过期子命令候选**不会**泄漏进参数位;外加 in-flight 去重测试。`store()` 改为 `pub(crate)` 作为测试注入缝。
+
 ## M3:缺失动态源 ✅
 
 - **M3.1** ssh/scp destination 参数现在补全 hosts(definitions/ssh.rs):纯 Rust 解析 `~/.ssh/config`(Host 别名)+ `~/.ssh/known_hosts`(首列),跨平台无 shell-out。过滤通配符(`*`/`?`/`!`)和 hashed 条目。顺手修复了一个既有 bug flag(把 `-o StrictHostKeyChecking=no` 编码成了 long flag 名)。
@@ -48,7 +63,7 @@ reedline `Completer::complete` 纯同步无 async 入口(已勘探确认 reedlin
 
 1. ✅ **M0**:CompletionContext 携带 last_command/exit_code/history(测试验证)
 2. ✅ **M1**:git 仓库下 git 命令排前;fuzzy ghost-text 工作(`gcm` 匹配 `git commit -m`)
-3. 🟡 **M2**:静态 spec 没有的子命令 AI 补(代码就绪 + 降级路径测试通过;端到端需运行中的 Ollama daemon);NL 输入翻译成 pipeline(同上)
+3. 🟡 **M2**:静态 spec 没有的子命令 AI 补(代码就绪 + 合并路径有端到端测试覆盖;模型实际调用需运行中的 Ollama daemon);NL 输入翻译成 pipeline(同上)。审计后:`complete()→Suggestion` 的 AI 合并路径已由注入式测试覆盖,过期候选注入 bug 已修复并有回归测试。
 4. ✅ **M3**:ssh hosts 补全工作;env var 用真实环境
 5. ✅ **降级正确**:无 daemon 时 `complete()` 不 panic、返回静态结果(`complete_does_not_panic_without_daemon` 测试覆盖)
 
