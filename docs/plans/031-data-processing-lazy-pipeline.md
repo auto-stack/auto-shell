@@ -137,11 +137,11 @@
 
 **验收**：流式性测试绿；每个算子的 lazy 行为单测绿（filter/take/select 流式产出；sort/agg 断流后产出）。
 
-### 任务 M1.2 — `build_lazy` + `collect`
-- [ ] **测试**：`test_build_lazy_from_pipeline_ops`——给一组 `PipelineOp` + `Value::Array` source，`build_lazy` 出来的 LazyNode collect 后结果 == 现有 eager `apply` 逐段叠加的结果。
-- [ ] **实现 `build_lazy(ops: &[PipelineOp], source: Value) -> LazyNode`**（设计 §3.4）：保留 `operators::apply`（eager）不动，向后兼容；`build_lazy` 最后调 `predicate_pushdown`（M2 实现，M1 先留 identity）。
-- [ ] **实现 `LazyNode::collect() -> Value`**：collect 成 `Value::Array`。
-- [ ] **测试**：`build_lazy([op], input).collect() == apply(&op, &input)` 逐算子（覆盖全部 16 个 PipelineOp）。
+### 任务 M1.2 — `build_lazy` + 等价测试 ✅ 完成
+- [x] **实现 `build_lazy(ops: &[PipelineOp], source: Value) -> LazyNode`**（设计 §3.4）：逐个把 PipelineOp 包成 LazyNode 层。11 个算子有直接 lazy 映射（Filter/Take/Select/SortBy + Count/Uniq/GroupBy/Sum/Avg/Min/Max→Aggregate）；5 个无 lazy 节点的（FilterAll/FilterAny/Map/SkipBack/Reverse）回退 eager `apply`（collect 当前 lazy 链 → eager 处理 → 继续）。`build_lazy` 保留 `operators::apply`（eager）不动，向后兼容。
+- [x] **等价测试**（9 个）：`build_lazy([op], source).collect() == apply(op, source)` 逐算子——覆盖**全部 16 个 PipelineOp**（11 lazy + 5 eager 回退）+ 多段链 `filter|select|sort`。
+
+19 测试全绿（10 M1.1 流式性 + 9 M1.2 等价）；ash-core 375 全绿（366+9）。`build_lazy` 暂留 `predicate_pushdown` 为 identity（M2.1 接通）。
 
 **M1 整体验收**：流式性绿 + 16 算子 lazy/eager 等价绿 + 现有 1107 回归全绿。
 

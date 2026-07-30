@@ -1,4 +1,4 @@
-//! Plan 031 M1.1 — lazy pipeline: pull-based iterator chain.
+//! Plan 031 M1 — lazy pipeline: pull-based iterator chain.
 //!
 //! A lazy pipeline node ([`LazyNode`]) is an `impl Iterator<Item = Value>`.
 //! Streaming operators (`Filter`/`Take`/`Select`) yield rows as the upstream
@@ -12,7 +12,7 @@
 
 use auto_val::{Array, Obj, Value};
 
-use super::operators::{as_f64, compare, compare_order, get_field, AggOp, CmpOp};
+use super::operators::{self, as_f64, compare, compare_order, get_field, AggOp, CmpOp, PipelineOp};
 
 /// Internal iteration state for a pipeline-breaking operator.
 ///
@@ -104,6 +104,93 @@ impl LazyNode {
             return Value::Nil;
         }
         Value::Array(Array::from_vec(items))
+    }
+}
+
+/// Build a lazy pipeline node from a sequence of [`PipelineOp`]s applied to a
+/// source `Value` (Plan 031 M1.2).
+///
+/// Each op is layered as a `LazyNode` over the previous one; the result of
+/// `build_lazy(ops, source).collect()` is equivalent to folding the eager
+/// [`operators::apply`] over the same ops on the same source.
+///
+/// The 11 ops with a direct lazy representation (`Filter`, `Take`, `Select`,
+/// `SortBy`, and the aggregates `Count`/`Uniq`/`GroupBy`/`Sum`/`Avg`/`Min`/
+/// `Max`) build a true lazy chain. The remaining 5 (`FilterAll`/`FilterAny`/
+/// `Map`/`SkipBack`/`Reverse`) have no lazy node yet — they fall back to eager
+/// `apply`: the lazy chain built so far is collected, the unsupported op is
+/// applied eagerly, and the remaining ops continue lazily from that point.
+pub fn build_lazy(ops: &[PipelineOp], source: Value) -> LazyNode {
+    let mut node = LazyNode::from_vec(source_to_rows(source));
+
+    for op in ops {
+        node = match op {
+            PipelineOp::Filter { field, op, value } => LazyNode::Filter {
+                input: Box::new(node),
+                field: field.clone(),
+                op: *op,
+                value: value.clone(),
+            },
+            PipelineOp::Take(n) => LazyNode::Take {
+                input: Box::new(node),
+                n: *n,
+            },
+            PipelineOp::Select { fields } => LazyNode::Select {
+                input: Box::new(node),
+                fields: fields.clone(),
+            },
+            PipelineOp::SortBy { field, descending } => LazyNode::SortBy {
+                state: Box::new(BreakState::pending(node)),
+                field: field.clone(),
+                descending: *descending,
+            },
+            PipelineOp::Count => LazyNode::Aggregate {
+                state: Box::new(BreakState::pending(node)),
+                op: AggOp::Count,
+            },
+            PipelineOp::Uniq => LazyNode::Aggregate {
+                state: Box::new(BreakState::pending(node)),
+                op: AggOp::Uniq,
+            },
+            PipelineOp::GroupBy { field } => LazyNode::Aggregate {
+                state: Box::new(BreakState::pending(node)),
+                op: AggOp::GroupBy(field.clone()),
+            },
+            PipelineOp::Sum { field } => LazyNode::Aggregate {
+                state: Box::new(BreakState::pending(node)),
+                op: AggOp::Sum(field.clone()),
+            },
+            PipelineOp::Avg { field } => LazyNode::Aggregate {
+                state: Box::new(BreakState::pending(node)),
+                op: AggOp::Avg(field.clone()),
+            },
+            PipelineOp::Min { field } => LazyNode::Aggregate {
+                state: Box::new(BreakState::pending(node)),
+                op: AggOp::Min(field.clone()),
+            },
+            PipelineOp::Max { field } => LazyNode::Aggregate {
+                state: Box::new(BreakState::pending(node)),
+                op: AggOp::Max(field.clone()),
+            },
+            // Unsupported yet: fall back to eager apply on the materialized
+            // chain, then continue. (FilterAll/FilterAny/Map/SkipBack/Reverse)
+            other => {
+                let collected = node.collect();
+                LazyNode::from_vec(source_to_rows(operators::apply(other, &collected)))
+            }
+        };
+    }
+    node
+}
+
+/// Extract a `Vec<Value>` of rows from a source Value.
+///
+/// An `Array` yields its elements; a non-array scalar becomes a single-element
+/// row (so a scalar flowing into the pipeline still has something to iterate).
+fn source_to_rows(source: Value) -> Vec<Value> {
+    match source {
+        Value::Array(a) => a.iter().cloned().collect(),
+        other => vec![other],
     }
 }
 
@@ -279,6 +366,144 @@ mod tests {
             row("e", 1),
         ]
     }
+
+    fn sample_source() -> Value {
+        Value::Array(Array::from_vec(sample_rows()))
+    }
+
+    // ── M1.2 build_lazy ⇄ eager apply 等价测试 ──
+    //
+    // For each operator, `build_lazy([op], source).collect()` must equal
+    // `apply(op, source)`. Values are compared by their string repr (stable,
+    // order-insensitive where it matters — sort/take are order-sensitive and
+    // asserted explicitly above).
+
+    fn assert_lazy_eq_eager(op: PipelineOp, source: &Value) {
+        let eager = operators::apply(&op, source);
+        let lazy = build_lazy(std::slice::from_ref(&op), source.clone()).collect();
+        assert_eq!(
+            eager.to_string(),
+            lazy.to_string(),
+            "lazy/eager mismatch for op {:?}:\n  eager = {}\n  lazy   = {}",
+            op,
+            eager,
+            lazy
+        );
+    }
+
+    #[test]
+    fn build_lazy_filter_eq_eager() {
+        assert_lazy_eq_eager(
+            PipelineOp::Filter {
+                field: "size".to_string(),
+                op: CmpOp::Gt,
+                value: Value::Int(8),
+            },
+            &sample_source(),
+        );
+    }
+
+    #[test]
+    fn build_lazy_take_eq_eager() {
+        assert_lazy_eq_eager(PipelineOp::Take(2), &sample_source());
+    }
+
+    #[test]
+    fn build_lazy_select_eq_eager() {
+        assert_lazy_eq_eager(
+            PipelineOp::Select {
+                fields: vec!["name".to_string()],
+            },
+            &sample_source(),
+        );
+    }
+
+    #[test]
+    fn build_lazy_sort_by_eq_eager() {
+        assert_lazy_eq_eager(
+            PipelineOp::SortBy {
+                field: "size".to_string(),
+                descending: false,
+            },
+            &sample_source(),
+        );
+        assert_lazy_eq_eager(
+            PipelineOp::SortBy {
+                field: "size".to_string(),
+                descending: true,
+            },
+            &sample_source(),
+        );
+    }
+
+    #[test]
+    fn build_lazy_count_eq_eager() {
+        assert_lazy_eq_eager(PipelineOp::Count, &sample_source());
+    }
+
+    #[test]
+    fn build_lazy_uniq_eq_eager() {
+        assert_lazy_eq_eager(PipelineOp::Uniq, &sample_source());
+    }
+
+    #[test]
+    fn build_lazy_aggregates_eq_eager() {
+        assert_lazy_eq_eager(PipelineOp::Sum { field: "size".to_string() }, &sample_source());
+        assert_lazy_eq_eager(PipelineOp::Avg { field: "size".to_string() }, &sample_source());
+        assert_lazy_eq_eager(PipelineOp::Min { field: "size".to_string() }, &sample_source());
+        assert_lazy_eq_eager(PipelineOp::Max { field: "size".to_string() }, &sample_source());
+        assert_lazy_eq_eager(
+            PipelineOp::GroupBy { field: "size".to_string() },
+            &sample_source(),
+        );
+    }
+
+    #[test]
+    fn build_lazy_unsupported_ops_fall_back_eager() {
+        // FilterAll / FilterAny / Map / SkipBack / Reverse have no lazy node;
+        // build_lazy must still produce a result equal to eager apply.
+        assert_lazy_eq_eager(
+            PipelineOp::Map { field: "name".to_string() },
+            &sample_source(),
+        );
+        assert_lazy_eq_eager(PipelineOp::Reverse, &sample_source());
+        assert_lazy_eq_eager(PipelineOp::SkipBack(2), &sample_source());
+        assert_lazy_eq_eager(
+            PipelineOp::FilterAll {
+                conditions: vec![("size".to_string(), CmpOp::Gt, Value::Int(3))],
+            },
+            &sample_source(),
+        );
+    }
+
+    #[test]
+    fn build_lazy_multi_stage_eq_eager() {
+        // A chain of ops: filter | select | sort — lazy collect must match
+        // folding eager apply.
+        let ops = vec![
+            PipelineOp::Filter {
+                field: "size".to_string(),
+                op: CmpOp::Ge,
+                value: Value::Int(3),
+            },
+            PipelineOp::Select {
+                fields: vec!["name".to_string()],
+            },
+            PipelineOp::SortBy {
+                field: "name".to_string(),
+                descending: false,
+            },
+        ];
+        let source = sample_source();
+        let mut eager = source.clone();
+        for op in &ops {
+            eager = operators::apply(op, &eager);
+        }
+        let lazy = build_lazy(&ops, source).collect();
+        assert_eq!(eager.to_string(), lazy.to_string(), "multi-stage mismatch");
+    }
+
+    // ── M1.1 流式性测试（lazy 的本质验证）──
 
     // ── M1.1 流式性测试（lazy 的本质验证）──
 
