@@ -21,6 +21,8 @@ auto-ai-client = { path = "../../../auto-ai/crates/auto-ai-client" }
 # (e.g. SmartCommandRole) and use Agent::run for tool-calling, instead of
 # hand-rolling LLM calls.
 auto-ai-agent = { path = "../../../auto-ai/crates/auto-ai-agent" }
+# Plan 029: async-trait macro for implementing the async Tool trait.
+async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
 # Plan 027: explicit dep (previously transitive via auto-ai-client -> ai-config)
 serde_json = "1.0"

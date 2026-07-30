@@ -316,6 +316,7 @@ name = "auto-shell"
 version = "0.1.0"
 dependencies = [
  "ash-core",
+ "async-trait",
  "auto-ai-agent",
  "auto-ai-client",
  "auto-lang",
