@@ -77,6 +77,35 @@ impl Role for SmartCommandRole {
     }
 }
 
+/// Build a [`SmartCommandRole`] for a spec, rendering the spec's description
+/// and argument names into the role's system prompt.
+///
+/// This is the NLU bridge: when a SmartCommand has an AI judgment step, the
+/// executor constructs this role, wraps it in an `Agent`, and runs it to
+/// decide parameters or branch on natural-language input. v1 returns the
+/// role; the full Agent::run NLU flow (which needs a daemon) is wired up by
+/// the caller. `allowed_tools` restricts what the AI step may invoke.
+pub fn build_smart_role(
+    spec: &super::config::SmartCommandSpec,
+    allowed_tools: Vec<String>,
+) -> SmartCommandRole {
+    let prompt = format!(
+        "You are the AI judgment step of the ash SmartCommand '{name}'.\n\
+         {desc}\n\n\
+         Positional arguments (by name): {args}.\n\
+         Decide what the command should do based on the user's input, using the\n\
+         allowed tools. Be concise and decisive.",
+        name = spec.name,
+        desc = spec.description,
+        args = if spec.args.is_empty() {
+            "(none)".to_string()
+        } else {
+            spec.args.join(", ")
+        }
+    );
+    SmartCommandRole::new(prompt, allowed_tools)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
