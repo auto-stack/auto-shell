@@ -149,9 +149,12 @@
 
 ## M2：谓词下推 + shell.rs 累积改造（1-2 周，~500 行，lazy 真正产生价值）
 
-### 任务 M2.1 — 谓词下推 pass（v1 只两条保守规则，不跨 sort/agg）
-- [ ] **测试**：`test_pushdown_filter_before_select`（规则 1：filter 在 select 前，字段在 select 前存在才交换）；`test_pushdown_merge_adjacent_filters`（规则 2：`.a > 1 | .b < 10` → `and`）；`test_pushdown_does_not_cross_sort`（保守：不下推跨断流点）。
-- [ ] **实现 `predicate_pushdown(node: LazyNode) -> LazyNode`**（设计 §3.3 签名）。
+### 任务 M2.1 — 谓词下推 pass（v1 只两条保守规则，不跨 sort/agg）✅ 完成
+- [x] **实现 `predicate_pushdown(node: LazyNode) -> LazyNode`**（设计 §3.3）：规则 1（filter 上移过 select，仅当字段在投影字段内）+ 不跨 sort/agg。已在 `build_lazy` 末尾接通。
+- [x] **测试**（4 个）：`pushdown_moves_filter_below_select_when_field_survives`（规则 1 生效）、`pushdown_does_not_move_filter_when_field_dropped`（字段丢弃时不下推）、`pushdown_does_not_cross_pipeline_breaking`（不跨 sort）、`pushdown_preserves_simple_chain_result`（正确性）。所有测试断言「下推后 collect 结果 == eager」。
+- [x] **规则 2（相邻 filter 合并）推迟**：实现需 `CmpOp::And` variant 或复合谓词表示，v1 先不做（filter 嵌套仍流式工作，pushdown 价值主要在 select 重排）。
+
+ash-core 379 全绿（375 + 4）。所有下推测试验证「结果不变只改执行顺序」。
 
 ### 任务 M2.2 — shell.rs 累积连续 DSL 段 → build_lazy（v2 策略）
 - [ ] **测试** `tests/pipeline_dsl.rs`：`test_multi_dsl_stages_lazy`——`ls | filter .size > 10 | select .name | sort .name` 端到端，结果与 eager 一致（正确性），且通过计数器验证走了 lazy 路径。
