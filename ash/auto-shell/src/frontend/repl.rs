@@ -566,6 +566,34 @@ impl Repl {
         Ok(())
     }
 
+    /// Plan 029 §5: run a multi-step `&&` chain one step at a time. Before
+    /// each step, prompt the user (Enter = run, anything else = skip-and-abort).
+    /// If a step fails (non-zero exit), abort the rest of the chain — matching
+    /// `&&` semantics.
+    fn run_steps_interactively(&mut self, steps: &[String]) {
+        for (i, step) in steps.iter().enumerate() {
+            println!("\n  [{}/{}] {}", i + 1, steps.len(), step);
+            println!("  [Enter] 执行此步  [其他] 中止");
+            let s_sig = self.line_editor.read_line(&self.prompt);
+            let go = matches!(&s_sig, Ok(Signal::Success(s)) if s.trim().is_empty());
+            if !go {
+                println!("  已中止 (剩余 {} 步未执行)", steps.len() - i);
+                return;
+            }
+            match self.shell.execute(step) {
+                Ok(output) => {
+                    if let Some(s) = output {
+                        crate::shell::print_command_output(&s);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error (中止链): {}", e);
+                    return;
+                }
+            }
+        }
+    }
+
     /// Open the current input line in $EDITOR (or vim/notepad) and return the result.
     /// Plan 304: Multi-line edit via Ctrl+E.
     fn edit_in_editor(&self, initial_content: &str) -> Result<String> {
@@ -673,7 +701,34 @@ impl Repl {
                         match self.ask_ai(&question) {
                             Ok(suggestion) => {
                                 println!("\n  AI: {}", suggestion);
-                                println!("  [Enter] 执行  [e] 编辑  [Esc/Enter空] 取消\n");
+
+                                // Plan 029 §5: validate the suggestion before
+                                // running it. Warn about destructive patterns
+                                // and unbalanced quotes/brackets.
+                                let findings = crate::frontend::ai::validate_suggestion(&suggestion);
+                                for finding in &findings {
+                                    match finding {
+                                        crate::frontend::ai::ValidationFinding::Danger(msg) => {
+                                            println!("  \x1b[1;31m\u{26a0} DANGER: {}\x1b[0m", msg);
+                                        }
+                                        crate::frontend::ai::ValidationFinding::Warning(msg) => {
+                                            println!("  \x1b[33m\u{26a0} warning: {}\x1b[0m", msg);
+                                        }
+                                    }
+                                }
+
+                                // Plan 029 §5: if the suggestion is a multi-step
+                                // && chain, offer step-by-step execution.
+                                let steps = crate::frontend::ai::split_steps(&suggestion);
+                                let multi = steps.len() > 1;
+                                if multi {
+                                    println!(
+                                        "  [Enter] 全部执行  [s] 分步执行({}步)  [e] 编辑  [Esc/Enter空] 取消\n",
+                                        steps.len()
+                                    );
+                                } else {
+                                    println!("  [Enter] 执行  [e] 编辑  [Esc/Enter空] 取消\n");
+                                }
 
                                 // Read user's decision.
                                 let d_sig = self.line_editor.read_line(&self.prompt);
@@ -689,6 +744,10 @@ impl Repl {
                                             }
                                             Err(e) => eprintln!("Error: {}", e),
                                         }
+                                    } else if cmd == "s" && multi {
+                                        // Step-by-step: run each step, prompting
+                                        // before each, aborting on failure or skip.
+                                        self.run_steps_interactively(&steps);
                                     } else if cmd == "e" || cmd == "edit" {
                                         // Edit mode: let user type the final command.
                                         println!("  编辑命令 (当前: {})", suggestion);
