@@ -82,23 +82,13 @@
 
 **引用**：设计文档 §5.1-5.3。**放 `ash-core/src/format.rs`**（新增）。
 
-- [ ] **先写失败测试** `ash-core/src/format.rs` 内联 `mod tests`：json roundtrip、csv parse、yaml roundtrip、registry get 等。
-- [ ] **实现 trait**（设计 §5.1 签名）：
-  ```rust
-  pub trait Format: Send + Sync {
-      fn name(&self) -> &str;
-      fn parse(&self, text: &str) -> Result<Value, FormatError>;
-      fn serialize(&self, value: &Value) -> String;
-  }
-  pub struct FormatError(pub String);
-  ```
-- [ ] **5 个实现**（设计 §5.2）：`JsonFormat`/`CsvFormat`/`YamlFormat`/`XmlFormat`/`TomlFormat`，内部复用现有 free function（`parse_json`/`value_to_json` 等）。
+- [x] **先写失败测试** `ash/auto-shell/src/cmd/format.rs` 内联 `mod tests`：json/toml/yaml/xml/csv roundtrip + registry 查询 + 错误传播（11 个）。
+- [x] **实现 trait**（设计 §5.1 签名）：`Format: Send + Sync`（`name/parse/serialize`）+ `FormatError`。
+- [x] **5 个实现**：`JsonFormat`/`CsvFormat`/`YamlFormat`/`XmlFormat`/`TomlFormat`，复用现有 free function（`parse_json`/`value_to_json` 等）。
+- [x] **设计留白决策（config 收敛）**：`Format::serialize` 用各格式默认 config（json pretty=2、csv delimiter="," include_header=true、xml root="root" indent=2、yaml indent=0、toml path=&[] depth=0）——已核实各命令的实际默认值一致。
+- [x] **`FormatRegistry`**：`HashMap<String, Arc<dyn Format>>`，`new()` 注册 5 个，`get(&str)` + `names()`。
 
-#### ⚠️ 设计留白决策：`to_*` 的 config 参数收敛
-探勘发现现有 `to_*` 签名比设计文档复杂：`value_to_xml(value, root_name, indent, depth)`、`value_to_toml(value, path, depth)`、`value_to_csv(value, delimiter, include_header) -> Result<String>`、`value_to_yaml(value, indent)`。`Format::serialize(&Value) -> String` 要收敛这些 config。
-- [ ] **决策（本 Plan 自拟）**：`Format::serialize` 用**各格式的默认 config**（indent=2、root_name 默认 "root"、delimiter=','、include_header=true）。需要覆盖的命令通过参数另行传入（用户接口不变，见 M0.3）。
-
-- [ ] **`FormatRegistry`**（设计 §5.3）：`HashMap<String, Arc<dyn Format>>`，`new()` 注册 5 个，`get(&str) -> Option<Arc<dyn Format>>`。
+**落点偏离（vs 设计 §5.1）**：设计说放 `ash-core/src/format.rs`，实际放 `ash/auto-shell/src/cmd/format.rs`。理由：实现复用的 5 个解析器（含手写 csv/yaml/xml + `toml` crate）全在 auto-shell；把它们搬进 ash-core 需迁移 ~1900 行 + 引入 `toml` 依赖，超出 M0 范围。trait 仍是纯 `auto_val::Value` 接口；ash-core 的 lazy 层不需要它（Format 在 lazy 链两端，调用点在 shell.rs）。11 测试全绿（json/toml/yaml/xml/csv roundtrip + registry）。
 
 **验收**：5 个 Format 实现各自 roundtrip/parse 单测通过；registry 能按名取到。
 
