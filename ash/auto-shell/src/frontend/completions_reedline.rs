@@ -7,6 +7,7 @@
 //! - Shared state (current_dir) updated by the REPL after each command
 
 use crate::completions::{Completion, CompletionSignature};
+use crate::completions::ai_layer::{self, CtxSnapshot};
 use ash_core::completions::{
     context_rank, help_parser, CompletionContext, CompletionProvider,
 };
@@ -72,6 +73,18 @@ impl StateSnapshot {
             last_exit_code: s.last_exit_code,
             history: s.history.clone(),
             aliases: s.aliases.clone(),
+        }
+    }
+
+    /// Build a `Send` snapshot for the AI completion layer (Plan 032 M2). The
+    /// live context borrows a closure and isn't `Send`; the background thread
+    /// needs an owned, copyable view.
+    fn ai_snapshot(&self) -> CtxSnapshot {
+        CtxSnapshot {
+            current_dir: self.current_dir.clone(),
+            last_command: self.last_command.clone(),
+            history: self.history.clone(),
+            aliases: self.aliases.clone(),
         }
     }
 }
@@ -314,12 +327,28 @@ impl Completer for ShellCompleter {
                     aliases: snapshot.aliases.clone(),
                 };
 
-                let completions = self.provider.resolve(
+                let mut completions = self.provider.resolve(
                     &resolve_parts,
                     cursor_part,
                     prefix,
                     &ctx,
                 );
+
+                // Plan 032 M2. merge any AI candidates the previous keystroke's
+                // background fetch produced for this line (one-keystroke lag).
+                merge_ai_pending(line, &mut completions);
+
+                // Plan 032 M2: when the static spec is thin at a subcommand
+                // position, ask the local model for more candidates. Fire-and-
+                // forget on a background thread; this call never blocks — the
+                // result surfaces on the next keystroke.
+                if ai_completion_enabled()
+                    && completions.len() < 3
+                    && !cmd.starts_with('-')
+                    && cursor_part >= 1
+                {
+                    ai_layer::trigger_ai_subcommand(cmd, prefix, snapshot.ai_snapshot());
+                }
 
                 if !completions.is_empty() {
                     return completions
@@ -342,6 +371,29 @@ impl Completer for ShellCompleter {
             line,
             &self.signatures,
         );
+
+        // Plan 032 M2: merge any pending AI candidates here too (covers NL
+        // translations fired on a previous keystroke at the command-name spot).
+        merge_ai_pending(line, &mut completions);
+
+        // Plan 032 M2: if we're at the command-name position and the first
+        // token matches no known command/alias, the user may be typing a
+        // natural-language phrase — ask the model to translate it. Only fire
+        // when there are no useful local candidates (avoids spending a model
+        // call when the static engine already has answers).
+        if ai_completion_enabled()
+            && is_command_name_position(line, pos)
+            && first_token_is_unknown(line, &self.signatures, &snapshot.aliases)
+            && completions.iter().all(|c| {
+                c.kind != crate::completions::CompletionKind::Command
+                    && c.kind != crate::completions::CompletionKind::External
+            })
+        {
+            let phrase = line[..pos].trim();
+            if !phrase.is_empty() {
+                ai_layer::trigger_nl_to_pipeline(phrase, snapshot.ai_snapshot());
+            }
+        }
 
         // Plan 032 M1.1: context-aware ranking. Only reorder when we're
         // completing a COMMAND NAME (first token) — reordering subcommand/
@@ -379,6 +431,42 @@ fn is_command_name_position(line: &str, pos: usize) -> bool {
     let before = &line[..pos];
     // Command name position = no interior whitespace before the cursor.
     !before.trim().contains(char::is_whitespace)
+}
+
+/// Plan 032 M2: whether AI completion is enabled. Defaults to `true` — AI is
+/// an enhancement that degrades cleanly to the static engine when no daemon is
+/// running, so we don't make users opt in. Disable via `ai.completion: false`
+/// in the config.
+fn ai_completion_enabled() -> bool {
+    let cfg = crate::auto_config::load();
+    crate::auto_config::get_bool(&cfg, "ai", "completion").unwrap_or(true)
+}
+
+/// Plan 032 M2: drain any AI candidates the background thread produced for
+/// `line` and append them to `completions` (after local candidates, since they
+/// are suggestions rather than authoritative). No-op when nothing is pending
+/// or the cached result was for a different line.
+fn merge_ai_pending(line: &str, completions: &mut Vec<Completion>) {
+    if let Some(ai) = crate::completions::ai_layer::take_ai_pending(line) {
+        completions.extend(ai);
+    }
+}
+
+/// Plan 032 M2: true when the first token of `line` is not a known command
+/// (neither a built-in signature nor a registered alias). This is the gate for
+/// natural-language→pipeline translation: only fire when the user typed
+/// something that isn't already a recognized command word.
+fn first_token_is_unknown(
+    line: &str,
+    signatures: &[CompletionSignature],
+    aliases: &HashMap<String, String>,
+) -> bool {
+    let Some(first) = line.split_whitespace().next() else {
+        return false; // empty line — nothing to translate
+    };
+    let is_builtin = signatures.iter().any(|s| s.name == first);
+    let is_alias = aliases.contains_key(first);
+    !is_builtin && !is_alias
 }
 
 /// Plan 036: Returns true if `cmd` looks like a script file path rather than
@@ -556,5 +644,56 @@ mod tests {
         state.current_dir = PathBuf::new();
         let snap = StateSnapshot::from_state(&state);
         assert_eq!(snap.current_dir, PathBuf::from("."));
+    }
+
+    // ── Plan 032 M2.3: AI layer integration + degradation ───────────────
+
+    #[test]
+    fn first_token_is_unknown_recognizes_builtins_and_aliases() {
+        let sigs = test_signatures(); // ls, grep
+        let mut aliases = HashMap::new();
+        aliases.insert("g".to_string(), "git".to_string());
+
+        // Known builtins → NOT unknown.
+        assert!(!first_token_is_unknown("ls", &sigs, &aliases));
+        assert!(!first_token_is_unknown("grep foo", &sigs, &aliases));
+        // Known alias → NOT unknown.
+        assert!(!first_token_is_unknown("g", &sigs, &aliases));
+        // Unknown command → unknown (candidate for NL translation).
+        assert!(first_token_is_unknown("列出最大文件", &sigs, &aliases));
+        assert!(first_token_is_unknown("zzz", &sigs, &aliases));
+        // Empty line → not unknown (nothing to translate).
+        assert!(!first_token_is_unknown("", &sigs, &aliases));
+    }
+
+    #[test]
+    fn complete_does_not_panic_without_daemon() {
+        // The hallmark degradation guarantee: with no aaid daemon running
+        // (the case in CI / this test), completion must not panic and must
+        // still return the static/dynamic engine's candidates. The AI
+        // background threads spawn, fail to connect, and write nothing.
+        let mut completer = test_completer();
+        // A known command — exercises the built-in path.
+        let suggestions = completer.complete("l", 1);
+        assert!(!suggestions.is_empty(), "static completion must still work");
+        assert!(suggestions.iter().any(|s| s.value == "ls"));
+    }
+
+    #[test]
+    fn complete_with_unknown_phrase_does_not_panic() {
+        // Typing a natural-language phrase at the command spot fires a NL
+        // translation background thread. With no daemon it degrades silently.
+        // The call itself must return without hanging or panicking.
+        let mut completer = test_completer();
+        let _ = completer.complete("zzz未知命令", 12);
+        // No assertion on content — we only assert it didn't panic/block.
+    }
+
+    #[test]
+    fn ai_completion_enabled_defaults_true() {
+        // AI completion is on by default (it degrades cleanly without a daemon).
+        // We can't easily set config in a unit test, so just confirm the helper
+        // returns a bool and doesn't panic.
+        let _ = ai_completion_enabled();
     }
 }

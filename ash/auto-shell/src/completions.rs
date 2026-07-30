@@ -21,3 +21,7 @@ pub mod spec_tiers;
 
 // External command completion definitions
 pub mod definitions;
+
+// Plan 032 M2: AI completion layer (LLM subcommand + NL→pipeline), via a
+// background thread + static cache (see module docs for the async strategy).
+pub mod ai_layer;
