@@ -1,14 +1,171 @@
 # Plan 029: ASH AI 能力增强设计
 
 > **日期**: 2026-07-20(初稿 SmartCommand)/ 2026-07-21(扩展为 AI 能力总设计)
-> **状态**: 设计中(待评审)
+> **状态**: ⚠️ **v1 设计已过时（见 §0 重新评估）** —— 2026-07-30 基于 auto-ai 最新 daemon+client+app 架构重新评估，发现多处设计在 auto-shell 自实现本属 harness 的逻辑。下方 §1-§8 为原始 v1 设计（保留作历史），**实施以 §0 为准**。
 > **战略驱动**: 让 ash 成为 AI 时代的结构化 shell —— 内置完整的 AI 能力(SmartCommand + F4 tool-calling + F3 NL→pipeline + NL→AutoLang + 上下文感知),本地小模型 + 云端大模型分层协同
 > **范围**: 跨 auto-shell + auto-ai 仓库,统一设计 ash 的所有 AI 子能力
 > **预估**: 含 5 个子能力,共享基础设施后总工作量约 8-12 周(详见 §8)
 
 ---
 
-## 愿景:ash 的完整 AI 能力图景
+## §0 基于最新 auto-ai 架构的重新评估（2026-07-30）
+
+> **⚠️ 实施以本节为准。** 下方 §1-§8 是 2026-07-21 的 v1 设计，写于 auto-ai 架构定型之前，多处把本属 harness 的逻辑设计在 auto-shell 内自实现。本节基于 auto-ai 当前的 daemon+client+app 架构重新评估，修订实施计划。
+
+### 0.1 触发原因
+
+v1 设计（§1-§8）写于 2026-07-21。此后 auto-ai 确立了清晰的**三层架构**（daemon 唯一 LLM 网关 + client 薄客户端 + agent 是 app 借助的 harness 库），核心理念变为「**harness 功能尽量放 auto-ai，各 app 借助 auto-ai-agent 库调用**」。
+
+对照该理念重新审查 v1，发现三处明确在 auto-shell 自实现了本属 harness 的逻辑：
+- §A.6 的 `ai.generate` native 直接手搓 `CompletionRequest` + `block_on` 直连 provider
+- §6.3 的 NL→AutoLang 手写 mini-ReAct（max_retries + 错误回喂循环），违背 v1 自己「不重写 ReAct」的决策
+- §4 的 F4 ChatSession 手搓 Agent 构造 + 历史回放
+
+### 0.2 auto-ai 现状（事实基础，均经一手核实）
+
+#### 三层架构
+
+| 层 | crate | 职责 | 对 029 的意义 |
+|---|---|---|---|
+| **daemon** (`aaid`) | `auto-ai-daemon` | 唯一 LLM 网关：所有 provider 知识、tier 路由、并发池、usage tracking | provider/路由必须在此 |
+| **client** | `auto-ai-client` | 薄 HTTP 客户端：发 canonical 请求、收 canonical 响应，无 provider 知识 | auto-shell **目前只到这层** |
+| **agent** | `auto-ai-agent` | **app 借助的 harness**：Role/Agent/Tool/ReAct/Workflow，用 client 驱动 | 029 的大多数 AI 功能该用这层 |
+
+#### 关键事实（file:line 基于 `D:\autostack\auto-ai`）
+
+1. **`Agent::run` + `run_stream` 已完整实现**（`auto-ai-agent/src/agent.rs:286/521`）—— ReAct 循环、tool 执行、循环检测（LOOP_DETECT_THRESHOLD=3）、软/硬 turn 上限、流式、取消，全部就绪。**029 无需自写任何工具循环。**
+2. **`Tool` trait + `ToolRegistry` 已存在**（`auto-ai-agent/src/tool.rs:21/49`）—— ash 只需把命令实现成 `Tool` 注册即可。
+3. **已有 14 个内置 Role**（`auto-ai-agent/src/builtin_roles/mod.rs:50`），含专为 Ash 设计的：
+   - `Translator`（tier=Pro/云端，纯翻译不执行，max_turns=3）—— NL→命令
+   - `Runner`（tier=Mid/云端，带 tool 执行，max_turns=15）—— 执行
+4. **`Agent::with_context` / `with_context_file` 已存在**（`agent.rs:176`）—— 上下文注入基础设施就绪。
+5. **流式输出全链路打通**：client `complete_stream` → daemon SSE（`server.rs:256`）→ provider → Agent `run_stream`。
+6. **`preferred_provider()` 方法已在 Role trait 中存在**（`role_def.rs:116`），`TierRouter::resolve(tier, pref)` 也能接收（`tier_router.rs:113`）——**但链路有 3 处断点**（见 0.3）。
+7. **auto-shell 现状**：只依赖 `auto-ai-client`（`ash/auto-shell/Cargo.toml:19`），**不依赖 `auto-ai-agent`**，手工构造 `CompletionRequest`（`frontend/ai.rs:157`、`frontend/repl.rs:376`）——停留在 Layer 2（client），未用 agent 的 ReAct/Tool/Role 体系。
+
+### 0.3 功能归属重新划分（核心）
+
+#### 🟢 auto-ai 已有，auto-shell 直接用（v1 当成「待实现」，其实已完成）
+
+| v1 设计的功能 | auto-ai 现状 | auto-shell 要做的 |
+|---|---|---|
+| F4 tool-calling 的 ReAct 循环 | `Agent::run`/`run_stream` 已实现（`agent.rs:286/521`） | 仅构造 Agent + 注册 Tool |
+| Tool 系统 | `Tool` trait + `ToolRegistry`（`tool.rs:21/49`） | 实现 ash 命令为 Tool |
+| 流式输出 | 全链路打通 | 渲染 `StreamEvent` |
+| 上下文注入基础设施 | `Agent::with_context`（`agent.rs:176`） | 喂入 shell 特定 context chunk |
+| NL→命令 的 Role | `Translator` 已存在，专为 Ash 设计 | 可能直接用，或继承它 |
+| 执行型 Role | `Runner` 已存在，专为 Ash 设计 | SmartCommand 的执行可能用它 |
+
+#### 🔵 该推进到 auto-ai（v1 设计在 auto-shell，应改归 auto-ai；多数 v1 已放对）
+
+| 功能 | v1 位置 | 问题 / 现状 | 应归属 |
+|---|---|---|---|
+| **`ai.generate` native（§A.6）** | auto-shell 手搓 `CompletionRequest`+`block_on` | **最典型越界**：auto-shell 自己拼 LLM 请求 | auto-ai 提供 high-level API / 走 Agent |
+| **NL→AutoLang 反馈循环（§6.3）** | auto-shell 手写 mini-Agent | 违背「不重写 ReAct」决策 | 复用 `Agent::run` |
+| **F4 ChatSession 历史回放（§4）** | auto-shell 手搓 replay | 会话编排是 harness 抽象 | auto-ai 提供「带历史的 ChatSession」 |
+| **OllamaProvider（§2.1）** | ✅ v1 已正确放 auto-ai-daemon | 但尚不存在；可用 `kind="openai"` 临时跑（无 auth 已支持） | auto-ai（保持，需新建） |
+| **preferred_provider 链路（§2.1）** | ✅ v1 已正确放 auto-ai | **3 处断点**需补全 | auto-ai（保持，需补全） |
+| **SmartCommandRole（§2.1 #8）** | ✅ v1 已正确放 auto-ai-agent | 尚不存在；但已有 Translator/Runner 需重新评估关系 | auto-ai（保持，需新建，见 0.7） |
+
+**preferred_provider 链路的 3 处断点**（必须改 auto-ai）：
+1. `Role::preferred_provider()` 方法已有（`role_def.rs:116`）✓
+2. `TierRouter::resolve(tier, pref)` 能接收 pref（`tier_router.rs:113`）✓
+3. ✗ **`Agent::build_request`（`agent.rs:536`）不读 `role.preferred_provider()`**
+4. ✗ **`CompletionRequest`（`wire.rs:156`）无 `preferred_provider` 字段**
+5. ✗ **daemon `server.rs` 用 `candidates(tier)` 而非 `resolve(tier, pref)`**（`server.rs:129`）
+
+#### 🟡 留在 auto-shell 合理（领域特定，非 harness）
+
+| 功能 | 为什么留 auto-shell |
+|---|---|
+| **AshCommandTool 桥（§2.2）** | 需访问 `Shell` 私有类型，桥是适配层。参考 `auto-ai-cli/src/tools.rs` 的 `RunCommand` |
+| **SmartCommand 的 command.at 加载/executor/body.ash（§3）** | ash 特有领域模型 + AutoLang 执行 |
+| **F3 NL→pipeline 的验证/多步预览（§5）** | shell 侧逻辑 |
+| **`Shell::eval_auto`（§6 的 pub 包装本身）** | 包装私有方法，合理 |
+| **Shell 访问器 + Warp 式建议（§7）** | REPL 体验层 |
+
+#### ⚪ 边界灰区（可工作，理想形态是 auto-ai 提供辅助 API）
+
+| 功能 | 现状 | 理想形态 |
+|---|---|---|
+| **context builder 的 system prompt 拼装（§2.3）** | auto-shell 拼 prompt | auto-ai 提供「prompt chunk 注入」API，auto-shell 只填数据 |
+| **`register_all_ash_commands` + schema 推导（§2.2）** | auto-shell 推导 | auto-ai 提供「签名→Tool schema」辅助（但 `Command` trait 是 ash 私有，当前放 auto-shell 可接受） |
+
+### 0.4 三个被推翻的设计决策
+
+| v1 决策 | 问题 | 修订 |
+|---|---|---|
+| ❌ **§A.6 `ai.generate` 手搓 `CompletionRequest`** | auto-shell 直连 provider，自实现 LLM 调用 | 走 auto-ai high-level API（`Agent` 或专用 generate 方法） |
+| ❌ **§6.3 NL→AutoLang 手写反馈循环** | 自写 max_retries + 错误回喂，是 mini-ReAct | 复用 `Agent::run`（符合 v1 自己的「不重写 ReAct」决策） |
+| ❌ **§4 F4 ChatSession 手搓历史回放** | 每个 app 各自手搓 replay，会话编排应共享 | auto-ai 提供「带历史的 ChatSession」抽象 |
+
+### 0.5 修订后的实施计划（明确拆分两侧）
+
+#### 📦 auto-ai 侧（跨仓库 PR，auto-shell 的前置依赖）
+
+| 工作 | 改动点 | 说明 |
+|---|---|---|
+| **preferred_provider 链路补全** | `wire.rs` 加字段 + `agent.rs:536` 读 role + `server.rs:129` 改用 `resolve` | 3 处断点，纯加法+默认 None，零破坏 |
+| **OllamaProvider** | `auto-ai-daemon/src/provider/ollama.rs` 新建 + `mod.rs` 加 `"ollama"` 分支 | 薄包装委托 OpenAiProvider（Ollama 暴露 OpenAI 兼容 API） |
+| **SmartCommandRole** | `auto-ai-agent/src/builtin_roles/smart_command.rs` 新建 + 注册 | tier=Min / preferred_provider="ollama" / max_turns=3（见 0.7） |
+| **（可选）ChatSession 抽象** | `auto-ai-agent` 新增带历史回放的会话类型 | 解耦 §4 的手搓 replay |
+| **（可选）high-level generate API** | `auto-ai-agent` 或 `auto-ai-client` 暴露非 Agent 的单次 generate | 替代 §A.6 的手搓 |
+
+#### 📦 auto-shell 侧（依赖 auto-ai 侧完成）
+
+| 工作 | 改动点 | 说明 |
+|---|---|---|
+| **新增 `auto-ai-agent` 依赖** | `ash/auto-shell/Cargo.toml` | 从 Layer 2（client）升到 Layer 3（agent） |
+| **AshCommandTool 桥** | `ash/auto-shell/src/ai_bridge.rs` 新建 | 参考 `auto-ai-cli/src/tools.rs:127` 的 `RunCommand`，但调 `Shell::execute_for_agent` |
+| **SmartCommand 领域逻辑** | `smart_command/{config,loader,executor}.rs` + CLI | command.at 加载 / body.ash 执行 / `ash smart` |
+| **前端集成** | `frontend/ai.rs` ChatSession 改造 + F3 预览 | 用 Agent + 渲染 StreamEvent |
+
+#### 依赖关系
+
+```
+auto-ai 侧（跨仓库 PR）
+  preferred_provider 链路 ──┐
+  OllamaProvider ───────────┼─→ auto-shell 侧可启动
+  SmartCommandRole ─────────┘
+  (可选) ChatSession 抽象 ──→ 解锁 F4
+  (可选) generate API ──────→ 解锁 NL→AutoLang
+
+auto-shell 侧
+  新增 auto-ai-agent 依赖 ──→ 一切的前提
+  AshCommandTool 桥 ────────→ F4 / SmartCommand 共用
+  SmartCommand 领域逻辑 ────→ 依赖桥 + SmartCommandRole
+  前端集成 ─────────────────→ 依赖 Agent + 桥
+```
+
+两侧可部分并行：auto-shell 的 AshCommandTool 桥、SmartCommand 领域逻辑不依赖 auto-ai 侧的 provider/链路（只要能编译），但端到端验证需要 auto-ai 侧完成。
+
+### 0.6 工作量修订
+
+| 侧 | 范围 | 估算 | vs v1 |
+|---|---|---|---|
+| **auto-ai 侧** | preferred_provider 链路 + OllamaProvider + SmartCommandRole +（可选）抽象 | 3-4 周 | v1 未单列（散在各 milestone 里） |
+| **auto-shell 侧** | Tool 桥 + SmartCommand 领域 + 前端集成 | 6-8 周 | v1 估 12-16 周，**因不再自实现 harness 而减半** |
+
+**为什么 auto-shell 侧大幅下降**：v1 的 M2/M3（F4 tool-calling、NL→AutoLang）原需在 auto-shell 自实现 ReAct 循环、历史回放、反馈循环——这些现在由 `auto-ai-agent` 提供。
+
+### 0.7 需后续决策：SmartCommandRole vs Translator/Runner
+
+auto-ai 已有三个相关 Role，定位不同：
+
+| Role | tier | provider | tools | 定位 |
+|---|---|---|---|---|
+| `Translator`（已有） | Pro | 云端 | 无 | 纯翻译：NL→命令字符串，**不执行** |
+| `Runner`（已有） | Mid | 云端 | 有 | 执行：拿精确指令，用 tool 执行并报告 |
+| `SmartCommandRole`（v1 设计） | Min | **Ollama 本地** | 有 | 智能命令：几步确定性 + 一步 AI 判断 |
+
+**结论：SmartCommandRole 仍需新建**——它的核心差异是**本地小模型（tier=Min + preferred_provider="ollama"）**，用于低延迟、零成本的参数解析/NLU 判断，与 Translator（云端、纯翻译）、Runner（云端、执行）定位不重叠。但实施时需明确三者分工边界：
+- SmartCommand 的 **body.ash 确定性步骤** → ash 侧 AutoLang 执行（不经 LLM）
+- SmartCommand 的 **AI 判断步骤** → SmartCommandRole（本地 Ollama）
+- 用户的 **NL 兜底请求**（无对应 SmartCommand）→ Translator（云端）或 F3
+
+---
+
+
 
 > **ash 不只是"能被 AI Agent 调用"的 shell(那是 Plan 028 做的),更是"内置 AI 能力"的 shell**。本设计统一规划 ash 的所有 AI 子能力,让本地小模型和云端大模型各司其职,覆盖从"自然语言到结构化命令"到"上下文感知的对话式助手"的完整光谱。
 
