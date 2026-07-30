@@ -351,10 +351,12 @@ impl Repl {
     fn ask_ai(&self, question: &str) -> Result<String, String> {
         use auto_ai_client::{AiClient, CompletionRequest};
 
-        let cwd = self.shell.pwd();
+        // Plan 029 §2.3/§7.2: inject the live shell context (OS/cwd/last
+        // command/aliases) so the model knows the user's environment.
+        let context = crate::frontend::ai_context::build_context_block(&self.shell);
         let system = format!(
             "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
-             The user's current directory is: {}\n\
+             {context}\n\
              The user will describe what they want to do in natural language.\n\
              Translate it into a SINGLE ash shell command (or pipeline).\n\
              Rules:\n\
@@ -362,8 +364,7 @@ impl Repl {
              - Use standard Unix commands (ls, grep, find, etc.).\n\
              - For Ash-specific features, use: ls | .size > 10.mb | sort .name\n\
              - If multiple steps are needed, use && to chain them.\n\
-             - If you're unsure, give your best single-command guess.",
-            cwd.display()
+             - If you're unsure, give your best single-command guess."
         );
 
         let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
@@ -547,6 +548,9 @@ impl Repl {
             },
         );
         let session = self.chat.as_mut().expect("chat session initialized in run_chat_loop");
+        // Plan 029 §7.2: refresh the agent's context (cwd/last-command/aliases)
+        // before each turn — the user may have `cd`'d since the last turn.
+        session.update_context(&self.shell);
         let result = crate::frontend::ai::block_on_async(
             session.send_turn_streaming(user, on_event),
         );

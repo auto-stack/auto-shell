@@ -393,6 +393,14 @@ impl ChatSession {
         self.agent = agent;
     }
 
+    /// Refresh the agent's context block from the live shell state (Plan 029
+    /// §2.3/§7.2). Call this before each turn so the model knows the current
+    /// cwd / last command / aliases — they change between turns.
+    pub fn update_context(&mut self, shell: &crate::shell::Shell) {
+        let ctx = crate::frontend::ai_context::build_context_block(shell);
+        self.agent.set_context(ctx);
+    }
+
     /// Serialize the text turns (user + assistant, tool messages filtered) to
     /// the history file atomically (write temp, then rename). A crash mid-write
     /// won't corrupt the file.
