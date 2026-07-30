@@ -44,45 +44,63 @@ const DANGER_PATTERNS: &[&str] = &[
     "reboot",
 ];
 
-/// A request sent to the dedicated shell thread: the command string plus a
-/// one-shot channel to return the result on. Both are `Send`. Public so
-/// callers that hold an [`AshCommandShellThread`] sender can name the type.
-pub struct CmdRequest {
-    cmd: String,
-    respond: oneshot::Sender<Result<String, ToolError>>,
+/// A request sent to the dedicated shell thread. Public so callers that hold
+/// an [`AshCommandShellThread`] sender can name the type. Both variants are
+/// `Send`.
+pub enum CmdRequest {
+    /// Run a shell command line via `Shell::execute_for_agent`.
+    ShellCmd {
+        cmd: String,
+        respond: oneshot::Sender<Result<String, ToolError>>,
+    },
+    /// Evaluate AutoLang code via `Shell::eval_auto` (Plan 029 §6).
+    AutoEval {
+        code: String,
+        respond: oneshot::Sender<Result<String, ToolError>>,
+    },
 }
 
 /// Owns a dedicated thread that runs an ash [`Shell`].
 ///
-/// The thread reads `CmdRequest`s from the channel, executes each against its
+/// The thread reads [`CmdRequest`]s from the channel, executes each against its
 /// private `Shell`, and sends the result back on the embedded one-shot
 /// channel. Because the `Shell` lives only inside that thread, its non-`Send`
 /// interior never crosses a boundary.
 ///
-/// Dropping the last [`mpsc::Sender`] (i.e. dropping all `AshCommandTool`s
-/// sharing it, or dropping this handle) causes the thread's `recv` to return
-/// `None` and the thread exits cleanly — no leak, no join needed.
+/// Dropping the last [`mpsc::Sender`] (i.e. dropping all tools sharing it, or
+/// dropping this handle) causes the thread's `recv` to return `None` and the
+/// thread exits cleanly — no leak, no join needed.
 pub struct AshCommandShellThread {
     tx: mpsc::Sender<CmdRequest>,
 }
 
 impl AshCommandShellThread {
     /// Start a dedicated shell thread. Returns a sender you pass to
-    /// [`AshCommandTool::new`].
+    /// [`AshCommandTool::new`] / [`EvalAutoTool::new`].
     pub fn start() -> Self {
         let (tx, rx) = mpsc::channel::<CmdRequest>();
         std::thread::spawn(move || {
             let mut shell = Shell::new();
             // Loop until all senders are dropped (recv returns None).
             while let Ok(req) = rx.recv() {
-                let result = match shell.execute_for_agent(&req.cmd, false, false) {
-                    Ok(Some(out)) => Ok(out),
-                    Ok(None) => Ok(String::new()),
-                    Err(e) => Err(ToolError::Exec(format!("{e}"))),
-                };
-                // If the responder went away (caller dropped the future),
-                // sending fails — just discard and continue.
-                let _ = req.respond.send(result);
+                match req {
+                    CmdRequest::ShellCmd { cmd, respond } => {
+                        let r = match shell.execute_for_agent(&cmd, false, false) {
+                            Ok(Some(out)) => Ok(out),
+                            Ok(None) => Ok(String::new()),
+                            Err(e) => Err(ToolError::Exec(format!("{e}"))),
+                        };
+                        let _ = respond.send(r);
+                    }
+                    CmdRequest::AutoEval { code, respond } => {
+                        let r = match shell.eval_auto(&code) {
+                            Ok(Some(out)) => Ok(out),
+                            Ok(None) => Ok(String::new()),
+                            Err(e) => Err(ToolError::Exec(format!("{e}"))),
+                        };
+                        let _ = respond.send(r);
+                    }
+                }
             }
             // rx returned None: all senders dropped, thread exits.
         });
@@ -153,7 +171,7 @@ impl Tool for AshCommandTool {
         // rather than hanging.
         let (otx, orx) = oneshot::channel();
         self.tx
-            .send(CmdRequest {
+            .send(CmdRequest::ShellCmd {
                 cmd: cmd_str,
                 respond: otx,
             })
@@ -219,6 +237,72 @@ fn quote_if_needed(s: &str) -> String {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
         s.to_string()
+    }
+}
+
+/// A [`Tool`] that evaluates AutoLang code on the dedicated shell thread
+/// (Plan 029 §6).
+///
+/// Unlike [`AshCommandTool`] (which runs a shell command line), this executes
+/// AutoLang source — `fn` definitions, `while`/`try-catch`, expressions — via
+/// [`Shell::eval_auto`]. Used by NL→AutoLang (`ash ask`): the Agent generates
+/// a script, calls this tool to run it, sees the result or error, and
+/// self-corrects in the next ReAct turn.
+///
+/// Shares the same [`AshCommandShellThread`] sender (the thread dispatches
+/// `CmdRequest::AutoEval` vs `CmdRequest::ShellCmd`).
+pub struct EvalAutoTool {
+    tx: mpsc::Sender<CmdRequest>,
+}
+
+impl EvalAutoTool {
+    /// Create the tool. `tx` comes from [`AshCommandShellThread::sender`].
+    pub fn new(tx: mpsc::Sender<CmdRequest>) -> Self {
+        Self { tx }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for EvalAutoTool {
+    fn name(&self) -> &str {
+        "eval_auto"
+    }
+
+    fn description(&self) -> &str {
+        "Evaluate AutoLang source code and return the result. Use this to run \
+         multi-step scripts with fn/while/try-catch/if. The code persists \
+         across calls (definitions survive). Call system(\"cmd\") to run shell \
+         commands from within the code. Pass the source as {\"code\": \"...\"}."
+    }
+
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "The AutoLang source code to evaluate"
+                }
+            },
+            "required": ["code"]
+        })
+    }
+
+    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
+        let code = args
+            .get("code")
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| ToolError::Args("missing 'code' field".into()))?;
+
+        let (otx, orx) = oneshot::channel();
+        self.tx
+            .send(CmdRequest::AutoEval {
+                code: code.to_string(),
+                respond: otx,
+            })
+            .map_err(|_| ToolError::Exec("shell thread has exited".into()))?;
+        orx.await
+            .map_err(|_| ToolError::Exec("shell thread dropped the response".into()))?
     }
 }
 
@@ -360,6 +444,54 @@ mod tests {
         assert_eq!(t.name(), "pwd");
         let out = t.execute(&Value::Null).await.unwrap();
         assert!(!out.trim().is_empty(), "pwd should return a path");
+    }
+
+    // ── EvalAutoTool (Plan 029 §6) ─────────────────────────────────────
+
+    async fn eval_auto_run(code: &str) -> Result<String, ToolError> {
+        let thread = AshCommandShellThread::start();
+        let tool = EvalAutoTool::new(thread.sender());
+        // Drive the async tool call on a one-shot runtime (Shell::new inside
+        // the thread does AutoLang VM init that can't run in a tokio ctx, but
+        // the thread itself is a plain std::thread so this is fine).
+        tool.execute(&json!({"code": code})).await
+    }
+
+    #[tokio::test]
+    async fn eval_auto_runs_simple_expression() {
+        let out = eval_auto_run("1 + 2").await.unwrap();
+        assert!(out.contains('3'), "1+2 should produce 3, got: {out}");
+    }
+
+    #[tokio::test]
+    async fn eval_auto_returns_string_value() {
+        // A string expression returns its value (print() returns nothing, so
+        // test a value-producing expression instead).
+        let out = eval_auto_run("\"hello-auto\"").await.unwrap();
+        assert!(out.contains("hello-auto"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn eval_auto_runs_fn_definition_and_call() {
+        // Define a fn and call it — multi-line AutoLang with control flow.
+        let code = "fn greet(name) {\n  return \"hi \" + name\n}\ngreet(\"world\")";
+        let out = eval_auto_run(code).await.unwrap();
+        assert!(out.contains("hi world"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn eval_auto_syntax_error_returns_error() {
+        // Malformed code should surface as a ToolError, not panic.
+        let result = eval_auto_run("fn broken(").await;
+        assert!(result.is_err(), "syntax error should be an error");
+    }
+
+    #[tokio::test]
+    async fn eval_auto_missing_code_arg_errors() {
+        let thread = AshCommandShellThread::start();
+        let tool = EvalAutoTool::new(thread.sender());
+        let result = tool.execute(&json!({"not_code": "x"})).await;
+        assert!(result.is_err());
     }
 }
 

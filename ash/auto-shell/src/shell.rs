@@ -1524,6 +1524,16 @@ impl Shell {
         }
     }
 
+    /// Plan 029 §6.2: public wrapper over [`execute_auto`] for AI features.
+    ///
+    /// Executes AutoLang code (expressions, statements, `fn` definitions) on
+    /// the persistent interpreter and returns the formatted result. Used by
+    /// NL→AutoLang (`ash ask`) so an Agent can generate and run scripts, see
+    /// the output, and self-correct on errors.
+    pub fn eval_auto(&mut self, code: &str) -> Result<Option<String>> {
+        self.execute_auto(code)
+    }
+
     /// Expand variables in input string
     /// Supports $name and ${name} syntax
     fn expand_variables(&self, input: &str) -> String {
