@@ -74,6 +74,21 @@ pub enum CmpOp {
     EndsWith,
 }
 
+/// Aggregate operators for the lazy pipeline's `Aggregate` node (Plan 031).
+///
+/// Each variant mirrors the eager `PipelineOp` of the same name: `Count`,
+/// `Uniq`, `GroupBy`, `Sum`, `Avg`, `Min`, `Max`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AggOp {
+    Count,
+    Uniq,
+    GroupBy(String),
+    Sum(String),
+    Avg(String),
+    Min(String),
+    Max(String),
+}
+
 impl CmpOp {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
@@ -312,7 +327,7 @@ pub fn get_field(item: &Value, field: &str) -> Value {
 }
 
 /// Compare two Values using a CmpOp. Returns true if the comparison holds.
-fn compare(a: &Value, op: CmpOp, b: &Value) -> bool {
+pub fn compare(a: &Value, op: CmpOp, b: &Value) -> bool {
     // Try numeric comparison first.
     if let (Some(na), Some(nb)) = (as_f64(a), as_f64(b)) {
         return match op {
@@ -339,7 +354,7 @@ fn compare(a: &Value, op: CmpOp, b: &Value) -> bool {
 }
 
 /// Ordering for sort: compare two Values (numeric then string).
-fn compare_order(a: &Value, b: &Value) -> std::cmp::Ordering {
+pub fn compare_order(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     if let (Some(na), Some(nb)) = (as_f64(a), as_f64(b)) {
         return na.partial_cmp(&nb).unwrap_or(Ordering::Equal);
@@ -348,7 +363,7 @@ fn compare_order(a: &Value, b: &Value) -> std::cmp::Ordering {
 }
 
 /// Extract a numeric value from a Value (Int/I64/Float/Uint/USize/etc.).
-fn as_f64(v: &Value) -> Option<f64> {
+pub fn as_f64(v: &Value) -> Option<f64> {
     match v {
         Value::Int(i) => Some(*i as f64),
         Value::I64(i) => Some(*i as f64),

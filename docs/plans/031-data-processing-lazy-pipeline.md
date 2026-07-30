@@ -121,15 +121,19 @@
 
 **引用**：设计文档 §3.1-3.2。**放 `ash-core/src/pipeline/lazy.rs`**（新增）。
 
-### 任务 M1.0 — 提升 `get_field` 可见性（前置）
-- [ ] `operators.rs:300`：`fn get_field` → `pub fn get_field`（LazyNode 复用，避免重复实现字段访问逻辑）。单独提交，先跑回归。
+### 任务 M1.0 — 提升 helper 可见性（前置）✅ 完成
+- [x] `operators.rs`：`get_field`/`compare`/`compare_order`/`as_f64` 提为 `pub`（LazyNode 复用，避免重复实现算子语义）；新增 `pub enum AggOp`（7 变体）。ash-core 356 全绿（纯可见性 + 新类型，无行为变化）。
 
-### 任务 M1.1 — `LazyNode` enum + `impl Iterator`
-- [ ] **先写流式性测试**（设计 §6.5 成功指标 2）：`test_filter_produces_before_source_exhausted`——构造能探测「Source 未读完时 filter 已产出」的 Source（带计数器的 mock iterator），断言 filter 在 Source 全量 materialize 之前就 `next()` 出元素。
-- [ ] **实现 `LazyNode`**（设计 §3.1，7 变体）：`Source(Vec<Value>)` / `StreamSource(Box<dyn Iterator<Item = Value> + Send>)` / `Filter` / `Take` / `Select`（流式）/ `SortBy` / `Aggregate`（断流点）。
-- [ ] **新建 `AggOp`**（设计 §3.1）：`enum AggOp { Count, Uniq, GroupBy(String), Sum(String), Avg(String), Min(String), Max(String) }`
-- [ ] **实现 `impl Iterator for LazyNode`**（设计 §3.2）：`type Item = Value; fn next(&mut self) -> Option<Value>`。断流点用内部 `SortState { Pending(Box<LazyNode>), Sorted(IntoIter<Value>) }`，首次 `next()` 触发 collect。
-- [ ] 复用 M1.0 提升后的 `get_field`。
+### 任务 M1.1 — `LazyNode` enum + `impl Iterator` ✅ 完成
+- [x] **先写流式性测试** `filter_yields_before_source_is_exhausted` + `take_short_circuits_without_consuming_all_source`——验证 lazy 本质（filter/take 在 source 未读完时产出）。
+- [x] **实现 `LazyNode`**（设计 §3.1，7 变体）：`Source(IntoIter)` / `StreamSource(Box<dyn Iterator>)` / `Filter` / `Take` / `Select`（流式）/ `SortBy` / `Aggregate`（断流点）。
+- [x] **新建 `AggOp`**（设计 §3.1）：`enum AggOp { Count, Uniq, GroupBy(String), Sum(String), Avg(String), Min(String), Max(String) }`（放 operators.rs，lazy 引用）。
+- [x] **实现 `impl Iterator for LazyNode`**（设计 §3.2）：断流点用内部 `BreakState { Pending, Done(IntoIter) }`，首次 `next()` 触发 collect。
+- [x] 复用 M1.0 提升后的 `get_field`/`compare`/`compare_order`/`as_f64`。
+
+**实现偏差（vs 设计）**：①`Source` 用 `std::vec::IntoIter<Value>`（设计 §3.2 注释推荐），而非 `Source(Vec<Value>)`——因 enum 变体需自带游标才能实现 Iterator。②断流状态 enum 命名 `BreakState`（设计叫 `SortState`，但 sort 和 aggregate 共用，更通用的名字）。③`collect()` 对 aggregate 根返回标量（匹配 eager apply 语义），对行节点返回 Array。
+
+10 测试全绿（流式性 ×2 + source/filter/select/sort/count/sum/uniq/stream 各一）；ash-core 366 全绿。
 
 **验收**：流式性测试绿；每个算子的 lazy 行为单测绿（filter/take/select 流式产出；sort/agg 断流后产出）。
 
