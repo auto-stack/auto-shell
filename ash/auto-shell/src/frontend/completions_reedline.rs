@@ -9,18 +9,80 @@
 use crate::completions::{Completion, CompletionSignature};
 use ash_core::completions::{help_parser, CompletionContext, CompletionProvider};
 use reedline::{Completer, Suggestion};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Shared completion state, updated by REPL after each command.
+///
+/// `ShellCompleter` reads a snapshot of this through its `Arc<Mutex<…>>`
+/// handle on every `complete()` call. Plan 032 extends it beyond `current_dir`
+/// to carry the AI-context plumbing (last command/exit code/history/aliases)
+/// so the context-aware ranking and AI layers have what they need.
 #[derive(Debug)]
 pub struct CompletionState {
     pub current_dir: PathBuf,
+    /// Plan 032 M0.3: the last executed command line (`None` before any run).
+    pub last_command: Option<String>,
+    /// Plan 032 M0.3: the exit code of the last command (`None` before any run).
+    pub last_exit_code: Option<i32>,
+    /// Plan 032 M0.3: a bounded snapshot of recent history entries.
+    pub history: Vec<String>,
+    /// Plan 032 M0.3: user aliases (snapshot of the shell's alias map).
+    pub aliases: HashMap<String, String>,
 }
 
 impl CompletionState {
     pub fn new(current_dir: PathBuf) -> Self {
-        Self { current_dir }
+        Self {
+            current_dir,
+            last_command: None,
+            last_exit_code: None,
+            history: Vec::new(),
+            aliases: HashMap::new(),
+        }
+    }
+}
+
+/// Owned snapshot of [`CompletionState`], taken under one lock so the
+/// completer doesn't hold the mutex across `provider.resolve()` / AI work.
+/// Plan 032 M0.3.
+struct StateSnapshot {
+    current_dir: PathBuf,
+    last_command: Option<String>,
+    last_exit_code: Option<i32>,
+    history: Vec<String>,
+    aliases: HashMap<String, String>,
+}
+
+impl StateSnapshot {
+    fn from_state(s: &CompletionState) -> Self {
+        // Default to "." so a missing cwd degrades to relative file completion
+        // rather than panicking.
+        let current_dir = if s.current_dir.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            s.current_dir.clone()
+        };
+        Self {
+            current_dir,
+            last_command: s.last_command.clone(),
+            last_exit_code: s.last_exit_code,
+            history: s.history.clone(),
+            aliases: s.aliases.clone(),
+        }
+    }
+}
+
+impl Default for StateSnapshot {
+    fn default() -> Self {
+        Self {
+            current_dir: PathBuf::from("."),
+            last_command: None,
+            last_exit_code: None,
+            history: Vec::new(),
+            aliases: HashMap::new(),
+        }
     }
 }
 
@@ -232,15 +294,22 @@ impl Completer for ShellCompleter {
                     parts.clone()
                 };
 
-                let current_dir = self
+                // Plan 032 M0.3: snapshot the whole completion state (cwd +
+                // last command/exit code/history/aliases) in one lock so the
+                // resolver and the ranking/AI layers share one coherent view.
+                let snapshot = self
                     .state
                     .lock()
-                    .map(|s| s.current_dir.clone())
-                    .unwrap_or_else(|_| PathBuf::from("."));
+                    .map(|s| StateSnapshot::from_state(&s))
+                    .unwrap_or_default();
 
                 let ctx = CompletionContext {
-                    current_dir: current_dir.clone(),
+                    current_dir: snapshot.current_dir,
                     command_executor: Box::new(Self::execute_command),
+                    last_command: snapshot.last_command,
+                    last_exit_code: snapshot.last_exit_code,
+                    history: snapshot.history,
+                    aliases: snapshot.aliases,
                 };
 
                 let completions = self.provider.resolve(
@@ -414,5 +483,49 @@ mod tests {
         let suggestions = completer.complete("git ", 4);
         let names: Vec<&str> = suggestions.iter().map(|s| s.value.as_str()).collect();
         assert!(names.contains(&"checkout"));
+    }
+
+    // ── Plan 032 M0.3: CompletionState carries AI context plumbing ──────
+
+    #[test]
+    fn completion_state_new_defaults_ai_fields() {
+        let s = CompletionState::new(PathBuf::from("/tmp"));
+        assert_eq!(s.current_dir, PathBuf::from("/tmp"));
+        assert!(s.last_command.is_none());
+        assert!(s.last_exit_code.is_none());
+        assert!(s.history.is_empty());
+        assert!(s.aliases.is_empty());
+    }
+
+    #[test]
+    fn state_snapshot_extracts_all_fields() {
+        // The snapshot is the bridge from CompletionState → CompletionContext.
+        // If this round-trips, the context-aware ranking/AI layers see what
+        // the REPL wrote into the shared state.
+        let mut state = CompletionState::new(PathBuf::from("/repo"));
+        state.last_command = Some("git status".to_string());
+        state.last_exit_code = Some(1);
+        state.history = vec!["ls".into(), "cd src".into(), "git status".into()];
+        state.aliases = {
+            let mut m = HashMap::new();
+            m.insert("g".to_string(), "git".to_string());
+            m
+        };
+
+        let snap = StateSnapshot::from_state(&state);
+        assert_eq!(snap.current_dir, PathBuf::from("/repo"));
+        assert_eq!(snap.last_command.as_deref(), Some("git status"));
+        assert_eq!(snap.last_exit_code, Some(1));
+        assert_eq!(snap.history.len(), 3);
+        assert_eq!(snap.aliases.get("g").map(String::as_str), Some("git"));
+    }
+
+    #[test]
+    fn state_snapshot_defaults_empty_cwd_to_dot() {
+        // A missing cwd must degrade to relative file completion, not panic.
+        let mut state = CompletionState::new(PathBuf::new());
+        state.current_dir = PathBuf::new();
+        let snap = StateSnapshot::from_state(&state);
+        assert_eq!(snap.current_dir, PathBuf::from("."));
     }
 }
