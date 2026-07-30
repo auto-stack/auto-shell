@@ -28,8 +28,9 @@
 //! static + dynamic engine (Plan 021). AI is an enhancement, not a dependency.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use ash_core::completions::{Completion, CompletionKind};
@@ -41,12 +42,64 @@ use auto_ai_client::{AiClient, CompletionRequest};
 /// 500 ms matches the design target: high-frequency interaction can't wait.
 const AI_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Global cache of the most recent AI completion result.
+/// Which completion position an AI result belongs to.
 ///
-/// Keyed by the `line` snapshot at trigger time so a stale result from a
-/// previous (different) line is never merged into the current one. `None`
-/// means no result has landed (or it was already drained).
-static AI_PENDING: Mutex<Option<(String, Vec<Completion>)>> = Mutex::new(None);
+/// The two AI sources fire at *different* cursor positions (subcommand vs
+/// command name) and their results must never cross — a subcommand candidate
+/// like `checkout` is nonsense at a parameter position, and vice versa. We tag
+/// every cached result with its slot and only merge it at the matching
+/// position, so a stale result can't leak across positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AiSlot {
+    /// Subcommand/flag candidates, fired when the static spec is thin at a
+    /// subcommand position (cursor past the command word).
+    Subcommand,
+    /// Natural-language → pipeline translation, fired at the command-name
+    /// position when the first token matches no known command/alias.
+    NaturalLanguage,
+}
+
+/// A cached AI completion result plus the exact line it was requested for.
+struct AiEntry {
+    /// The full `line` passed to `complete()` at trigger time. We match
+    /// against the *current* full line with strict equality (not a prefix
+    /// test) so a result requested for `"git c"` is NOT served while the user
+    /// is editing `"git checkout main"` — that would inject stale subcommand
+    /// candidates into the parameter position.
+    key: String,
+    completions: Vec<Completion>,
+}
+
+/// Global cache of the most recent AI completion result, **per slot**.
+///
+/// Subcommand and natural-language results live in independent slots so they
+/// can't overwrite each other (they fire at different positions and serve
+/// different completions). An entry is only ever returned for a request whose
+/// full line exactly matches its `key`.
+static AI_PENDING: Mutex<[Option<AiEntry>; 2]> = Mutex::new([None, None]);
+
+/// In-flight request tracking: prevents the thread-storm where every keystroke
+/// at a thin-spec position spawns a new background thread for the *same*
+/// (slot, key). A key enters the set on trigger and leaves when the thread
+/// finishes (success or failure), so at most one outstanding request per
+/// (slot, key) exists at a time.
+///
+/// Wrapped in `OnceLock` because `HashSet::new()` is not a const fn, so it
+/// can't initialize a `static Mutex` directly.
+static IN_FLIGHT: OnceLock<Mutex<HashSet<(usize, String)>>> = OnceLock::new();
+
+/// Borrow the in-flight set, initializing it once on first use.
+fn in_flight() -> &'static Mutex<HashSet<(usize, String)>> {
+    IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Map a slot to its index in `AI_PENDING` / key in `IN_FLIGHT`.
+fn slot_index(slot: AiSlot) -> usize {
+    match slot {
+        AiSlot::Subcommand => 0,
+        AiSlot::NaturalLanguage => 1,
+    }
+}
 
 /// A `Send` snapshot of the completion context for the background thread.
 ///
@@ -90,79 +143,117 @@ impl CtxSnapshot {
 
 /// Fire a background LLM request for subcommand/flag candidates the static
 /// spec doesn't cover. Returns immediately; the result (if any) lands in the
-/// cache and is picked up by the next `complete()` call via [`take_ai_pending`].
+/// `Subcommand` cache slot and is picked up by the next `complete()` call at
+/// the same subcommand position via [`take_ai_pending`].
 ///
 /// Only called when the static/dynamic resolver returned fewer than 3
 /// candidates at a subcommand position (see the completer integration) —
-/// saving local compute when the spec is already rich enough.
+/// saving local compute when the spec is already rich enough. Skips the spawn
+/// entirely if an identical (cmd, prefix) request is already in flight.
 pub fn trigger_ai_subcommand(cmd: &str, prefix: &str, ctx: CtxSnapshot) {
     let cmd = cmd.to_string();
     let prefix = prefix.to_string();
-    let snapshot_line = format!("{} {}", cmd, prefix);
+    // The key is the exact line this request serves; it must match the full
+    // `line` later passed to take_ai_pending. We reconstruct the line the
+    // completer had: `<cmd> <prefix>` (see complete()'s subcommand branch).
+    let key = format!("{} {}", cmd, prefix);
+    if !begin_in_flight(AiSlot::Subcommand, &key) {
+        return; // an identical request is already running — don't storm.
+    }
     std::thread::spawn(move || {
         let result = fetch_subcommands(&cmd, &prefix, &ctx);
-        if let Ok(completions) = result {
-            if !completions.is_empty() {
-                store(snapshot_line, completions);
+        match result {
+            Ok(completions) if !completions.is_empty() => {
+                store(AiSlot::Subcommand, key.clone(), completions);
             }
+            _ => {} // error/timeout/empty → degrade to static (by design).
         }
-        // On error/timeout: write nothing → degrade to static (by design).
+        end_in_flight(AiSlot::Subcommand, &key);
     });
 }
 
 /// Fire a background LLM request to translate a natural-language phrase into
-/// an ash command/pipeline. Returns immediately; result lands in the cache.
+/// an ash command/pipeline. Returns immediately; result lands in the
+/// `NaturalLanguage` cache slot.
 ///
 /// Called when the first token matches no known command/alias/path (see the
 /// completer integration). Reuses the same system-prompt shape as the
 /// standalone `ask_ai` (repl.rs) so NL behavior is consistent across the two
-/// surfaces.
+/// surfaces. Skips the spawn if an identical phrase request is in flight.
 pub fn trigger_nl_to_pipeline(input: &str, ctx: CtxSnapshot) {
     let input = input.to_string();
-    let snapshot_line = input.clone();
+    let key = input.clone();
+    if !begin_in_flight(AiSlot::NaturalLanguage, &key) {
+        return;
+    }
     std::thread::spawn(move || {
         let result = fetch_nl_pipeline(&input, &ctx);
         if let Ok(completion) = result {
-            store(snapshot_line, vec![completion]);
+            store(AiSlot::NaturalLanguage, key.clone(), vec![completion]);
         }
+        end_in_flight(AiSlot::NaturalLanguage, &key);
     });
 }
 
-/// Drain the pending AI candidates iff they were produced for `line`.
+/// Drain the pending AI candidates for `slot` iff they were produced for the
+/// *exact* `line` (full-line equality — never a prefix test).
 ///
-/// Returns `None` when there's nothing pending, the result errored, or the
-/// cached line snapshot no longer matches what the user is typing (so a stale
-/// result from a deleted prefix never leaks into the current completions).
-/// Always clears the cache (take semantics).
-pub fn take_ai_pending(line: &str) -> Option<Vec<Completion>> {
+/// Returns `None` when there's nothing pending for this slot, the result
+/// errored, or the cached key doesn't equal the current line. **Only a match
+/// clears the slot** — a mismatch leaves the entry in place so a result that
+/// arrived slightly early isn't destroyed before the line catches up (the user
+/// may be mid-edit toward the matching line).
+pub fn take_ai_pending(slot: AiSlot, line: &str) -> Option<Vec<Completion>> {
+    let idx = slot_index(slot);
     let mut guard = AI_PENDING.lock().ok()?;
-    let (cached_line, completions) = guard.take()?;
-    // Only return the result if it was for the current line; otherwise drop it.
-    // We compare against the snapshot key the trigger stored (which encodes
-    // cmd+prefix for subcommands, or the raw input for NL).
-    if matches_line(&cached_line, line) {
-        Some(completions)
-    } else {
-        None
+    let Some(entry) = guard[idx].as_ref() else {
+        return None;
+    };
+    if entry.key != line {
+        // Non-matching key: LEAVE the entry so it isn't destroyed by an
+        // unrelated keystroke. It will be overwritten by a newer result for
+        // this slot, or matched on a later keystroke.
+        return None;
+    }
+    // Exact match: take it (so it's shown exactly once).
+    guard[idx].take().map(|e| e.completions)
+}
+
+/// Re-export the slot type for the completer to name the position it's
+/// merging at.
+pub use AiSlot as Slot;
+
+/// Mark `(slot, key)` as in flight; returns false if already in flight (caller
+/// should skip the spawn). Guards the thread-storm: at most one outstanding
+/// request per (slot, key) at a time.
+fn begin_in_flight(slot: AiSlot, key: &str) -> bool {
+    in_flight()
+        .lock()
+        .ok()
+        .map(|mut s| s.insert((slot_index(slot), key.to_string())))
+        .unwrap_or(true) // on lock poison, proceed (best-effort, not a correctness gate)
+}
+
+/// Clear the in-flight marker when a request finishes.
+fn end_in_flight(slot: AiSlot, key: &str) {
+    if let Ok(mut s) = in_flight().lock() {
+        s.remove(&(slot_index(slot), key.to_string()));
     }
 }
 
-/// Compare the cached snapshot key against the current line. The snapshot key
-/// is a conservative prefix of the line (cmd + space + prefix, or the NL
-/// phrase), so we accept the result when the line starts with the key.
-fn matches_line(cached: &str, line: &str) -> bool {
-    if cached.is_empty() {
-        return false;
-    }
-    line.starts_with(cached) || cached.starts_with(line)
-}
-
-/// Store a result keyed by the trigger-time line snapshot.
-fn store(line: String, completions: Vec<Completion>) {
+/// Store a result in `slot`, keyed by the trigger-time full line.
+///
+/// `pub(crate)` so the completer's integration tests can inject a finished
+/// result (simulating the background thread having completed) without needing
+/// a live daemon — this is the seam that makes `complete()` → `Suggestion`
+/// AI-merge behavior unit-testable.
+pub(crate) fn store(slot: AiSlot, key: String, completions: Vec<Completion>) {
+    let idx = slot_index(slot);
     if let Ok(mut g) = AI_PENDING.lock() {
-        *g = Some((line, completions));
+        g[idx] = Some(AiEntry { key, completions });
     }
 }
+
 
 // ── Background-thread fetchers (each builds its own runtime) ────────────
 
@@ -290,61 +381,148 @@ mod tests {
         }
     }
 
+    fn ai(label: &str) -> Completion {
+        Completion::with_kind(label, label, CompletionKind::AiSuggested)
+    }
+
+    /// Clear both slots so tests start from a known-empty state.
+    fn clear_cache() {
+        if let Ok(mut g) = AI_PENDING.lock() {
+            *g = [None, None];
+        }
+        if let Ok(mut s) = in_flight().lock() {
+            s.clear();
+        }
+    }
+
     #[test]
     fn take_pending_is_none_when_empty() {
-        let _ = take_ai_pending("anything");
-        // Drain any leftover, then assert empty.
-        let _ = take_ai_pending("anything");
-        assert!(take_ai_pending("anything").is_none());
+        clear_cache();
+        assert!(take_ai_pending(AiSlot::Subcommand, "anything").is_none());
+        assert!(take_ai_pending(AiSlot::NaturalLanguage, "anything").is_none());
     }
 
     #[test]
-    fn store_then_take_returns_for_matching_line() {
-        // Manually store a result and drain it for a matching line.
+    fn store_then_take_returns_for_exact_matching_key() {
+        clear_cache();
         store(
-            "git ch".to_string(),
-            vec![Completion::with_kind(
-                "checkout",
-                "checkout",
-                CompletionKind::AiSuggested,
-            )],
+            AiSlot::Subcommand,
+            "git c".to_string(),
+            vec![ai("checkout"), ai("commit")],
         );
-        let got = take_ai_pending("git checkout");
-        assert!(got.is_some(), "should return for a line that matches the key");
-        let comps = got.unwrap();
-        assert_eq!(comps.len(), 1);
-        assert_eq!(comps[0].replacement, "checkout");
-        assert_eq!(comps[0].kind, CompletionKind::AiSuggested);
+        // Exact key match → returned.
+        let got = take_ai_pending(AiSlot::Subcommand, "git c").unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].replacement, "checkout");
+        assert_eq!(got[0].kind, CompletionKind::AiSuggested);
     }
 
     #[test]
-    fn take_drains_so_not_returned_twice() {
-        store("foo".to_string(), vec![Completion::new("a", "a")]);
-        assert!(take_ai_pending("foo").is_some());
-        assert!(take_ai_pending("foo").is_none(), "second take must be None");
-    }
-
-    #[test]
-    fn stale_result_for_different_line_is_dropped() {
-        // A result keyed on one line must NOT surface for an unrelated line.
-        store("git push".to_string(), vec![Completion::new("a", "a")]);
+    fn take_drains_on_match_so_not_returned_twice() {
+        clear_cache();
+        store(AiSlot::Subcommand, "foo".to_string(), vec![ai("a")]);
+        assert!(take_ai_pending(AiSlot::Subcommand, "foo").is_some());
         assert!(
-            take_ai_pending("docker run").is_none(),
-            "stale result should be dropped, not returned"
+            take_ai_pending(AiSlot::Subcommand, "foo").is_none(),
+            "second take after a match must be None"
+        );
+    }
+
+    // ── Regression: bug #2 (prefix-match injection) ──────────────────────
+    // The OLD code used `line.starts_with(cached) || cached.starts_with(line)`,
+    // so a result keyed on "git c" would surface for "git checkout main" and
+    // inject stale subcommand candidates into the parameter position. The fix
+    // is strict full-line equality: only an exact key match returns results.
+
+    #[test]
+    fn prefix_overlap_does_not_match() {
+        clear_cache();
+        store(AiSlot::Subcommand, "git c".to_string(), vec![ai("checkout")]);
+        // "git c" is a prefix of "git checkout main", but they're NOT equal →
+        // no match. This is the headline regression test for bug #2.
+        assert!(
+            take_ai_pending(AiSlot::Subcommand, "git checkout main").is_none(),
+            "prefix-overlapping key must NOT match (strict equality)"
         );
     }
 
     #[test]
-    fn matches_line_accepts_prefix_overlap() {
-        assert!(matches_line("git ch", "git checkout"));
-        assert!(matches_line("列出", "列出最大文件"));
-        // Completely disjoint → no match.
-        assert!(!matches_line("git", "docker"));
+    fn stale_result_for_different_line_is_not_returned() {
+        clear_cache();
+        store(AiSlot::Subcommand, "git push".to_string(), vec![ai("a")]);
+        assert!(
+            take_ai_pending(AiSlot::Subcommand, "docker run").is_none(),
+            "unrelated line must not get a stale result"
+        );
     }
 
+    // ── Regression: bug #3 (non-destructive drain) ───────────────────────
+    // The OLD take cleared the slot unconditionally, so an unrelated keystroke
+    // could destroy a result that hadn't been served yet. The fix: a
+    // non-matching take leaves the entry in place.
+
     #[test]
-    fn empty_cached_key_never_matches() {
-        assert!(!matches_line("", "anything"));
+    fn non_matching_take_leaves_entry_for_later_match() {
+        clear_cache();
+        store(AiSlot::Subcommand, "git c".to_string(), vec![ai("checkout")]);
+        // A take with a different line must NOT clear the entry.
+        assert!(take_ai_pending(AiSlot::Subcommand, "other").is_none());
+        // The entry survives and is served when the right line arrives.
+        let got = take_ai_pending(AiSlot::Subcommand, "git c");
+        assert!(got.is_some(), "entry must survive a non-matching take");
+        assert_eq!(got.unwrap()[0].replacement, "checkout");
+    }
+
+    // ── Regression: bug #1/#3 (slot isolation) ───────────────────────────
+    // Subcommand and natural-language results live in independent slots, so
+    // they can't overwrite each other even though both fire from complete().
+
+    #[test]
+    fn slots_are_independent() {
+        clear_cache();
+        store(
+            AiSlot::Subcommand,
+            "git c".to_string(),
+            vec![ai("checkout")],
+        );
+        store(
+            AiSlot::NaturalLanguage,
+            "列出文件".to_string(),
+            vec![ai("ls")],
+        );
+        // Both coexist; draining one doesn't touch the other.
+        let sub = take_ai_pending(AiSlot::Subcommand, "git c").unwrap();
+        assert_eq!(sub[0].replacement, "checkout");
+        let nl = take_ai_pending(AiSlot::NaturalLanguage, "列出文件").unwrap();
+        assert_eq!(nl[0].replacement, "ls");
+    }
+
+    // ── Regression: bug #1 (in-flight dedup) ─────────────────────────────
+    // begin_in_flight / end_in_flight gate spawning: a second begin for the
+    // same (slot, key) while the first is in flight returns false.
+
+    #[test]
+    fn in_flight_dedup_prevents_double_begin() {
+        clear_cache();
+        let key = "git c";
+        assert!(
+            begin_in_flight(AiSlot::Subcommand, key),
+            "first begin for (slot,key) should succeed"
+        );
+        assert!(
+            !begin_in_flight(AiSlot::Subcommand, key),
+            "second begin while in flight must be rejected"
+        );
+        // A different key on the same slot is allowed.
+        assert!(begin_in_flight(AiSlot::Subcommand, "git p"));
+        end_in_flight(AiSlot::Subcommand, key);
+        // After end, the slot is free again.
+        assert!(
+            begin_in_flight(AiSlot::Subcommand, key),
+            "begin must succeed again after end"
+        );
+        end_in_flight(AiSlot::Subcommand, key);
+        end_in_flight(AiSlot::Subcommand, "git p");
     }
 
     #[test]

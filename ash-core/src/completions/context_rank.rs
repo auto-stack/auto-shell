@@ -108,7 +108,7 @@ fn are_related(last: &str, cmd: &str) -> bool {
         return false;
     }
     // Same leading tool → coherent (cargo build → cargo test/run).
-    if cmd == last_word || last_word == cmd {
+    if cmd == last_word {
         return true;
     }
     // Known coherent transitions.

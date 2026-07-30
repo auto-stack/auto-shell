@@ -211,16 +211,15 @@ fn fuzzy_match_suffix(input: &str, candidate: &str) -> Option<String> {
     if input_chars[0] != cand_chars[0] {
         return None;
     }
-    let mut last_match_idx = 0;
     let mut input_idx = 0;
     for (i, &c) in cand_chars.iter().enumerate() {
         if input_idx < input_chars.len() && c == input_chars[input_idx] {
-            last_match_idx = i;
             input_idx += 1;
             if input_idx == input_chars.len() {
                 // All input chars matched as a subsequence; return the suffix
-                // after the last matched char so Ctrl+F completes incrementally.
-                let suffix: String = cand_chars[last_match_idx + 1..].iter().collect();
+                // after this (the last) matched char so Ctrl+F completes
+                // incrementally.
+                let suffix: String = cand_chars[i + 1..].iter().collect();
                 return Some(suffix);
             }
         }

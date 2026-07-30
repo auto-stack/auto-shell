@@ -334,14 +334,19 @@ impl Completer for ShellCompleter {
                     &ctx,
                 );
 
-                // Plan 032 M2. merge any AI candidates the previous keystroke's
-                // background fetch produced for this line (one-keystroke lag).
-                merge_ai_pending(line, &mut completions);
+                // Plan 032 M2. merge any AI subcommand candidates the previous
+                // keystroke's background fetch produced for THIS exact line
+                // (`<cmd> <prefix>`). Strict full-line equality in the cache
+                // layer guarantees a stale result from a shorter prefix can't
+                // leak in once the user moves past the subcommand position.
+                let subcmd_key = format!("{} {}", cmd, prefix);
+                merge_ai_pending(ai_layer::Slot::Subcommand, &subcmd_key, &mut completions);
 
                 // Plan 032 M2: when the static spec is thin at a subcommand
                 // position, ask the local model for more candidates. Fire-and-
                 // forget on a background thread; this call never blocks — the
-                // result surfaces on the next keystroke.
+                // result surfaces on the next keystroke. The cache layer
+                // dedupes in-flight requests for the same (slot, key).
                 if ai_completion_enabled()
                     && completions.len() < 3
                     && !cmd.starts_with('-')
@@ -372,9 +377,13 @@ impl Completer for ShellCompleter {
             &self.signatures,
         );
 
-        // Plan 032 M2: merge any pending AI candidates here too (covers NL
-        // translations fired on a previous keystroke at the command-name spot).
-        merge_ai_pending(line, &mut completions);
+        // Plan 032 M2: merge any pending NL→pipeline translation fired on a
+        // previous keystroke at the command-name spot. The cache key is the
+        // trimmed phrase (exactly what trigger_nl_to_pipeline stored), matched
+        // by full equality — so an NL result only surfaces while the user is
+        // still typing that same phrase.
+        let phrase_key = line[..pos].trim();
+        merge_ai_pending(ai_layer::Slot::NaturalLanguage, phrase_key, &mut completions);
 
         // Plan 032 M2: if we're at the command-name position and the first
         // token matches no known command/alias, the user may be typing a
@@ -389,9 +398,8 @@ impl Completer for ShellCompleter {
                     && c.kind != crate::completions::CompletionKind::External
             })
         {
-            let phrase = line[..pos].trim();
-            if !phrase.is_empty() {
-                ai_layer::trigger_nl_to_pipeline(phrase, snapshot.ai_snapshot());
+            if !phrase_key.is_empty() {
+                ai_layer::trigger_nl_to_pipeline(phrase_key, snapshot.ai_snapshot());
             }
         }
 
@@ -443,11 +451,14 @@ fn ai_completion_enabled() -> bool {
 }
 
 /// Plan 032 M2: drain any AI candidates the background thread produced for
-/// `line` and append them to `completions` (after local candidates, since they
-/// are suggestions rather than authoritative). No-op when nothing is pending
-/// or the cached result was for a different line.
-fn merge_ai_pending(line: &str, completions: &mut Vec<Completion>) {
-    if let Some(ai) = crate::completions::ai_layer::take_ai_pending(line) {
+/// `slot` at the exact `key` (full-line equality) and append them to
+/// `completions` (after local candidates, since they are suggestions rather
+/// than authoritative). No-op when nothing is pending for this slot or the
+/// cached key doesn't equal `key`. Position-aware: only the slot matching the
+/// current cursor position is consulted, so a subcommand result can never be
+/// served at a parameter position (or vice versa).
+fn merge_ai_pending(slot: ai_layer::Slot, key: &str, completions: &mut Vec<Completion>) {
+    if let Some(ai) = ai_layer::take_ai_pending(slot, key) {
         completions.extend(ai);
     }
 }
@@ -695,5 +706,115 @@ mod tests {
         // We can't easily set config in a unit test, so just confirm the helper
         // returns a bool and doesn't panic.
         let _ = ai_completion_enabled();
+    }
+
+    // ── Plan 032 M2: end-to-end AI-merge in complete() (no daemon needed) ─
+    // These inject a *finished* AI result into the cache (simulating the
+    // background thread having completed) via `ai_layer::store`, then exercise
+    // the real `complete()` → `merge_ai_pending` → `Suggestion` path. This is
+    // the seam that was entirely missing in the first cut — the merge behavior
+    // was never actually executed by any test.
+
+    #[test]
+    fn complete_merges_nl_translation_at_command_name_position() {
+        // Inject an NL result for the phrase "列出文件" (as if the background
+        // thread from the previous keystroke just finished). At the command-
+        // name position, complete() should surface it as a suggestion.
+        crate::completions::ai_layer::store(
+            crate::completions::ai_layer::Slot::NaturalLanguage,
+            "列出文件".to_string(),
+            vec![Completion::with_kind(
+                "ls",
+                "ls",
+                crate::completions::CompletionKind::AiSuggested,
+            )],
+        );
+        let mut completer = test_completer();
+        // Typing the same phrase at the command spot — the cache key
+        // ("列出文件", trimmed) matches, so the AI candidate merges in.
+        let suggestions = completer.complete("列出文件", 12);
+        assert!(
+            suggestions.iter().any(|s| s.value == "ls"),
+            "NL translation should merge into suggestions at command-name position"
+        );
+    }
+
+    #[test]
+    fn stale_subcommand_result_does_not_leak_into_parameter_position() {
+        // Bug #2 regression, end-to-end. Seed the Subcommand slot with a result
+        // keyed on "git c" (as if requested while typing `git c`). Then complete
+        // at a PARAMETER position on a line whose prefix is "git c" — the stale
+        // candidates must NOT appear, because the merge key is the full
+        // "<cmd> <prefix>" and won't equal "git checkout main"'s subcommand key.
+        use ash_core::completions::{CompletionSpec, SubcommandSpec};
+        let mut provider = CompletionProvider::new();
+        provider.register(
+            CompletionSpec::new("git").subcommand(
+                SubcommandSpec::new("checkout").desc("Switch branches"),
+            ),
+        );
+        let mut completer = ShellCompleter::new(
+            test_signatures(),
+            provider,
+            Arc::new(Mutex::new(CompletionState::new(PathBuf::from(".")))),
+        );
+        crate::completions::ai_layer::store(
+            crate::completions::ai_layer::Slot::Subcommand,
+            "git c".to_string(), // the stale key
+            vec![Completion::with_kind(
+                "checkout",
+                "checkout",
+                crate::completions::CompletionKind::AiSuggested,
+            )],
+        );
+        // Now at "git checkout main" — the subcommand merge key would be
+        // "git main" (cmd=git, prefix=main), NOT "git c". The stale "git c"
+        // entry must not surface.
+        let suggestions = completer.complete("git checkout main", 17);
+        assert!(
+            !suggestions.iter().any(|s| {
+                s.value == "checkout"
+                    && s.extra
+                        .as_deref()
+                        .map_or(false, |e| e.iter().any(|tag| tag == "ai"))
+            }),
+            "stale 'git c' subcommand result must not leak into parameter position: {:?}",
+            suggestions
+        );
+    }
+
+    #[test]
+    fn complete_merges_subcommand_candidates_when_key_matches() {
+        // Positive case: when the Subcommand slot holds a result keyed exactly
+        // on the current "<cmd> <prefix>", complete() merges it. This proves
+        // the happy path of the per-position merge actually works end-to-end.
+        use ash_core::completions::{CompletionSpec, SubcommandSpec};
+        let mut provider = CompletionProvider::new();
+        provider.register(
+            CompletionSpec::new("git").subcommand(
+                SubcommandSpec::new("checkout").desc("Switch branches"),
+            ),
+        );
+        let mut completer = ShellCompleter::new(
+            test_signatures(),
+            provider,
+            Arc::new(Mutex::new(CompletionState::new(PathBuf::from(".")))),
+        );
+        // The subcommand merge key is "git c" (cmd "git", prefix "c"). Seed it.
+        crate::completions::ai_layer::store(
+            crate::completions::ai_layer::Slot::Subcommand,
+            "git c".to_string(),
+            vec![Completion::with_kind(
+                "cherry-pick",
+                "cherry-pick",
+                crate::completions::CompletionKind::AiSuggested,
+            )],
+        );
+        let suggestions = completer.complete("git c", 5);
+        assert!(
+            suggestions.iter().any(|s| s.value == "cherry-pick"),
+            "AI subcommand candidate should merge when the key matches: {:?}",
+            suggestions
+        );
     }
 }
