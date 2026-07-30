@@ -162,6 +162,7 @@ impl ChatSession {
             system_prompt: Some(system.to_string()),
             tools: Vec::new(),
             stream: false, // complete_stream sets this to true itself.
+            preferred_provider: None, // F4 chat uses the default cloud provider.
         };
 
         use std::io::Write;

@@ -28,6 +28,7 @@ pub mod prompt;
 pub mod repl_mode;
 pub mod shell;
 pub mod signal;
+pub mod smart_command;
 
 /// Default `~/.ashrc` content, seeded on first start so users discover the
 /// user-defined-functions feature. Editable by the user afterwards.
