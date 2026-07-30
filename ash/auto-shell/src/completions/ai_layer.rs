@@ -93,6 +93,22 @@ fn in_flight() -> &'static Mutex<HashSet<(usize, String)>> {
     IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Process-global test serialization lock. `AI_PENDING` and `IN_FLIGHT` are
+/// process-global statics shared by every test that touches the AI cache
+/// (both in this module and in `completions_reedline`'s integration tests).
+/// Cargo runs tests multi-threaded by default, so any two such tests running
+/// concurrently would clobber each other's state. Tests take this lock first
+/// to force serial execution. `pub(crate)` so cross-module integration tests
+/// share the same lock. Only built under `cfg(test)`.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Borrow the test lock (mirrors the `in_flight()` access pattern).
+#[cfg(test)]
+pub(crate) fn test_lock() -> &'static Mutex<()> {
+    &TEST_LOCK
+}
+
 /// Map a slot to its index in `AI_PENDING` / key in `IN_FLIGHT`.
 fn slot_index(slot: AiSlot) -> usize {
     match slot {
@@ -385,6 +401,14 @@ mod tests {
         Completion::with_kind(label, label, CompletionKind::AiSuggested)
     }
 
+    /// Force this test to run serially against other tests that touch the
+    /// process-global AI cache/in-flight state (see `test_lock`). Under cargo's
+    /// default multi-threaded runner, concurrent tests would clobber each
+    /// other's global state.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        test_lock().lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Clear both slots so tests start from a known-empty state.
     fn clear_cache() {
         if let Ok(mut g) = AI_PENDING.lock() {
@@ -397,6 +421,7 @@ mod tests {
 
     #[test]
     fn take_pending_is_none_when_empty() {
+        let _g = serial();
         clear_cache();
         assert!(take_ai_pending(AiSlot::Subcommand, "anything").is_none());
         assert!(take_ai_pending(AiSlot::NaturalLanguage, "anything").is_none());
@@ -404,6 +429,7 @@ mod tests {
 
     #[test]
     fn store_then_take_returns_for_exact_matching_key() {
+        let _g = serial();
         clear_cache();
         store(
             AiSlot::Subcommand,
@@ -419,6 +445,7 @@ mod tests {
 
     #[test]
     fn take_drains_on_match_so_not_returned_twice() {
+        let _g = serial();
         clear_cache();
         store(AiSlot::Subcommand, "foo".to_string(), vec![ai("a")]);
         assert!(take_ai_pending(AiSlot::Subcommand, "foo").is_some());
@@ -436,6 +463,7 @@ mod tests {
 
     #[test]
     fn prefix_overlap_does_not_match() {
+        let _g = serial();
         clear_cache();
         store(AiSlot::Subcommand, "git c".to_string(), vec![ai("checkout")]);
         // "git c" is a prefix of "git checkout main", but they're NOT equal →
@@ -448,6 +476,7 @@ mod tests {
 
     #[test]
     fn stale_result_for_different_line_is_not_returned() {
+        let _g = serial();
         clear_cache();
         store(AiSlot::Subcommand, "git push".to_string(), vec![ai("a")]);
         assert!(
@@ -463,6 +492,7 @@ mod tests {
 
     #[test]
     fn non_matching_take_leaves_entry_for_later_match() {
+        let _g = serial();
         clear_cache();
         store(AiSlot::Subcommand, "git c".to_string(), vec![ai("checkout")]);
         // A take with a different line must NOT clear the entry.
@@ -479,6 +509,7 @@ mod tests {
 
     #[test]
     fn slots_are_independent() {
+        let _g = serial();
         clear_cache();
         store(
             AiSlot::Subcommand,
@@ -503,6 +534,7 @@ mod tests {
 
     #[test]
     fn in_flight_dedup_prevents_double_begin() {
+        let _g = serial();
         clear_cache();
         let key = "git c";
         assert!(

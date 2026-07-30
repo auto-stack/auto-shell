@@ -717,6 +717,10 @@ mod tests {
 
     #[test]
     fn complete_merges_nl_translation_at_command_name_position() {
+        // Touch the process-global AI cache → serialize against other such tests.
+        let _g = crate::completions::ai_layer::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Inject an NL result for the phrase "列出文件" (as if the background
         // thread from the previous keystroke just finished). At the command-
         // name position, complete() should surface it as a suggestion.
@@ -741,6 +745,10 @@ mod tests {
 
     #[test]
     fn stale_subcommand_result_does_not_leak_into_parameter_position() {
+        // Touch the process-global AI cache → serialize against other such tests.
+        let _g = crate::completions::ai_layer::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Bug #2 regression, end-to-end. Seed the Subcommand slot with a result
         // keyed on "git c" (as if requested while typing `git c`). Then complete
         // at a PARAMETER position on a line whose prefix is "git c" — the stale
@@ -785,6 +793,10 @@ mod tests {
 
     #[test]
     fn complete_merges_subcommand_candidates_when_key_matches() {
+        // Touch the process-global AI cache → serialize against other such tests.
+        let _g = crate::completions::ai_layer::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Positive case: when the Subcommand slot holds a result keyed exactly
         // on the current "<cmd> <prefix>", complete() merges it. This proves
         // the happy path of the per-position merge actually works end-to-end.
