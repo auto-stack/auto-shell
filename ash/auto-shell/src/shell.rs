@@ -1108,6 +1108,32 @@ impl Shell {
 
         // Start with empty AtomPipeline
         let mut input_pipeline: Option<AtomPipeline> = None;
+        // Plan 031 M2.2: accumulate consecutive DSL stages and run them as a
+        // single lazy pipeline (`build_lazy`) instead of one eager `apply` per
+        // stage. Flushed when a non-DSL stage appears or the pipeline ends.
+        let mut pending_dsl_ops: Vec<ash_core::pipeline::operators::PipelineOp> = Vec::new();
+
+        // Flush accumulated DSL stages through the lazy pipeline, writing the
+        // resulting Value back into `input_pipeline` as a structured Atom.
+        macro_rules! flush_dsl_ops {
+            () => {{
+                if !pending_dsl_ops.is_empty() {
+                    let ops = std::mem::take(&mut pending_dsl_ops);
+                    let source = match input_pipeline.take() {
+                        Some(p) => p.into_dsl_input(),
+                        None => auto_val::Value::Array(auto_val::Array::new()),
+                    };
+                    let result_val =
+                        ash_core::pipeline::lazy::build_lazy(&ops, source).collect();
+                    input_pipeline = Some(ash_core::pipeline::AtomPipeline::from_atom(
+                        ash_core::pipeline::Atom::new(
+                            result_val,
+                            ash_core::pipeline::AtomType::Table,
+                        ),
+                    ));
+                }
+            }};
+        }
 
         for (i, cmd) in commands.iter().enumerate() {
             let is_last = i == commands.len() - 1;
@@ -1120,24 +1146,18 @@ impl Shell {
 
             // Plan 320: structured-pipeline DSL stage (filter/sort/select/...)?
             if let Some(op) = ash_core::parser::pipe_stages::parse_pipe_stage(cmd) {
-                // Plan 031 M0.1: extract the DSL input via `into_dsl_input`,
-                // which splits an ExternalStream (and Stream) into lines as a
-                // Value::Array. Previously the match only handled Atom/Text and
-                // silently dropped Stream/ExternalStream/Empty to an empty
-                // array — so `printf '...' | count` returned 0 (data loss).
-                let input_val = match input_pipeline.take() {
-                    Some(p) => p.into_dsl_input(),
-                    None => auto_val::Value::Array(auto_val::Array::new()),
-                };
-                let result_val = ash_core::pipeline::operators::apply(&op, &input_val);
-                input_pipeline = Some(ash_core::pipeline::AtomPipeline::from_atom(
-                    ash_core::pipeline::Atom::new(result_val, ash_core::pipeline::AtomType::Table),
-                ));
+                // Accumulate the DSL op; it runs lazily when the chain flushes.
+                pending_dsl_ops.push(op);
                 if is_last {
+                    flush_dsl_ops!();
                     return Ok(input_pipeline.map(|p| self.format_output(p)));
                 }
                 continue;
             }
+
+            // A non-DSL stage: flush any accumulated DSL chain through the lazy
+            // pipeline before dispatching this command.
+            flush_dsl_ops!();
 
             let cmd_name = &parts[0];
             let args = &parts[1..];
@@ -1263,6 +1283,8 @@ impl Shell {
             }
         }
 
+        // Flush any trailing DSL ops (defensive — is_last normally handles it).
+        flush_dsl_ops!();
         Ok(None)
     }
 

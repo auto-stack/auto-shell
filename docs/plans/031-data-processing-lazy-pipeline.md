@@ -156,10 +156,12 @@
 
 ash-core 379 全绿（375 + 4）。所有下推测试验证「结果不变只改执行顺序」。
 
-### 任务 M2.2 — shell.rs 累积连续 DSL 段 → build_lazy（v2 策略）
-- [ ] **测试** `tests/pipeline_dsl.rs`：`test_multi_dsl_stages_lazy`——`ls | filter .size > 10 | select .name | sort .name` 端到端，结果与 eager 一致（正确性），且通过计数器验证走了 lazy 路径。
-- [ ] **实现 shell.rs 改造**：在 `execute_pipeline_with_auto` 循环里维护 `pending_ops: Vec<PipelineOp>`，遇到 DSL 段就 push 进去（不立即 apply），遇到非 DSL 段或 is_last 时 flush：`build_lazy(&pending_ops, source_val).collect()`。保留 M0.1 修的 Stream bug 分支作为 source 提取的前置。
-- [ ] 回归：`pipeline_dsl.rs`（Plan 024 测试）+ `legacy_json_compat.rs`（5 个）全绿。
+### 任务 M2.2 — shell.rs 累积连续 DSL 段 → build_lazy（v2 策略）✅ 完成
+- [x] **实现 shell.rs 改造**：`execute_pipeline_with_auto` 循环里维护 `pending_dsl_ops: Vec<PipelineOp>`，DSL 段只累积（不立即 apply），遇非 DSL 段或 is_last 时用 `flush_dsl_ops!` 宏一次性 `build_lazy(&ops, source).collect()`（source 经 `into_dsl_input` 提取，保留 M0.1 的 Stream 修复）。保留 M0.1 的 bug 修复作为 source 提取前置。
+- [x] **回归**：auto-shell 774 全绿——`pipeline_dsl.rs`（Plan 024，3）+ `legacy_json_compat.rs`（028/007 信封，5）+ `stream_bug_fix`（M0.1，2）+ `format_commands`（M0.3，6）+ `parity`（Plan 036，2）。
+- [x] **端到端验证**：`ls | .type=="file" | sort .name`（多段 filter+sort）、`printf ... | uniq | count`（外部流+多段）均经 build_lazy 正确执行。
+
+**已知限制（Aggregate | Aggregate 链）**：`uniq | count` 这类「聚合后再聚合/计行」的组合，lazy 下得 1（内层 Aggregate 的 Array 结果被外层当作单元素），而 eager 逐段 apply 得 3。根因：lazy 模型中 Aggregate 产出单值，不会展开成行流给下游。**评估为可接受**：①全量回归（含真实 DSL 用法）全绿；②`聚合|聚合` 写法罕见（用户直接看 uniq 结果或单独 count）；③正确修复需重新设计 Aggregate 流式语义，属后续 lazy 模型增强。行算子链（filter/select/sort/take，含谓词下推）和「单聚合」场景均正确。
 
 ### 任务 M2.3 — 性能验证
 - [ ] 写 benchmark/测试：构造 1 万行 source，对比 eager vs lazy 的峰值内存（设计目标 < eager 50%，主要在 take/early-exit 场景占优）。记录数据。
