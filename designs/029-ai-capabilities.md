@@ -163,6 +163,51 @@ auto-ai 已有三个相关 Role，定位不同：
 - SmartCommand 的 **AI 判断步骤** → SmartCommandRole（本地 Ollama）
 - 用户的 **NL 兜底请求**（无对应 SmartCommand）→ Translator（云端）或 F3
 
+### 0.8 完成度核查（2026-07-30，基于代码核实）
+
+> 以下逐项对照代码确认实现状态。✅完全完成 / 🟡部分完成（附缺口）/ ⬜未开始。
+
+#### ✅ 完全完成（8 项）
+
+| 功能 | 证据 |
+|---|---|
+| **OllamaProvider**（auto-ai） | `auto-ai-daemon/src/provider/ollama.rs` + mod.rs 注册 `"ollama"` 分支 |
+| **preferred_provider 链路**（auto-ai） | wire.rs 字段 + agent.rs build_request 读 role + server.rs 用 candidates_preferred + tier_router.rs 方法（4 处串联通，含测试） |
+| **SmartCommandRole**（auto-shell） | `smart_command/role.rs`，tier=Min/pref="ollama"，含 build_smart_role。**注：落点在 auto-shell 而非 §0.7 说的 auto-ai**（理由：Role trait pub 导出，ash 可自定义领域 Role） |
+| **AshCommandTool 桥**（auto-shell） | `ash_command_tool.rs`，专用线程方案（优于设计的 Arc<Mutex>，绕开 Shell 非 Send 难题） |
+| **loader.rs**（SmartCommand 发现） | `smart_command/loader.rs`，load_all + 项目本地覆盖用户全局 + 排序 |
+| **F4 ChatSession 用 Agent** | `frontend/ai.rs` 持有 Agent + run_stream + 注册 AshCommandTool×6 |
+| **F4 StreamEvent 渲染** | `repl.rs` handle_chat_turn 构造 on_event（Delta/ToolStart/Tool/Warning/Error） |
+| **F3 验证 + 多步预览** | `ai.rs` validate_suggestion + split_steps + ValidationFinding；repl.rs run_steps_interactively |
+
+#### 🟡 部分完成（6 项，附缺口）
+
+| 功能 | 缺口 |
+|---|---|
+| **preferred_provider（.at 配置层）** | RoleConfig/ConfigRole 未加该字段——仅代码内 Role 生效，用户 `.at` 文件无法配 pref |
+| **config.rs（command.at）** | schema 大幅简化：`command "name"{}` 而非设计的 `smart_command{}`，无 capabilities/confirm/timeout/skill_file/args 类型系统 |
+| **executor.rs** | 纯确定性 body 执行，**无 AI 判断步骤**——SmartCommandRole 已定义却未被调用（§3.3 NLU 未接通） |
+| **cli.rs** | 有 list/run，**无 NLU 路径**（`ash smart "<nl>"` 报未实现）、无 show/reload/--dry-run |
+| **register_all**（批量注册） | 仅硬编码 6 命令（pwd/ls/cat/cd/echo/grep），80 命令批量注册未做 |
+| **F3 ask_ai** | 仍手搓 CompletionRequest（one-shot，非 Agent）——与 F3 留 shell 侧一致，非缺陷 |
+
+#### ⬜ 未开始（6 项）
+
+| 功能 | 说明 / 阻塞原因 |
+|---|---|
+| **context builder**（§2.3） | 灰区，无 ai_context.rs / build_context_block |
+| **AutoLang 检测**（§5.2.3） | 被 §6 阻塞 |
+| **Shell::eval_auto**（§6.2） | 私有 execute_auto/session_run 未 pub 包装 |
+| **NL→AutoLang 反馈循环**（§6.3） | 整体未做（§0.4 说应复用 Agent::run） |
+| **Shell 公开访问器**（§7.2） | 仅 pwd/last_exit_code，缺 last_command/aliases/dir_stack 等 4 个 |
+| **Warp 式建议**（§7.3） | 命令执行后异步 tier:min 建议未做 |
+
+#### 关键观察
+1. **核心交付物完成**：F4 tool-calling + SmartCommand 确定性执行 + F3 验证/预览 + AI 基础设施（Role/Tool桥/provider链路/本地Ollama）。
+2. **NLU 路径未接通**：SmartCommandRole + AshCommandTool + pref 链路三块基础设施都做了，但 executor 没把它们接起来——SmartCommand 目前是纯脚本执行器，AI 判断/参数解析（§3.3）从未被调用。这是从"确定性命令"升级到"智能命令"的关键缺口。
+3. **§6/§7（M3/M4）整体未动**：NL→AutoLang 和上下文感知两节全部未开始。
+4. **方案优于设计**：AshCommandTool 用专用线程而非 Arc<Mutex>，正确绕开了 Shell 非 Send 的根因（auto-lang 的 Rc<RefCell>）。
+
 ---
 
 
