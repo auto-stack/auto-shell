@@ -1,0 +1,5 @@
+command "git.finish-worktree" {
+    description : "Finish a worktree: stage all changes, commit with a message, then push. Takes the commit message as $1."
+    args        : ["message"]
+    body        : "finish-worktree.ash"
+}
