@@ -417,6 +417,28 @@ impl Shell {
         self.last_exit_code
     }
 
+    /// Plan 029 §7.2: the last executed command line (for AI context). `None`
+    /// before any command has run.
+    pub fn last_command_line(&self) -> Option<&str> {
+        self.last_command_line.as_deref()
+    }
+
+    /// Plan 029 §7.2: the args of the last executed command (for AI context).
+    pub fn last_command_args(&self) -> &[String] {
+        &self.last_command_args
+    }
+
+    /// Plan 029 §7.2: user aliases (for AI context — the model learns the
+    /// user's shortcuts).
+    pub fn aliases(&self) -> &HashMap<String, String> {
+        &self.aliases
+    }
+
+    /// Plan 029 §7.2: the directory stack (pushd/popd, for AI context).
+    pub fn dir_stack(&self) -> &[PathBuf] {
+        &self.dir_stack
+    }
+
     /// Plan 322: Set the locked input mode (None = auto-detect).
     pub fn set_locked_mode(&mut self, mode: Option<crate::repl_mode::InputMode>) {
         self.locked_mode = mode;
