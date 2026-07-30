@@ -4,6 +4,7 @@
 
 pub mod color;
 pub mod highlight;
+pub mod hinter;
 pub mod prompt;
 
 /// Get terminal width

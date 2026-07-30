@@ -7,7 +7,9 @@
 //! - Shared state (current_dir) updated by the REPL after each command
 
 use crate::completions::{Completion, CompletionSignature};
-use ash_core::completions::{help_parser, CompletionContext, CompletionProvider};
+use ash_core::completions::{
+    context_rank, help_parser, CompletionContext, CompletionProvider,
+};
 use reedline::{Completer, Suggestion};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -268,6 +270,15 @@ impl Completer for ShellCompleter {
         let start = line[..pos].rfind(' ').map(|i| i + 1).unwrap_or(0);
         let end = pos;
 
+        // Plan 032: snapshot the shared completion state ONCE up front so both
+        // the provider path and the ranking layer (M1.1) share one coherent
+        // view of the user's context (cwd/last command/history/aliases).
+        let snapshot = self
+            .state
+            .lock()
+            .map(|s| StateSnapshot::from_state(&s))
+            .unwrap_or_default();
+
         // If we have a first word and it's an external command with a spec,
         // route to the CompletionProvider
         if let Some(&cmd) = parts.first() {
@@ -294,22 +305,13 @@ impl Completer for ShellCompleter {
                     parts.clone()
                 };
 
-                // Plan 032 M0.3: snapshot the whole completion state (cwd +
-                // last command/exit code/history/aliases) in one lock so the
-                // resolver and the ranking/AI layers share one coherent view.
-                let snapshot = self
-                    .state
-                    .lock()
-                    .map(|s| StateSnapshot::from_state(&s))
-                    .unwrap_or_default();
-
                 let ctx = CompletionContext {
-                    current_dir: snapshot.current_dir,
+                    current_dir: snapshot.current_dir.clone(),
                     command_executor: Box::new(Self::execute_command),
-                    last_command: snapshot.last_command,
+                    last_command: snapshot.last_command.clone(),
                     last_exit_code: snapshot.last_exit_code,
-                    history: snapshot.history,
-                    aliases: snapshot.aliases,
+                    history: snapshot.history.clone(),
+                    aliases: snapshot.aliases.clone(),
                 };
 
                 let completions = self.provider.resolve(
@@ -336,10 +338,27 @@ impl Completer for ShellCompleter {
         }
 
         // Default: use built-in completion system (registry signatures + file/path completion)
-        let completions = crate::completions::get_completions_with_context(
+        let mut completions = crate::completions::get_completions_with_context(
             line,
             &self.signatures,
         );
+
+        // Plan 032 M1.1: context-aware ranking. Only reorder when we're
+        // completing a COMMAND NAME (first token) — reordering subcommand/
+        // flag/file lists would break their intentional order, and the
+        // heuristics (history frequency / repo context / command coherence)
+        // are only meaningful for top-level command names.
+        if is_command_name_position(line, pos) && !completions.is_empty() {
+            let ranking_ctx = CompletionContext {
+                current_dir: snapshot.current_dir,
+                command_executor: Box::new(|_, _| Ok(String::new())),
+                last_command: snapshot.last_command,
+                last_exit_code: snapshot.last_exit_code,
+                history: snapshot.history,
+                aliases: snapshot.aliases,
+            };
+            context_rank::rank(&mut completions, &ranking_ctx);
+        }
 
         completions
             .into_iter()
@@ -350,6 +369,16 @@ impl Completer for ShellCompleter {
             })
             .collect()
     }
+}
+
+/// Plan 032 M1.1: true when the cursor is completing the first token of the
+/// line (a command name), i.e. there is no whitespace before the cursor yet
+/// (or only leading whitespace). Used to gate context-aware ranking so it
+/// never reorders subcommand/flag/file completions.
+fn is_command_name_position(line: &str, pos: usize) -> bool {
+    let before = &line[..pos];
+    // Command name position = no interior whitespace before the cursor.
+    !before.trim().contains(char::is_whitespace)
 }
 
 /// Plan 036: Returns true if `cmd` looks like a script file path rather than

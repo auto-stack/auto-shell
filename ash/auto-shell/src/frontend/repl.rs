@@ -1,7 +1,7 @@
 use miette::Result;
 use reedline::{
     default_emacs_keybindings, default_vi_insert_keybindings, default_vi_normal_keybindings,
-    CwdAwareHinter, EditCommand, Emacs, FileBackedHistory,
+    EditCommand, Emacs, FileBackedHistory,
     KeyCode, KeyModifiers, Reedline, ReedlineEvent, ReedlineMenu, Signal, Vi,
 };
 use std::path::PathBuf;
@@ -11,6 +11,7 @@ use crate::menu::{AshMenu, AshMenuConfig};
 use crate::completions::CompletionSignature;
 use crate::completions::definitions;
 use crate::completions::reedline::{CompletionState, ShellCompleter};
+use crate::frontend::term::hinter::AshHinter;
 use ash_core::completions::CompletionProvider;
 use crate::{prompt::AshPrompt, shell::Shell};
 use crate::frontend::term::highlight::AshHighlighter;
@@ -238,10 +239,12 @@ impl Repl {
         // Create modular prompt (AshPrompt)
         let prompt = AshPrompt::new(crate::prompt::AshConfig::load());
 
-        // Plan 302: Fish-style autosuggestion hinter (configurable)
-        // CwdAwareHinter prefers history items from the current working directory
-        let hinter: Option<Box<CwdAwareHinter>> = if shell_config.autosuggestion {
-            // Plan 302: Fish-style autosuggestion hinter.
+        // Plan 302: Fish-style autosuggestion hinter (configurable).
+        // Plan 032 M1.2: replaced reedline's CwdAwareHinter with AshHinter,
+        // which keeps the same prefix-match behavior and adds a fuzzy
+        // (prefix-subsequence) fallback so typing `gcm` can ghost-complete to
+        // `git commit -m`. No AI here — real-time ghost-text must stay local.
+        let hinter: Option<Box<AshHinter>> = if shell_config.autosuggestion {
             // Explicit dim style so the hint is clearly distinguishable from typed
             // text — reedline's default `LightGray` is too close to the terminal's
             // default foreground on Windows and reads as normal text.
@@ -249,7 +252,7 @@ impl Repl {
                 .fg(nu_ansi_term::Color::DarkGray)
                 .italic();
             Some(Box::new(
-                CwdAwareHinter::default()
+                AshHinter::default()
                     .with_style(hint_style)
                     .with_min_chars(shell_config.autosuggestion_min_chars),
             ))
