@@ -1,7 +1,7 @@
 # Plan 032: ASH 智能补全系统设计(AI 补全层 + 上下文 plumbing)
 
 > **日期**: 2026-07-21
-> **状态**: 设计中(待评审)
+> **状态**: ✅ 已实施(M0-M3 全部完成,见 `docs/plans/032-implementation-status.md`)
 > **战略驱动**: 在 Plan 021/315 成熟的静态+动态补全引擎上,新增 AI 补全层(LLM 子命令/自然语言/上下文排序/历史 ghost-text),让 ash 的补全从"查表"进化为"理解意图"
 > **范围**: CompletionContext 增强 + AI 补全引擎 + 缺失动态源 + reedline hinter 增强
 > **预估**: M0-M3 共约 4-5 周(详见 §6)
