@@ -1,9 +1,11 @@
 # Plan 032 实施状态记录
 
-> **日期**: 2026-07-30
-> **分支**: feat/032-intelligent-completion
-> **设计**: `designs/032-intelligent-completion.md`
-> **状态**: ✅ M0-M3 全部完成
+> **日期**: 2026-07-31
+> **分支**: `feat/032-intelligent-completion`(待合并 main)
+> **设计**: [`designs/032-intelligent-completion.md`](../../designs/032-intelligent-completion.md)
+> **状态**: ✅ M0-M3 全部完成 + 审计修复(4 个 AI 层缺陷 + 测试空转 + 测试并发污染)
+
+## Status: COMPLETE
 
 ## 总览
 
@@ -66,6 +68,14 @@ reedline `Completer::complete` 纯同步无 async 入口(已勘探确认 reedlin
 3. 🟡 **M2**:静态 spec 没有的子命令 AI 补(代码就绪 + 合并路径有端到端测试覆盖;模型实际调用需运行中的 Ollama daemon);NL 输入翻译成 pipeline(同上)。审计后:`complete()→Suggestion` 的 AI 合并路径已由注入式测试覆盖,过期候选注入 bug 已修复并有回归测试。
 4. ✅ **M3**:ssh hosts 补全工作;env var 用真实环境
 5. ✅ **降级正确**:无 daemon 时 `complete()` 不 panic、返回静态结果(`complete_does_not_panic_without_daemon` 测试覆盖)
+
+### 二次复审修复(2026-07-31):测试并发污染
+
+对审计修复本身做回归时发现:`ai_layer` 的 8 个测试与 `completions_reedline` 的 3 个端到端测试都 mutate 两个进程级全局 static(`AI_PENDING`、`IN_FLIGHT`)。cargo 默认多线程跑测试时它们并发执行、互相踩踏——例如 `in_flight_dedup` 的"第二次 begin 必须被拒绝"断言,会在另一测试的 `clear_cache()` 中途清空 `IN_FLIGHT` 时**间歇性失败**。单测能过,整模块多线程跑就挂(commit `7ecf496`)。
+
+**修复**:加 `pub(crate) static TEST_LOCK`(标 `#[cfg(test)]`),每个触碰 AI 缓存全局的测试第一行取这把锁,强制这些测试串行;跨模块共享同一把锁。生产代码零改动。验证:completions 测试集连续跑 5 次零失败。
+
+**教训**:"全量测试通过"在多线程间歇性失败面前是假象——判定修复有效的标准是**稳定性(多次连续跑)**,而非单次通过。
 
 ## 影响文件
 
