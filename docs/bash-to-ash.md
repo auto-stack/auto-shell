@@ -19,13 +19,17 @@
 | `mv old new` | `mv old new` | ✅ 相同 |
 | `rm -rf dir` | `rm -rf dir` | ✅ 相同 |
 | `mkdir -p a/b/c` | `mkdir -p a/b/c` | ✅ 相同 |
-| `grep -rn "pat" .` | `grep -rn "pat" .` | ✅ 相同 |
 | `head -n 20 file` | `head -n 20 file` | ✅ 相同 |
 | `tail -f log` | `tail -f log` | ✅ 相同 |
 | `wc -l file` | `wc -l file` | ✅ 相同 |
 | `sort -u` | `sort -u` | ✅ 相同 |
-| `find . -name "*.rs"` | `find . -name "*.rs"` | ✅ 相同 |
 | `which python` | `which python` | ✅ 相同 |
+
+> ⚠️ **注意:`find` 和 `grep` 的标志位不完全相同。** ash 的 `find` 是内置重实现,
+> 用 `name`/`type`/`max-depth` 参数(短形式 `-n`/`-t`),**不认 GNU 的 `-name`/`-type`**。
+> `grep` 用 `ignore-case`/`invert-match`/`count`,不认 `-r`/`-E`。
+> 在交互 REPL 里直接敲 `find . -name "*.rs"` 会返回空——请用下方"增强版"的结构化写法,
+> 或在脚本里用 `find . -n "*.rs"`。详见各命令的 `help <cmd>`。
 
 ### ash 增强版（结构化输出）
 

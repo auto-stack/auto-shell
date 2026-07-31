@@ -166,7 +166,7 @@ fn deploy(env) {
 }
 ```
 
-→ 30+ 可抄的实例见 [examples/](examples/)
+→ 30+ 可抄的实例见 [examples/](examples/);从 bash 迁移看 [bash→ash 速查表](docs/bash-to-ash.md)。
 
 ### AI 能力（Plan 027/029）
 

@@ -272,3 +272,51 @@ fn foo() {
 | 3 (> in fn) | synctree, batch-rename, cleanup 等用 > 在 fn 内的 | auto-shell | 中(可避免) |
 | 4 (var = >) | 少数用捕获语法的实例 | auto-shell | 低(有 system() 替代) |
 | 5 (from_json pipe) | jq-like, csv2json | auto-shell | 中(核心功能) |
+
+## 附录 C:实施调查(2026-07-31)— system() 桥接的系统性问题
+
+实施 034 时深入调查发现一个**比附录 B 的 5 个 bug 更根本的架构问题**,它阻塞了 M2(bash 等价校验)。以下为实测证据和根因。
+
+### 根因:`system()` 让 ash 自己执行命令,而非 shell-out 到 bash
+
+example 脚本普遍用 `system("find . -name *.rs")` / `system("ls *.toml")` / `system("grep -E ...")`,**假设 system() 把命令交给真 bash 执行**。实测发现:`system()` 走的是 `Shell::execute_capture` → `execute()`(shell.rs:1012),即**让 ash 自己解析并执行命令**。ash 对常见命令(find/ls/grep/wc/du)有**内置重实现**,其语法/语义与 GNU 核心工具不同。
+
+### 决定性证据(2026-07-31 实测)
+
+在 `ash/auto-shell/` 目录(含 163 个 .rs 文件)下:
+
+| 命令 | 真 bash | ash `system()` | 结论 |
+|------|---------|---------------|------|
+| `ls src` | 列出文件 | 列出文件(len=202) | ✅ 兼容(ash ls 碰巧认) |
+| `find . -name '*.rs' -type f` | 163 个 | **0 个** | ❌ ash find 不认 `-name` |
+| `find . -n *.rs -t f` | (bash 不认) | 4452 字符(正常) | ✅ ash find 认 `-n/-t` |
+| `echo $1`(脚本内) | 取到参数 | **空** | ❌ 见附录 B Bug 2 |
+| `git status --porcelain` | 正常 | 正常 | ✅ git 无内置,fallback 外部执行 |
+
+**根因精确化**:ash 的内置命令用**自己的参数语法**。例如 `find`(find.rs:28-30)用 `-n`/`-t`/`-max-depth`,而**非** GNU 的 `-name`/`-type`/`-maxdepth`。example 脚本写的是 GNU 语法,被 ash-find 忽略 → 返回空。
+
+### 影响范围
+
+这不是个别脚本的笔误,而是**所有依赖内置命令的 GNU 语法的脚本的系统性失效**:
+- `filestats`/`loccount`:用 `find` 或 `ls` 统计文件,在含文件的目录却输出"0 个"——因为 find/ls 的 GNU 语法不工作。
+- `cleanup`/`disk-clean`:用 `find -name` 找文件,永远返回"没找到"。
+- `fmt-check`:`find src -name *.rs` → "没有找到 .rs 文件"(src 下全是 .rs)。
+- 相比之下,`git`/`curl`/`ps`/`crontab` 等命令(ash 无内置)经 system() 正常外部执行。
+
+### 为什么这阻塞 M2
+
+M2 的 golden 固化/bash 等价校验要求脚本产出**正确、稳定**的结果。但当前多数 example 脚本因上述语法不匹配,**产出的是错误结果**(恒为 0/空),而非 bash 的等价输出。固化这种输出等于把 bug 固化成期望,bash 等价校验会大面积失败(ash 报 0,bash 报实际数)。
+
+### 三种可能的修复方向(均超出 034 原范围,需单独决策)
+
+1. **改 example 脚本用 ash 语法**(如 `find -n` 而非 `-name`):脚本侧修复,改动集中,但要求每个脚本的每个 system() 调用都核对 ash 语法表,且混用 ash 内置/外部命令的语义不一致问题仍在。
+2. **让 ash 内置命令兼容 GNU 语法别名**(find 同时认 `-name` 和 `-n`):一次性解决,但偏入 ash 命令实现改动。
+3. **system() 增加"真 shell-out"模式**(如 `system("cmd", shell=true)` 明确走 bash):最彻底,但触及 system() 桥接的架构设计。
+
+### 034 的调整决定
+
+鉴于上述根因超出 034(纯文档/示例)的合理范围:
+- **M0/M1 保留**:修损坏脚本(ext bug)+ README 补全 + 冒烟测试(守护"不崩溃")均有价值且已落地。
+- **M2 暂缓**:bash 等价校验被 system() 桥接问题阻塞。待上述修复方向之一落地后,example 脚本产出正确结果,再恢复 M2。
+- **M3 保留**:bash→ash 速查表 + README 一致性是纯文档,不依赖脚本正确性。
+
