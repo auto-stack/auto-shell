@@ -1,7 +1,7 @@
 use miette::Result;
 use reedline::{
     default_emacs_keybindings, default_vi_insert_keybindings, default_vi_normal_keybindings,
-    CwdAwareHinter, EditCommand, Emacs, FileBackedHistory,
+    EditCommand, Emacs, FileBackedHistory,
     KeyCode, KeyModifiers, Reedline, ReedlineEvent, ReedlineMenu, Signal, Vi,
 };
 use std::path::PathBuf;
@@ -11,6 +11,7 @@ use crate::menu::{AshMenu, AshMenuConfig};
 use crate::completions::CompletionSignature;
 use crate::completions::definitions;
 use crate::completions::reedline::{CompletionState, ShellCompleter};
+use crate::frontend::term::hinter::AshHinter;
 use ash_core::completions::CompletionProvider;
 use crate::{prompt::AshPrompt, shell::Shell};
 use crate::frontend::term::highlight::AshHighlighter;
@@ -238,10 +239,12 @@ impl Repl {
         // Create modular prompt (AshPrompt)
         let prompt = AshPrompt::new(crate::prompt::AshConfig::load());
 
-        // Plan 302: Fish-style autosuggestion hinter (configurable)
-        // CwdAwareHinter prefers history items from the current working directory
-        let hinter: Option<Box<CwdAwareHinter>> = if shell_config.autosuggestion {
-            // Plan 302: Fish-style autosuggestion hinter.
+        // Plan 302: Fish-style autosuggestion hinter (configurable).
+        // Plan 032 M1.2: replaced reedline's CwdAwareHinter with AshHinter,
+        // which keeps the same prefix-match behavior and adds a fuzzy
+        // (prefix-subsequence) fallback so typing `gcm` can ghost-complete to
+        // `git commit -m`. No AI here — real-time ghost-text must stay local.
+        let hinter: Option<Box<AshHinter>> = if shell_config.autosuggestion {
             // Explicit dim style so the hint is clearly distinguishable from typed
             // text — reedline's default `LightGray` is too close to the terminal's
             // default foreground on Windows and reads as normal text.
@@ -249,7 +252,7 @@ impl Repl {
                 .fg(nu_ansi_term::Color::DarkGray)
                 .italic();
             Some(Box::new(
-                CwdAwareHinter::default()
+                AshHinter::default()
                     .with_style(hint_style)
                     .with_min_chars(shell_config.autosuggestion_min_chars),
             ))
@@ -332,10 +335,28 @@ impl Repl {
         }
     }
 
-    /// Update the shared completion state with the current working directory.
+    /// Update the shared completion state with the current working directory
+    /// and Plan 032 context plumbing (last command/exit code/recent
+    /// history/aliases), so context-aware ranking and AI completion layers
+    /// have a coherent snapshot on the next `complete()` call.
     fn sync_completion_state(&self) {
+        // Pull history outside the lock: it does file I/O, and we never want
+        // to hold the completion-state mutex across a read of the (potentially
+        // large) history file.
+        let recent = Self::get_history_path()
+            .ok()
+            .map(|p| read_recent_history(&p, 50))
+            .unwrap_or_default();
+
         if let Ok(mut state) = self.completion_state.lock() {
             state.current_dir = self.shell.pwd().to_path_buf();
+            // Plan 032 M0.3: mirror the shell accessors (029 §2.3) into the
+            // completion context. `last_command_line()` is None before the
+            // first command; map it so the Option round-trips faithfully.
+            state.last_command = self.shell.last_command_line().map(String::from);
+            state.last_exit_code = Some(self.shell.last_exit_code());
+            state.history = recent;
+            state.aliases = self.shell.aliases().clone();
         }
     }
 
@@ -1021,6 +1042,28 @@ fn read_history_file(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// Read the last `n` history entries from the reedline history file
+/// (Plan 032 M0.2).
+///
+/// Unlike [`read_history_file`], this only reads what's needed for completion
+/// context (bounded to `n`), keeping the snapshot cheap even when the history
+/// file grows large. Entries are returned in chronological order (oldest of
+/// the window first), matching how callers feed them to ranking/AI prompts.
+///
+/// Returns an empty vec if the file is missing/unreadable or `n == 0`.
+pub fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let all = read_history_file(path);
+    let len = all.len();
+    if len <= n {
+        all
+    } else {
+        all[len - n..].to_vec()
+    }
+}
+
 /// Render tool-call args as a brief one-line summary (for StreamEvent rendering).
 /// Shared by F4 (handle_chat_turn) and `ash ask`.
 pub fn brief_args(args: &serde_json::Value) -> String {
@@ -1056,5 +1099,70 @@ fn brief_truncate(s: &str, max: usize) -> String {
     } else {
         let cut: String = s.chars().take(max).collect();
         format!("{cut}\u{2026}")
+    }
+}
+
+#[cfg(test)]
+mod read_recent_history_tests {
+    use super::read_recent_history;
+    use std::io::Write;
+
+    fn write_history(entries: &[&str]) -> std::path::PathBuf {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "ash-032-history-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut f = std::fs::File::create(&dir).unwrap();
+        for e in entries {
+            writeln!(f, "{e}").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn returns_all_when_fewer_than_n() {
+        let path = write_history(&["ls", "cd /tmp", "git status"]);
+        let got = read_recent_history(&path, 50);
+        assert_eq!(got, vec!["ls", "cd /tmp", "git status"]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn returns_last_n_in_chronological_order() {
+        let cmds: Vec<String> = (0..100).map(|i| format!("cmd{i}")).collect();
+        let refs: Vec<&str> = cmds.iter().map(String::as_str).collect();
+        let path = write_history(&refs);
+        let got = read_recent_history(&path, 50);
+        // Exactly 50, and they are the LAST 50 (cmd50..cmd99), oldest-first.
+        assert_eq!(got.len(), 50);
+        assert_eq!(got.first().map(String::as_str), Some("cmd50"));
+        assert_eq!(got.last().map(String::as_str), Some("cmd99"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn n_zero_returns_empty() {
+        let path = write_history(&["ls"]);
+        assert!(read_recent_history(&path, 0).is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn missing_file_returns_empty() {
+        let bogus = std::path::PathBuf::from("/this/path/does/not/exist/032");
+        assert!(read_recent_history(&bogus, 50).is_empty());
+    }
+
+    #[test]
+    fn skips_blank_lines() {
+        let path = write_history(&["ls", "", "   ", "cd"]);
+        let got = read_recent_history(&path, 50);
+        assert_eq!(got, vec!["ls", "cd"]);
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -18,6 +18,36 @@ pub struct CompletionContext {
     /// Function to execute an external command and capture its stdout.
     /// Injected because ash-core cannot call process::Command directly.
     pub command_executor: Box<dyn Fn(&str, &Path) -> Result<String, String>>,
+    // ── Plan 032: AI completion context plumbing ──────────────────────────
+    /// The last executed command line (for AI context + ranking heuristics).
+    /// `None` before any command has run.
+    pub last_command: Option<String>,
+    /// The exit code of the last command. `None` before any command has run.
+    pub last_exit_code: Option<i32>,
+    /// Most recent history entries (bounded, e.g. last 50). Used for
+    /// frequency-based ranking and fuzzy ghost-text. Empty until populated.
+    pub history: Vec<String>,
+    /// User aliases (for AI context — the model learns the user's shortcuts).
+    pub aliases: HashMap<String, String>,
+}
+
+impl CompletionContext {
+    /// Build a `CompletionContext` carrying only the legacy runtime state
+    /// (cwd + command executor), with the Plan 032 fields defaulted to empty.
+    /// Convenience for call sites that don't yet wire up AI context.
+    pub fn new(
+        current_dir: std::path::PathBuf,
+        command_executor: Box<dyn Fn(&str, &Path) -> Result<String, String>>,
+    ) -> Self {
+        Self {
+            current_dir,
+            command_executor,
+            last_command: None,
+            last_exit_code: None,
+            history: Vec::new(),
+            aliases: HashMap::new(),
+        }
+    }
 }
 
 /// The completion resolution engine.
@@ -475,10 +505,10 @@ mod tests {
 
     fn mock_ctx(output: &str) -> CompletionContext {
         let output = output.to_string();
-        CompletionContext {
-            current_dir: PathBuf::from("/tmp"),
-            command_executor: Box::new(move |_cmd: &str, _dir: &Path| Ok(output.clone())),
-        }
+        CompletionContext::new(
+            PathBuf::from("/tmp"),
+            Box::new(move |_cmd: &str, _dir: &Path| Ok(output.clone())),
+        )
     }
 
     #[test]
@@ -583,5 +613,45 @@ mod tests {
         assert!(values.contains(&"main"));
         assert!(values.contains(&"develop"));
         assert!(values.contains(&"feature-x"));
+    }
+
+    // ── Plan 032 M0.1: CompletionContext carries AI context ──────────────
+
+    #[test]
+    fn test_new_defaults_context_fields_to_empty() {
+        // `new()` provides only legacy runtime state; Plan 032 fields default.
+        let ctx = CompletionContext::new(
+            PathBuf::from("/tmp"),
+            Box::new(|_, _| Ok(String::new())),
+        );
+        assert_eq!(ctx.current_dir, PathBuf::from("/tmp"));
+        assert!(ctx.last_command.is_none());
+        assert!(ctx.last_exit_code.is_none());
+        assert!(ctx.history.is_empty());
+        assert!(ctx.aliases.is_empty());
+    }
+
+    #[test]
+    fn test_context_carries_ai_plumbing() {
+        // Construct a context that carries the full Plan 032 plumbing and
+        // assert it round-trips. This is the contract M0.3 will rely on when
+        // ShellCompleter builds the context from Shell accessors.
+        let ctx = CompletionContext {
+            current_dir: PathBuf::from("/repo"),
+            command_executor: Box::new(|_, _| Ok(String::new())),
+            last_command: Some("cd /repo".to_string()),
+            last_exit_code: Some(0),
+            history: vec!["git status".into(), "git commit -m x".into()],
+            aliases: {
+                let mut m = HashMap::new();
+                m.insert("g".to_string(), "git".to_string());
+                m
+            },
+        };
+        assert_eq!(ctx.last_command.as_deref(), Some("cd /repo"));
+        assert_eq!(ctx.last_exit_code, Some(0));
+        assert_eq!(ctx.history.len(), 2);
+        assert_eq!(ctx.history[1], "git commit -m x");
+        assert_eq!(ctx.aliases.get("g").map(String::as_str), Some("git"));
     }
 }

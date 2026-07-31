@@ -5,6 +5,7 @@
 
 pub mod auto;
 pub mod command;
+pub mod context_rank;
 pub mod file;
 pub mod flag;
 pub mod help_parser;
