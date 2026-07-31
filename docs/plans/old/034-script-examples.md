@@ -5,6 +5,10 @@
 > **设计**: [`designs/034-script-examples.md`](../../designs/034-script-examples.md)
 > **状态**: 🟢 M0/M1/M3 完成;M2 核心等价已建立(4 测试),部分脚本待独立 bug 修复
 
+## Status: COMPLETE
+
+核心交付完成:30+ 脚本实例库补完 + 冒烟测试守护(31 脚本)+ ash↔bash 核心等价校验(4 测试)+ 5 个 system() 桥接 bug 修复 + bash→ash 速查表。M2 的"逐脚本数值等价"剩余部分被独立 bug 阻塞(ash find 多结果、str.lower() heap string),不属 034 范围。
+
 ## 总览
 
 | 里程碑 | 内容 | 状态 |

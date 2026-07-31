@@ -1,7 +1,7 @@
 # Plan 034: ASH AutoLang 脚本实例库设计
 
 > **日期**: 2026-07-21
-> **状态**: 🟡 M0/M1/M3 完成,M2 暂缓(被 system() 桥接架构问题阻塞,见附录 C);实施记录见 `docs/plans/034-implementation-status.md`
+> **状态**: ✅ 已实施并归档(M0/M1/M3 + M2 核心等价 4 测试 + 5 个 system() 桥接 bug 修复);实施记录见 `docs/plans/old/034-script-examples.md`
 > **战略驱动**: 用实例证明 ash 的 AutoLang 脚本远比 bash 强。同时服务采用(给 README 提供素材)、验证 AutoLang(发现痛点)、为 SmartCommand 积累 body.ash 模板
 > **范围**: `examples/` 扩充到 30+ 脚本,每个对照 bash,bash→ash 速查表
 > **预估**: 1-2 周(纯写作 + 测试,无新代码)
