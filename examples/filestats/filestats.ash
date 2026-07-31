@@ -24,13 +24,16 @@ fn main() {
         // 提取扩展名(最后一个 . 后面的部分)
         // NOTE: 变量名用 `extension` 而非 `ext` —— 后者在重新赋值时会触发
         // auto-lang 解析器的一个 bug(标识符 `ext` 被特殊处理)。见 Plan 034 附录。
+        // NOTE: 不调 .lower() —— split 产生的字符串上调 .lower() 会触发 native
+        // 栈布局问题(返回 -2147483647);.upper() 则正常。扩展名按原样统计。
         var extension = "无扩展名"
         var dot_pos = fname.find(".")
         if dot_pos >= 0 {
             // 找最后一个点
             var parts = fname.split(".")
             if parts.len() > 1 {
-                extension = parts[parts.len() - 1].lower()
+                var last_idx = parts.len() - 1
+                extension = parts[last_idx]
             }
         }
 
