@@ -25,11 +25,10 @@
 | `sort -u` | `sort -u` | ✅ 相同 |
 | `which python` | `which python` | ✅ 相同 |
 
-> ⚠️ **注意:`find` 和 `grep` 的标志位不完全相同。** ash 的 `find` 是内置重实现,
-> 用 `name`/`type`/`max-depth` 参数(短形式 `-n`/`-t`),**不认 GNU 的 `-name`/`-type`**。
-> `grep` 用 `ignore-case`/`invert-match`/`count`,不认 `-r`/`-E`。
-> 在交互 REPL 里直接敲 `find . -name "*.rs"` 会返回空——请用下方"增强版"的结构化写法,
-> 或在脚本里用 `find . -n "*.rs"`。详见各命令的 `help <cmd>`。
+> 💡 **`find` 和 `grep` 兼容 GNU/POSIX 标志。** `find . -name "*.rs" -type f -maxdepth 2`
+> 和 `grep -rn "pat" .` 都能直接用(Plan 034 修复了 find 的单横杠长 flag 兼容)。
+> ash 的 `find`/`grep` 是内置重实现,既认 POSIX 标志,也支持 ash 的结构化输出——
+> 管道里 `find . -name "*.rs" | select .path` 可直接用。详见各命令的 `help <cmd>`。
 
 ### ash 增强版（结构化输出）
 

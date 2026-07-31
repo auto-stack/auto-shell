@@ -313,6 +313,25 @@ M2 的 golden 固化/bash 等价校验要求脚本产出**正确、稳定**的�
 2. **让 ash 内置命令兼容 GNU 语法别名**(find 同时认 `-name` 和 `-n`):一次性解决,但偏入 ash 命令实现改动。
 3. **system() 增加"真 shell-out"模式**(如 `system("cmd", shell=true)` 明确走 bash):最彻底,但触及 system() 桥接的架构设计。
 
+### ✅ 已修复(2026-07-31):方向 2 — find 的 POSIX 兼容
+
+经评审确认 find/grep 是 POSIX 标准命令,ash 应兼容 GNU 语法(这是兼容承诺,不是脚本的责任),采用了方向 2,修复了 find 的 POSIX 兼容缺口:
+
+**根因精确化**:GNU find 用单横杠长 flag(`-name`/`-type`/`-maxdepth`),而 ash 的参数 parser(`cmd/parser.rs`)把单横杠后当**短标志组合**逐字符解析(`-name` 被拆成 `n`+`a`+`m`+`e`,只有 `n` 认)。`--name`(双横杠)本来就工作,问题只在单横杠。
+
+**修复**(`cmd/parser.rs` 单横杠分支):在逐字符解析前,先检查"单横杠后的完整字符串是否是已声明的长选项/flag 名"。若是,按长形式处理(取下个 token 作值 / 设 flag);否则才走短标志组合。这不影响真正的短标志组合(如 `ls -al`,因为 `al` 不是声明的长名)。
+
+同时把 find 的 `max-depth` 重命名为 POSIX 的 `maxdepth`。
+
+**验证**:修复后 `find src -name "*.rs"` 从返回 0 变为返回 154 行;`-type f`/`-maxdepth N` 组合正常;`ls -al` 等短标志组合不受影响。回归:auto-shell lib 704 + parity + examples_smoke 全过。
+
+**遗留**:部分 example(filestats 等)仍输出 0,是因为它们用 `system("ls -1 .")` 取文件列表——这是另一个独立的 system() 桥接问题(`ls -1` 在 system() 里返回空),与 find 无关,见下文"遗留问题"。
+
+### 遗留问题(仍待修,但不阻塞 find 兼容性结论)
+
+- `system("ls -1 .")` 在脚本里返回空(但 `system("ls src")` 工作)——`ls` 的 `-1` 标志或 `.` 路径在 system() 桥接里有问题。影响 filestats/loccount 等。这是 system() 桥接的独立 bug,非 find 兼容性。
+- 脚本参数 `$1` 仍传不进(附录 B Bug 2),致多数带参数脚本 fallback 到 "."。
+
 ### 034 的调整决定
 
 鉴于上述根因超出 034(纯文档/示例)的合理范围:
