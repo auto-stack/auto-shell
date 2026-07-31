@@ -62,6 +62,12 @@ impl Repl {
             }
         }
 
+        // Plan 033: load installed plugins (sources plugin `functions.ash`,
+        // records capability warnings). Completion & SmartCommand contributions
+        // are picked up lazily by their respective loaders.
+        let plugin_report = crate::plugin::load_all_plugins(&mut shell)?;
+        plugin_report.print_to_stderr();
+
         // Set up history file (configurable size)
         let history_path = Self::get_history_path()?;
         let history = Box::new(

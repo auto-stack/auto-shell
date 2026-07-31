@@ -4,7 +4,8 @@
 
 - **Rust 1.75+**（安装：https://rustup.rs）
 - **Git**
-- 三个姊妹仓库需要同级放置（当前阶段）：
+
+ash 依赖两个姊妹仓库（auto-lang 语言引擎、auto-ai AI 基础设施）。当前阶段它们尚未发布到 crates.io，通过 `Cargo.toml` 的相对路径依赖引用，所以三个仓库需要同级放置：
 
 ```
 autostack/                        ← 你的工作根目录（名字随意）
@@ -13,18 +14,42 @@ autostack/                        ← 你的工作根目录（名字随意）
 └── auto-ai/                      ← AI 基础设施（aaid daemon）
 ```
 
-> 未来发布到 crates.io 后，将解除姊妹仓库的路径依赖。
+> 下面的「安装脚本」会自动处理这个布局。未来发布到 crates.io 后将解除姊妹仓库的路径依赖。
 
-## 方式一：从源码构建（当前主推）
+## 方式一：安装脚本（推荐）
 
-### 1. 克隆三个仓库
+一行命令克隆三个姊妹仓库并 `cargo install`，装完自动清理。最适合只想用 ash 的用户。
+
+**macOS / Linux（或 Windows 上的 Git Bash）：**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/auto-stack/auto-shell/main/install.sh | sh
+```
+
+**Windows（PowerShell）：**
+
+```powershell
+irm https://raw.githubusercontent.com/auto-stack/auto-shell/main/install.ps1 | iex
+```
+
+脚本逻辑：克隆 `auto-stack/auto-shell`、`auto-stack/auto-lang`、`auto-stack/auto-ai` 到临时目录的同级布局 → `cargo install --locked --path auto-shell/ash/auto-shell` → 装到 `~/.cargo/bin`（cargo 默认）。
+
+可选环境变量：
+
+```bash
+OWNER=myorg BRANCH=dev sh install.sh   # 用别的 owner / 分支
+```
+
+## 方式二：从源码构建（开发/自定义）
+
+### 1. 克隆三个仓库（同级放置）
 
 ```bash
 mkdir autostack && cd autostack
 
-git clone https://github.com/zhaopuming/auto-shell.git
-git clone https://github.com/zhaopuming/auto-lang.git
-git clone https://github.com/zhaopuming/auto-ai.git
+git clone https://github.com/auto-stack/auto-shell.git
+git clone https://github.com/auto-stack/auto-lang.git
+git clone https://github.com/auto-stack/auto-ai.git
 ```
 
 > 如果仓库未公开，用你有的访问方式（SSH / 本地路径）。
@@ -40,7 +65,13 @@ cargo build --release
 - **Linux/macOS**：`target/release/ash`
 - **Windows**：`target/release/ash.exe`
 
-### 3. 加入 PATH（可选）
+或者直接 `cargo install` 到 `~/.cargo/bin`：
+
+```bash
+cargo install --locked --path auto-shell/ash/auto-shell
+```
+
+### 3. 加入 PATH（仅 build 方式需要；cargo install 方式装到 ~/.cargo/bin）
 
 ```bash
 # Linux/macOS（加到 ~/.bashrc 或 ~/.zshrc）
@@ -57,13 +88,15 @@ ash --version
 ash -c "echo hello"
 ```
 
-## 方式二：cargo install（计划中）
+## 关于 `cargo install --git`（暂不支持）
 
 ```bash
-cargo install --git https://github.com/zhaopuming/auto-shell.git ash
+cargo install --git https://github.com/auto-stack/auto-shell.git ash   # ❌ 当前不可用
 ```
 
-> 此方式在 ash 发布到 crates.io 后完全可用。当前因路径依赖可能需要手动调整。
+**为什么不行**：`cargo install --git` 只克隆本仓库到临时目录，而 ash 的 `Cargo.toml` 用相对路径依赖姊妹仓库（`../../../auto-lang`、`../../../auto-ai`），这些路径在临时目录里解析不了。Cargo 也不支持 `path` + `git` 同时指定做 fallback。
+
+**等 ash（及其姊妹仓库）发布到 crates.io 后**，`cargo install ash` 就能一行装好。在那之前，请用上面的**安装脚本**或**源码构建**。
 
 ## 平台注意事项
 
@@ -146,4 +179,4 @@ cd ash && cargo build --release
 
 ---
 
-**安装遇到问题？** 请提 [GitHub Issue](https://github.com/zhaopuming/auto-shell/issues)。
+**安装遇到问题？** 请提 [GitHub Issue](https://github.com/auto-stack/auto-shell/issues)。

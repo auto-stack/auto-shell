@@ -12,13 +12,13 @@
 | Plan | 方向 | Design | Plan(详细 TDD) | 估算 |
 |---|---|---|---|---|
 | **028** | Agent 执行引擎 | (已删,M1+M2 已落地) | (已删) | M3+M4 待定 |
-| **029** | AI 能力增强(含 SmartCommand) | ✅ 1064 行（v1 已过时，§0 已重评） | 🟡 已有（核心交付物完成，余 P0-P2） | auto-ai 侧 ✅ + auto-shell 侧 🟡（核心 ~2700 行已落地，余 ~4 周补缺口） |
+| **029** | AI 能力增强(含 SmartCommand) | ✅ 1064 行（v1 已过时，§0 已重评） | ✅ 完成（5 子能力全落地，见 `old/029-ai-capabilities.md`） | ✅ 完成（仅 1 个不阻塞的小缺口：`.at` 配 preferred_provider） |
 | **030** | ash-gui(Shell-native UI) | ✅ 1048 行 | ✅ 1671 行(M0-M2) | 13-20 周(M0-M5) |
 | **031** | 数据处理框架(lazy pipeline) | ✅ 538 行 | ✅ 已归档（M0-M3 完成） | ✅ 完成 |
 | **032** | 智能补全(AI 层) | ✅ 405 行 | ✅ 已实施并归档(M0-M3 + 审计修复,见 `old/032-intelligent-completion.md`) | ✅ 完成 |
-| **033** | 插件生态(data-only) | ✅ 437 行 | ✅ 已有（M0-M3 待实施） | 3-4 周 |
+| **033** | 插件生态(data-only) | ✅ 437 行 | ✅ 完成（M0-M3 全部完成 + 复审修复，见 `old/033-plugin-ecosystem.md`） | ✅ 完成（v1） |
 | **034** | 脚本实例库 | ✅ 194 行 | ✅ 已实施并归档(M0/M1/M3 + M2 核心等价,见 `old/034-script-examples.md`) | ✅ 完成 |
-| **035** | 文档+分发 | ✅ 240 行 | ❌ 待写 | 1.5-2 周 |
+| **035** | 文档+分发 | ✅ 240 行 | ✅ 完成（M0-M3，见 `old/035-documentation-distribution.md`） | ✅ 完成 |
 
 ---
 
@@ -65,15 +65,17 @@ Layer 5(独立后续):
 
 ## 各方向里程碑速查
 
-### 029 AI 能力增强(最大,12-16 周)
+### 029 AI 能力增强(最大,12-16 周) ✅ 完成（5 子能力全落地）
 
-| M | 内容 | 依赖 | 估算 |
+| M | 内容 | 依赖 | 状态 |
 |---|---|---|---|
-| M0 | 共享基础设施(OllamaProvider + 桥 + 上下文) | auto-ai 改造 | 3-4 周 |
-| M1 | SmartCommand 完整 + git.finish-worktree | M0 | 3-4 周 |
-| M2 | F4 tool-calling(ChatSession → Agent::run) | M0 | 2-3 周 |
-| M3 | F3 增强 + NL→AutoLang | M2 | 2-3 周 |
-| M4 | 上下文感知 + Warp 式建议 | M0 | 2 周 |
+| M0 | 共享基础设施(OllamaProvider + 桥 + 上下文) | auto-ai 改造 | ✅ |
+| M1 | SmartCommand 完整 + git.finish-worktree | M0 | ✅ |
+| M2 | F4 tool-calling(ChatSession → Agent::run) | M0 | ✅ |
+| M3 | F3 增强 + NL→AutoLang | M2 | ✅ |
+| M4 | 上下文感知 + Warp 式建议 | M0 | ✅ |
+
+详见 `old/029-ai-capabilities.md`（auto-shell ~2700 行 + 43 测试，auto-ai 侧前置依赖已合并）。唯一小缺口：`.at` 配置层未加 `preferred_provider` 字段（不阻塞，低优先级）。
 
 ### 030 ash-gui(已有详细 plan)
 
@@ -93,40 +95,65 @@ Layer 5(独立后续):
 | M2 | 谓词下推 + shell.rs 集成 | 1-2 周 |
 | M3 | ExternalStream → lazy(可选) | 1 周 |
 
-### 032 智能补全(4-5 周)
+### 032 智能补全(4-5 周) ✅ 完成（M0-M3 + 审计修复）
 
-| M | 内容 | 依赖 |
-|---|---|---|
-| M0 | 上下文 plumbing | 029 §2.3 访问器 |
-| M1 | 排序 + 历史 ghost-text | M0 |
-| M2 | AI 补全(LLM/NL) | 029 NL 共享层 |
-| M3 | 缺失动态源(可选) | 无 |
+| M | 内容 | 依赖 | 状态 |
+|---|---|---|---|
+| M0 | 上下文 plumbing | 029 §2.3 访问器 | ✅ |
+| M1 | 排序 + 历史 ghost-text | M0 | ✅ |
+| M2 | AI 补全(LLM/NL) | 029 NL 共享层 | ✅ |
+| M3 | 缺失动态源(可选) | 无 | ✅ |
 
-### 033 插件生态(3-4 周)
+**v2 / 后续**（v1 有意不做，记录于此防遗忘；详见 `old/032-intelligent-completion.md` §非目标与 `designs/032-intelligent-completion.md` §范围内/范围外）：
+- AI 实时 ghost-text（打字时调 LLM）—— 延迟不可接受，不做
+- 云端 LLM 补全 —— 只用本地 Ollama
+- 重写 Plan 021 补全引擎 —— 只在其后加 AI 层
+- 命令后建议（💡）—— 029 §7.3 suggest.rs 已实现，不重复
+- 所有命令的动态源 —— v1 只补高频（ssh/kubectl/env var）
 
-| M | 内容 | 依赖 |
-|---|---|---|
-| M0 | plugin.at manifest + parse | 无 |
-| M1 | 加载器(4 贡献类型) | 029 SmartCommand loader(可选) |
-| M2 | ash plugin CLI | M0+M1 |
-| M3 | 安全 + 文档 | M2 |
+### 033 插件生态(3-4 周) ✅ v1 完成（M0-M3）
 
-### 034 实例库(1-2 周,纯写作)
+| M | 内容 | 依赖 | 状态 |
+|---|---|---|---|
+| M0 | plugin.at manifest + parse | 无 | ✅ |
+| M1 | 加载器(4 贡献类型) | 029 SmartCommand loader(可选) | ✅ |
+| M2 | ash plugin CLI | M0+M1 | ✅ |
+| M3 | 安全测试 + 作者文档 + 2 示例插件 | M2 | ✅ |
 
-| M | 内容 | 依赖 |
-|---|---|---|
-| M0 | 基础设施 + 速查表 | 无 |
-| M1 | 核心实例 17 个 | 无 |
-| M2 | 高级实例 13 个 | 029/031(展示能力) |
+**v2 / 后续**（v1 有意不做，记录于此防遗忘；详见 `old/033-plugin-ecosystem.md` §非目标与 `designs/033-plugin-ecosystem.md` §6.4）：
+- 动态库 / native 插件（需 ash-plugin-sdk + ABI 稳定）
+- 中央 registry（类 crates.io）
+- 插件签名 / 沙箱（v1 仅 capabilities 警告 + 复用 028 SecurityPolicy）
+- `config.at` merge（v1 占位，声明但不合并）
+- 热加载、插件依赖关系、插件市场网站
 
-### 035 文档+分发(1.5-2 周)
+### 034 实例库(1-2 周,纯写作) ✅ 完成（M0/M1/M3 + M2 核心等价）
 
-| M | 内容 | 依赖 |
-|---|---|---|
-| M0 | README + quickstart | 所有(引用) |
-| M1 | 三类入口 + 速查表 | 034(速查表共建) |
-| M2 | CI + release | 无 |
-| M3 | cargo install 验证 | M2 |
+| M | 内容 | 依赖 | 状态 |
+|---|---|---|---|
+| M0 | 基础设施 + 速查表 | 无 | ✅ |
+| M1 | 核心实例 17 个 | 无 | ✅ |
+| M2 | 高级实例 13 个 | 029/031(展示能力) | 🟡 核心等价（bash 等价校验暂缓） |
+| M3 | smoke 测试回归网 | M0 | ✅ |
+
+**v2 / 后续**（v1 有意不做或暂缓，记录于此防遗忘；详见 `old/034-script-examples.md` §非目标/暂缓与 `designs/034-script-examples.md` §范围内/范围外）：
+- M2 bash 等价校验 —— 待 system() 桥接 / find-grep 语法兼容修复落地后恢复
+- auto-lang 的 `ext` parser bug —— 脚本侧绕过，不修（属 auto-lang 仓库）
+- auto-lang 的 `.to_uint()` bug —— disk-clean 改用原生单位绕过（属 auto-lang 仓库）
+- 完整应用级脚本、性能基准、完整迁移指南 —— 超出 v1 范围
+
+### 035 文档+分发(1.5-2 周) ✅ 完成（M0-M3）
+
+| M | 内容 | 依赖 | 状态 |
+|---|---|---|---|
+| M0 | README + quickstart + installation | 所有(引用) | ✅ |
+| M1 | 三类入口 + 速查表 | 034(速查表共建) | ✅ |
+| M2 | CI + release（sibling-clone 解路径依赖） | 无 | ✅ |
+| M3 | cargo install 验证 + 安装脚本 | M2 | ✅ |
+
+详见 `old/035-documentation-distribution.md`。M3 用 `install.sh`/`install.ps1`（克隆三个 sibling 仓库 + `cargo install --path`）解决 `cargo install --git` 单仓的路径依赖限制（Cargo 禁止 path+git，见 [Issue #8747](https://github.com/rust-lang/cargo/issues/8747)）。
+
+**v2 / 后续**：`cargo install ash`（待 crates.io 发布 ash + sibling）、brew/winget/scoop、完整文档网站。
 
 ---
 

@@ -19,10 +19,25 @@ use super::config::{parse_at, SmartCommandSpec};
 /// `home` is the user home (search root for user-global). Both are passed in
 /// so tests can control them without depending on env lookups.
 pub fn load_all_from(cwd: &Path, home: &Path) -> Vec<SmartCommandSpec> {
-    let dirs = [
+    load_all_with_extra(cwd, home, &[])
+}
+
+/// Like [`load_all_from`], but also scans the given `extra_dirs` (each an
+/// already-resolved `smart/` directory). Extra dirs are searched *after* the
+/// built-in paths, so project-local and user-global still win on collisions.
+///
+/// Plan 033: the plugin loader passes each enabled plugin's `smart/` directory
+/// here so `ash smart` picks up plugin-contributed SmartCommands.
+pub fn load_all_with_extra(
+    cwd: &Path,
+    home: &Path,
+    extra_dirs: &[PathBuf],
+) -> Vec<SmartCommandSpec> {
+    let mut dirs = vec![
         cwd.join("smart"),
         home.join(".config").join("ash").join("smart"),
     ];
+    dirs.extend(extra_dirs.iter().cloned());
     let mut specs: Vec<SmartCommandSpec> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for dir in dirs {
@@ -35,16 +50,20 @@ pub fn load_all_from(cwd: &Path, home: &Path) -> Vec<SmartCommandSpec> {
     specs
 }
 
-/// Convenience: load using the real cwd + home dir.
+/// Convenience: load using the real cwd + home dir, plus any plugin `smart/`
+/// dirs discovered by the Plan 033 plugin loader.
 pub fn load_all() -> Vec<SmartCommandSpec> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    load_all_from(&cwd, &home)
+    let extra = crate::plugin::loader::enabled_plugin_smart_dirs();
+    load_all_with_extra(&cwd, &home, &extra)
 }
 
-/// Parse every `*.at` file in `dir` (non-recursive). Missing dir → empty.
-/// Malformed files are skipped with a warning to stderr (one bad file doesn't
-/// break the rest).
+/// Parse every `*.at` file in `dir` (non-recursive), plus one level of
+/// subdirectories (`<dir>/<name>/command.at` — the per-command layout used by
+/// Plan 033 plugins, matching `designs/033-plugin-ecosystem.md` §3.1). Missing
+/// dir → empty. Malformed files are skipped with a warning to stderr (one bad
+/// file doesn't break the rest).
 fn load_dir(dir: &Path) -> Vec<SmartCommandSpec> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -53,29 +72,42 @@ fn load_dir(dir: &Path) -> Vec<SmartCommandSpec> {
     let mut specs = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
+        if path.is_dir() {
+            // Per-command subdirectory layout: `<dir>/<cmd>/command.at`.
+            let command_at = path.join("command.at");
+            if command_at.is_file() {
+                parse_one(&command_at, &mut specs);
+            }
+            continue;
+        }
         if path.extension().and_then(|e| e.to_str()) != Some("at") {
             continue;
         }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("warning: cannot read {}: {}", path.display(), e);
-                continue;
-            }
-        };
-        match parse_at(&content) {
-            Ok(mut spec) => {
-                spec.source_path = Some(path.clone());
-                specs.push(spec);
-            }
-            Err(e) => {
-                eprintln!("warning: skipping malformed {}: {}", path.display(), e);
-            }
-        }
+        parse_one(&path, &mut specs);
     }
     // Stable order by name for deterministic `ash smart list` output.
     specs.sort_by(|a, b| a.name.cmp(&b.name));
     specs
+}
+
+/// Parse a single `.at` file into `specs` (best-effort: bad files warn + skip).
+fn parse_one(path: &Path, specs: &mut Vec<SmartCommandSpec>) {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warning: cannot read {}: {}", path.display(), e);
+            return;
+        }
+    };
+    match parse_at(&content) {
+        Ok(mut spec) => {
+            spec.source_path = Some(path.to_path_buf());
+            specs.push(spec);
+        }
+        Err(e) => {
+            eprintln!("warning: skipping malformed {}: {}", path.display(), e);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -110,12 +142,21 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
         let smart_dir = tmp.join("smart");
         fs::create_dir_all(&smart_dir).unwrap();
-        write_at(&smart_dir, "deploy.at", "deploy", "deploy app", "deploy.ash");
+        write_at(
+            &smart_dir,
+            "deploy.at",
+            "deploy",
+            "deploy app",
+            "deploy.ash",
+        );
 
         let specs = load_all_from(&tmp, &tmp);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "deploy");
-        assert_eq!(specs[0].source_path.as_ref().unwrap(), &smart_dir.join("deploy.at"));
+        assert_eq!(
+            specs[0].source_path.as_ref().unwrap(),
+            &smart_dir.join("deploy.at")
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -189,6 +230,59 @@ mod tests {
         fs::create_dir_all(&smart_dir).unwrap();
         fs::write(smart_dir.join("readme.md"), "# commands").unwrap();
         fs::write(smart_dir.join("body.ash"), "> echo hi").unwrap();
+        write_at(&smart_dir, "real.at", "real", "r", "real.ash");
+
+        let specs = load_all_from(&tmp, &tmp);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "real");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Plan 033 §3.1: plugin SmartCommands may use the per-command subdirectory
+    /// layout `<smart>/<cmd>/command.at`. Both flat (`<cmd>.at`) and subdir
+    /// layouts must load from the same directory.
+    #[test]
+    fn loads_subdir_command_at_layout() {
+        let tmp = std::env::temp_dir().join("ash_smart_subdir");
+        let _ = fs::remove_dir_all(&tmp);
+        let smart_dir = tmp.join("smart");
+        // Subdir layout: smart/deploy/command.at (+ body next to it).
+        let deploy_dir = smart_dir.join("deploy");
+        fs::create_dir_all(&deploy_dir).unwrap();
+        fs::write(
+            deploy_dir.join("command.at"),
+            r#"command "deploy" {
+    description : "deploy app"
+    body        : "deploy.ash"
+}
+"#,
+        )
+        .unwrap();
+        fs::write(deploy_dir.join("deploy.ash"), "> echo deploy").unwrap();
+        // Flat layout alongside it.
+        write_at(&smart_dir, "flat.at", "flat", "f", "flat.ash");
+
+        let specs = load_all_from(&tmp, &tmp);
+        let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"deploy"), "subdir command.at must load");
+        assert!(names.contains(&"flat"), "flat .at must still load");
+        // source_path for the subdir command resolves inside the subdir.
+        let deploy = specs.iter().find(|s| s.name == "deploy").unwrap();
+        assert_eq!(
+            deploy.source_path.as_ref().unwrap(),
+            &deploy_dir.join("command.at")
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A subdir without a `command.at` is ignored (not treated as an error).
+    #[test]
+    fn ignores_subdir_without_command_at() {
+        let tmp = std::env::temp_dir().join("ash_smart_subdir_empty");
+        let _ = fs::remove_dir_all(&tmp);
+        let smart_dir = tmp.join("smart");
+        fs::create_dir_all(smart_dir.join("notes")).unwrap();
+        fs::write(smart_dir.join("notes").join("readme.md"), "x").unwrap();
         write_at(&smart_dir, "real.at", "real", "r", "real.ash");
 
         let specs = load_all_from(&tmp, &tmp);

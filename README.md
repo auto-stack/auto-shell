@@ -179,6 +179,20 @@ fn deploy(env) {
 ```bash
 ash agent describe-tools     # 79 个工具的 JSON Schema catalog
 ash agent describe-policy    # 安全策略能力位摘要
+ash agent run "<cmd>"        # 执行 + 结构化信封
+```
+
+### 插件生态（Plan 033，已实现）
+
+一个插件就是一个目录——含补全 spec、AutoLang 函数、SmartCommand。`ash plugin install` 克隆到本地，启动时自动加载。零编译、零动态库。
+
+```bash
+ash plugin install <git-url>          # 从 git 安装
+ash plugin install --local ./my-plugin  # 本地开发安装
+ash plugin list / show / enable / disable / remove / update
+```
+
+→ 写插件见 [docs/plugin-development.md](docs/plugin-development.md)；示例见 [examples/plugins/](examples/plugins/)。
 ash agent check "<cmd>"      # Dry-run 策略探测
 ash agent run "<cmd>"        # 执行 + 结构化信封
 ```
@@ -193,6 +207,7 @@ ash agent run "<cmd>"        # 执行 + 结构化信封
 | [docs/bash-to-ash.md](docs/bash-to-ash.md) | bash → ash 速查表 |
 | [docs/for-agents.md](docs/for-agents.md) | AI Agent 集成指南 |
 | [docs/for-developers.md](docs/for-developers.md) | 终端用户指南 |
+| [docs/plugin-development.md](docs/plugin-development.md) | 插件开发指南 |
 | [docs/for-internal.md](docs/for-internal.md) | 生态内部集成 |
 | [docs/installation.md](docs/installation.md) | 详细安装 |
 | [docs/roadmap.md](docs/roadmap.md) | 项目路线图 |

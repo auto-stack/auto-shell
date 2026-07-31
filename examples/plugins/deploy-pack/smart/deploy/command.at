@@ -1,0 +1,5 @@
+command "deploy.run" {
+    description : "Run the deploy body (prints what would deploy, given a target as $1)."
+    args        : ["target"]
+    body        : "deploy.ash"
+}
