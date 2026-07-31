@@ -1025,7 +1025,13 @@ impl Shell {
     pub fn execute_capture(&mut self, input: &str) -> Result<Option<String>> {
         let was_compat = self.bash_compat;
         self.bash_compat = true;
-        let result = self.execute(input);
+        // Plan 034 Bug 2: interpolate $1/$@/$#/$VAR before execution so scripts
+        // can read their positional args via system("echo $1"). The general
+        // execute() path does NOT interpolate (the interactive REPL handles $
+        // differently), but system() is the script↔shell bridge and must
+        // honor script_args like bash does.
+        let interpolated = self.interpolate_auto_vars(input);
+        let result = self.execute(&interpolated);
         self.bash_compat = was_compat;
         result
     }
