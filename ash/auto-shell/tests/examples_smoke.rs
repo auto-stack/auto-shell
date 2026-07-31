@@ -83,23 +83,40 @@ fn ash_binary_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ash"))
 }
 
-/// Run an ash script with no args, killing it if it runs longer than
-/// [`SCRIPT_TIMEOUT`]. Returns (combined stdout+stderr, exit_code).
+/// Run an ash script with no args in an isolated empty temp dir, killing it
+/// if it runs longer than [`SCRIPT_TIMEOUT`]. Returns (combined stdout+stderr,
+/// exit_code).
 ///
 /// We spawn the subprocess on a worker thread and wait on a channel with a
 /// timeout; if the worker doesn't finish in time, the test reports a timeout
 /// (exit code -2) instead of hanging the whole suite. This matters because
 /// some example scripts prompt for input (cleanup) or loop (watch-proc) and
 /// would otherwise block forever with stdin closed.
+///
+/// **Isolated cwd**: scripts run in a fresh empty temp dir, NOT the cargo
+/// test cwd. This is critical — otherwise `buildtest` would run a real
+/// `cargo build` inside the ash workspace (slow, >15s timeout, and pollutes
+/// the build), and `filestats`/`loccount` would scan source files. In an
+/// empty dir, env-dependent scripts fail fast and predictably.
 fn run_ash(script: &Path) -> (String, i32) {
     let script = script.to_path_buf();
+    // Per-run isolated cwd (empty dir), unique so parallel runs don't collide.
+    let cwd = std::env::temp_dir().join(format!(
+        "ash-smoke-{}-{}",
+        std::process::id(),
+        script.file_stem().and_then(|s| s.to_str()).unwrap_or("?"),
+    ));
+    let _ = fs::create_dir_all(&cwd);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let result = Command::new(ash_binary_path())
             .arg(&script)
+            .current_dir(&cwd)
             .stdin(Stdio::null())
             .output();
         let _ = tx.send(result);
+        // Best-effort cleanup of the temp dir.
+        let _ = fs::remove_dir_all(&cwd);
     });
 
     match rx.recv_timeout(SCRIPT_TIMEOUT) {
