@@ -39,24 +39,24 @@ fn main() {
         // 提取扩展名(最后一个 . 之后)
         var parts = fpath.split(".")
         if parts.len() < 2 { continue }
-        var ext = parts[parts.len() - 1].lower()
+        var extension = parts[parts.len() - 1].lower()
 
         // 跳过不在映射里的扩展名
-        if !langs.contains(ext) { continue }
+        if !langs.contains(extension) { continue }
 
         // wc -l 数行数
         var wc_out = system("wc -l < \"" + fpath + "\" 2>/dev/null || echo 0")
         var n = wc_out.trim()
 
         // 累加到该语言的 loc / 文件数
-        var prev_loc = loc.get_str(ext)
-        var prev_fc = fcount.get_str(ext)
+        var prev_loc = loc.get_str(extension)
+        var prev_fc = fcount.get_str(extension)
         if prev_loc.len() == 0 {
-            loc.insert_str(ext, n)
-            fcount.insert_str(ext, "1")
+            loc.insert_str(extension, n)
+            fcount.insert_str(extension, "1")
         } else {
-            loc.insert_str(ext, prev_loc.to_uint() + n.to_uint())
-            fcount.insert_str(ext, prev_fc.to_uint() + 1)
+            loc.insert_str(extension, prev_loc.to_uint() + n.to_uint())
+            fcount.insert_str(extension, prev_fc.to_uint() + 1)
         }
     }
 
@@ -64,9 +64,9 @@ fn main() {
     print("语言        | 文件数 | 代码行")
     print("------------|--------|-------")
     var grand_total = 0
-    for (ext, lines_n) in loc {
-        var lang = langs.get_str(ext)
-        var fc = fcount.get_str(ext)
+    for (extension, lines_n) in loc {
+        var lang = langs.get_str(extension)
+        var fc = fcount.get_str(extension)
         print(lang + " | " + fc + "      | " + lines_n)
         grand_total = grand_total + lines_n.to_uint()
     }

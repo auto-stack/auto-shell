@@ -11,8 +11,11 @@ fn main() {
     var dir = "."
     var count = "10"
 
-    // 从命令行参数读取(通过 shell bridge)
+    // 从命令行参数读取(通过 shell bridge)。
+    // NOTE: `system("echo $@")` 无参数时返回字面量 "$@"(auto-shell 已知
+    // bug,见 Plan 034 附录 Bug 2),这里把它当空处理。
     var args = system("echo $@")
+    if args.trim() == "$@" { args = "" }
     if args.len() > 0 {
         // 简单参数处理:第一个非空 token 是目录,第二个是数量
         var parts = args.trim().split(" ")

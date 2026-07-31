@@ -12,21 +12,20 @@ fn main() {
 
     if dir.len() == 0 { dir = "." }
     if size_str.len() == 0 { size_str = "100" }
-    var size_mb = size_str.to_uint()
 
-    print("=== 扫描 " + dir + " 下 > " + size_mb.str() + "MB 的文件 ===")
+    print("=== 扫描 " + dir + " 下 > " + size_str + "MB 的文件 ===")
     print("")
 
-    // find 按字节数过滤(size 单位是 512字节块,这里用 +Nc 按字节)
-    // size_mb * 1024 * 1024 = 字节数
-    // find 的 -size +Nc 表示大于 N 字节
-    var bytes = size_mb * 1024 * 1024
-    var cmd = "find " + dir + " -type f -size +" + bytes.str() + "c 2>/dev/null | head -50 || true"
+    // find 按大小过滤:直接用 -size +NM 单位(find 原生支持 M=MB),
+    // 避开在脚本里做 `mb * 1024 * 1024` 的字节换算 —— ash 的 .to_uint() 目前
+    // 在 auto-lang 里有返回类型 bug(见 Plan 034 附录 Bug 1),算术会出错,
+    // 所以这里把阈值原样(字符串)传给 find,由 find 自己换算。
+    var cmd = "find " + dir + " -type f -size +" + size_str + "M 2>/dev/null | head -50 || true"
     var files = system(cmd)
     var lines = files.trim().lines()
 
     if lines.len() == 0 {
-        print("✓ 没有找到大于 " + size_mb.str() + "MB 的文件")
+        print("✓ 没有找到大于 " + size_str + "MB 的文件")
         return
     }
 

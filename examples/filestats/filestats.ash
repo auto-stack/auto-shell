@@ -22,29 +22,31 @@ fn main() {
         if fname.trim().len() == 0 { continue }
 
         // 提取扩展名(最后一个 . 后面的部分)
-        var ext = "无扩展名"
+        // NOTE: 变量名用 `extension` 而非 `ext` —— 后者在重新赋值时会触发
+        // auto-lang 解析器的一个 bug(标识符 `ext` 被特殊处理)。见 Plan 034 附录。
+        var extension = "无扩展名"
         var dot_pos = fname.find(".")
         if dot_pos >= 0 {
             // 找最后一个点
             var parts = fname.split(".")
             if parts.len() > 1 {
-                ext = parts[parts.len() - 1].lower()
+                extension = parts[parts.len() - 1].lower()
             }
         }
 
         // 累加计数
-        var count = stats.get_str(ext)
+        var count = stats.get_str(extension)
         if count.len() == 0 {
-            stats.insert_str(ext, "1")
+            stats.insert_str(extension, "1")
         } else {
-            stats.insert_str(ext, count.to_uint() + 1)
+            stats.insert_str(extension, count.to_uint() + 1)
         }
     }
 
     // 输出统计结果
     var total = 0
-    for (ext, count) in stats {
-        print("  ." + ext + ": " + count + " 个")
+    for (extension, count) in stats {
+        print("  ." + extension + ": " + count + " 个")
         total = total + count.to_uint()
     }
 
