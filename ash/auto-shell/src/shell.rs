@@ -723,24 +723,37 @@ impl Shell {
                         }
                         let atom_out = cmd.run_atom(&parsed_args, AtomPipeline::empty(), self)?;
                         let output = self.format_output(atom_out);
-                        self.apply_output_redirect(&output, redir)?;
-                        return Ok(None); // output went to file
+                        // If stdout is redirected (> file), the output goes to the
+                        // file and nothing returns to the caller. But a stderr-only
+                        // redirect (2>/dev/null) must NOT swallow stdout — the
+                        // command's normal output should still be returned.
+                        if redir.stdout.is_some() {
+                            self.apply_output_redirect(&output, redir)?;
+                            return Ok(None); // output went to file
+                        }
+                        return Ok(Some(output));
                     }
                     Err(e) => return Err(e),
                 }
             }
 
             if let Some(output) = builtin::execute_builtin(&clean_input, &self.current_dir)? {
-                self.apply_output_redirect(&output, redir)?;
-                return Ok(None);
+                if redir.stdout.is_some() {
+                    self.apply_output_redirect(&output, redir)?;
+                    return Ok(None);
+                }
+                return Ok(Some(output));
             }
 
             if self.has_auto_function(cmd_name) {
                 let result = auto::execute_auto_function(self, cmd_name, args, None)?;
                 if let Some(ref output) = result {
-                    self.apply_output_redirect(output, redir)?;
+                    if redir.stdout.is_some() {
+                        self.apply_output_redirect(output, redir)?;
+                        return Ok(None);
+                    }
                 }
-                return Ok(None);
+                return Ok(result);
             }
 
             // External command with redirects
@@ -1012,7 +1025,13 @@ impl Shell {
     pub fn execute_capture(&mut self, input: &str) -> Result<Option<String>> {
         let was_compat = self.bash_compat;
         self.bash_compat = true;
-        let result = self.execute(input);
+        // Plan 034 Bug 2: interpolate $1/$@/$#/$VAR before execution so scripts
+        // can read their positional args via system("echo $1"). The general
+        // execute() path does NOT interpolate (the interactive REPL handles $
+        // differently), but system() is the script↔shell bridge and must
+        // honor script_args like bash does.
+        let interpolated = self.interpolate_auto_vars(input);
+        let result = self.execute(&interpolated);
         self.bash_compat = was_compat;
         result
     }
@@ -1091,9 +1110,19 @@ impl Shell {
             prev_op = next_op.clone();
         }
 
-        // Return None — each segment already printed its output above.
-        // Returning final_output would cause the caller to print it again.
-        Ok(None)
+        // In capture mode (system()/execute_capture), the caller (host bridge)
+        // collects the output from the return value — it does NOT read what
+        // print_command_output wrote to stdout. Returning None here (the
+        // historical behavior to avoid double-printing in interactive mode)
+        // made `system("cmd || true")` return an empty string. So when
+        // bash_compat is set, return the last segment's output instead.
+        if self.bash_compat {
+            Ok(final_output)
+        } else {
+            // Interactive: each segment already printed its output above.
+            // Returning final_output would cause the caller to print it again.
+            Ok(None)
+        }
     }
 
     /// Execute a pipeline with Auto function support

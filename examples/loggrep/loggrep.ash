@@ -57,8 +57,11 @@ fn search_log(file, keyword, limit) {
 
 // ── 主函数 ──
 fn main() {
-    // 解析参数
+    // 解析参数。NOTE: ash 的 `system("echo $@")` 在无参数(或参数未透传
+    // 给脚本)时会返回字面量 "$@" 而非空串(auto-shell 已知 bug,见 Plan
+    // 034 附录 Bug 2)。这里把字面量当作"无参数"处理,以便正确显示用法。
     var args = system("echo $@")
+    if args.trim() == "$@" { args = "" }
     var parts = args.trim().split(" ")
 
     var file = ""

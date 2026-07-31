@@ -21,6 +21,11 @@ impl Command for LsCommand {
             .flag_with_short("time", 't', "Sort by modification time (newest first)")
             .flag_with_short("reverse", 'r', "Reverse sort order")
             .flag_with_short("recursive", 'R', "List subdirectories recursively")
+            // POSIX: -1 = one entry per line. Under bash-compat capture (system())
+            // ash already emits one name per line, so this is accepted for
+            // compatibility and is a no-op there; in interactive table mode it
+            // likewise doesn't change the structured output.
+            .flag_with_short("1", '1', "One entry per line (POSIX compat)")
     }
 
     fn run(

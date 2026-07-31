@@ -19,13 +19,16 @@
 | `mv old new` | `mv old new` | ✅ 相同 |
 | `rm -rf dir` | `rm -rf dir` | ✅ 相同 |
 | `mkdir -p a/b/c` | `mkdir -p a/b/c` | ✅ 相同 |
-| `grep -rn "pat" .` | `grep -rn "pat" .` | ✅ 相同 |
 | `head -n 20 file` | `head -n 20 file` | ✅ 相同 |
 | `tail -f log` | `tail -f log` | ✅ 相同 |
 | `wc -l file` | `wc -l file` | ✅ 相同 |
 | `sort -u` | `sort -u` | ✅ 相同 |
-| `find . -name "*.rs"` | `find . -name "*.rs"` | ✅ 相同 |
 | `which python` | `which python` | ✅ 相同 |
+
+> 💡 **`find` 和 `grep` 兼容 GNU/POSIX 标志。** `find . -name "*.rs" -type f -maxdepth 2`
+> 和 `grep -rn "pat" .` 都能直接用(Plan 034 修复了 find 的单横杠长 flag 兼容)。
+> ash 的 `find`/`grep` 是内置重实现,既认 POSIX 标志,也支持 ash 的结构化输出——
+> 管道里 `find . -name "*.rs" | select .path` 可直接用。详见各命令的 `help <cmd>`。
 
 ### ash 增强版（结构化输出）
 

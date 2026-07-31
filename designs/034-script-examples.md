@@ -1,7 +1,7 @@
 # Plan 034: ASH AutoLang 脚本实例库设计
 
 > **日期**: 2026-07-21
-> **状态**: 设计中(待评审)
+> **状态**: ✅ 已实施并归档(M0/M1/M3 + M2 核心等价 4 测试 + 5 个 system() 桥接 bug 修复);实施记录见 `docs/plans/old/034-script-examples.md`
 > **战略驱动**: 用实例证明 ash 的 AutoLang 脚本远比 bash 强。同时服务采用(给 README 提供素材)、验证 AutoLang(发现痛点)、为 SmartCommand 积累 body.ash 模板
 > **范围**: `examples/` 扩充到 30+ 脚本,每个对照 bash,bash→ash 速查表
 > **预估**: 1-2 周(纯写作 + 测试,无新代码)
@@ -199,21 +199,25 @@ ash 版一行 pipeline,输出结构化。
 
 在编写 30 个实例时发现 5 个运行时 bug。以下为根因分析和修复方案。
 
-### Bug 1:`.to_uint()` 返回垃圾值且算术错误 —— **auto-lang 仓库**
+### Bug 1:`.to_uint()` 返回垃圾值且算术错误 —— **auto-lang 仓库**(已精确定位,待修)
 
-**症状**:`"42".to_uint()` 返回 `0-2147483647` 之类的垃圾值。`"5".to_uint() + 3` 给出错误结果。但 `var x = 0; x = x + 1` 正常。
+**症状**:`"42".to_uint()` 返回 `0-2147483647` 之类的垃圾值。`"5".to_uint() + 3` 给出错误结果。但 `var x = 0; x = x + 1` 正常;`"hello".len()` 在某些路径也受影响。
 
-**根因**:`codegen.rs` 的 `contains_u64`(line 8772)和 `is_u64_expr`(line 8743)在处理 `Expr::Call` 时,只检查 `Expr::Ident`(函数名)形式的调用,**不处理 `Expr::Dot`(方法调用)**。所以 `"42".to_uint()` 的返回类型被误判为 I32(1 slot),而实际 native 返回 I64(2 slot),导致栈对齐错乱。
+**根因(2026-07-31 复核确认,行号已更新)**:`codegen.rs` 的 `contains_u64`(L9310)在处理 `Expr::Call` 时(L9317-9325),只在 `call.name` 是 `Expr::Ident(fn_name)` 时查 `fn_return_types`;当 `call.name` 是 `Expr::Dot(obj, method)`(方法调用,如 `"42".to_uint()`)时,`if let Expr::Ident` 不匹配 → 返回 `false`。于是 codegen 误判返回类型为 I32(1 slot),而 native 实际返回 I64(2 slot),栈对齐错乱 → 垃圾值。
 
-**影响**:所有返回 I64/U64 的实例方法(`.to_uint()`、`.len()` 等)在算术/打印中都会出错。影响 csvsum、filestats、loccount、dedupe、diagnose、disk-clean、biglog 等实例。
+**补充发现**:codegen 有现成的 `infer_call_spec_return_type`(L9543)按方法名推断返回类型,但它的表里 `to_int`/`len` 标为 `ObjectType::Int`(I32),**缺少 `to_uint`**(应返回 U64/I64)。`fn_return_types` 的 key 是 `type.method` 形式(如 `str.len`,见 L6704 的 type_name 拼接),裸方法名查不到。
 
-**修复**:
-- `codegen.rs` `contains_u64` 的 `Expr::Call` 分支:增加对 `Expr::Dot` 方法调用的处理
-- `is_u64_expr`:同样增加 Dot 分支
-- 启动时从 native_catalog 填充 `fn_return_types`,让 I64 返回的 native 被正确识别
-- 范围:~30 行,3 个函数
+**影响**:所有返回 I64/U64 的实例方法(`.to_uint()`)在算术/打印中出错。影响 csvsum、filestats、loccount、dedupe、diagnose、biglog 等实例的计数/求和逻辑(这就是 filestats 拿到文件列表却统计为 0 的直接原因)。
 
-### Bug 2:位置参数 `$1`/`$@` 不传递给脚本 —— **auto-shell 仓库**
+**修复方向(需在 auto-lang 仓库实施)**:
+- `contains_u64` 的 `Expr::Call` 分支:增加 `Expr::Dot(obj, method)` 处理,推断 obj 类型拼 `type.method` key 查 `fn_return_types`
+- `infer_call_spec_return_type`:补 `to_uint` → U64 映射
+- 注意 key 格式必须与 `build_fn_return_types`(L10903)的 `type.method` 一致
+- 风险:影响所有 I64 返回方法的栈布局,需全面回归 auto-lang 测试
+
+**034 范围外**:此修复在 auto-lang 仓库(`D:\autostack\auto-lang`),是独立 VM codegen 改动,不属于 034(脚本示例库)。建议作为独立的 auto-lang 修复任务。
+
+### Bug 2:位置参数 `$1`/`$@` 不传递给脚本 —— **auto-shell 仓库** ✅ 已修复(2026-07-31)
 
 **症状**:`ash script.ash hello world` → 脚本内 `system("echo $1")` 返回空字符串。
 
@@ -272,3 +276,88 @@ fn foo() {
 | 3 (> in fn) | synctree, batch-rename, cleanup 等用 > 在 fn 内的 | auto-shell | 中(可避免) |
 | 4 (var = >) | 少数用捕获语法的实例 | auto-shell | 低(有 system() 替代) |
 | 5 (from_json pipe) | jq-like, csv2json | auto-shell | 中(核心功能) |
+
+## 附录 C:实施调查(2026-07-31)— system() 桥接的系统性问题
+
+实施 034 时深入调查发现一个**比附录 B 的 5 个 bug 更根本的架构问题**,它阻塞了 M2(bash 等价校验)。以下为实测证据和根因。
+
+### 根因:`system()` 让 ash 自己执行命令,而非 shell-out 到 bash
+
+example 脚本普遍用 `system("find . -name *.rs")` / `system("ls *.toml")` / `system("grep -E ...")`,**假设 system() 把命令交给真 bash 执行**。实测发现:`system()` 走的是 `Shell::execute_capture` → `execute()`(shell.rs:1012),即**让 ash 自己解析并执行命令**。ash 对常见命令(find/ls/grep/wc/du)有**内置重实现**,其语法/语义与 GNU 核心工具不同。
+
+### 决定性证据(2026-07-31 实测)
+
+在 `ash/auto-shell/` 目录(含 163 个 .rs 文件)下:
+
+| 命令 | 真 bash | ash `system()` | 结论 |
+|------|---------|---------------|------|
+| `ls src` | 列出文件 | 列出文件(len=202) | ✅ 兼容(ash ls 碰巧认) |
+| `find . -name '*.rs' -type f` | 163 个 | **0 个** | ❌ ash find 不认 `-name` |
+| `find . -n *.rs -t f` | (bash 不认) | 4452 字符(正常) | ✅ ash find 认 `-n/-t` |
+| `echo $1`(脚本内) | 取到参数 | **空** | ❌ 见附录 B Bug 2 |
+| `git status --porcelain` | 正常 | 正常 | ✅ git 无内置,fallback 外部执行 |
+
+**根因精确化**:ash 的内置命令用**自己的参数语法**。例如 `find`(find.rs:28-30)用 `-n`/`-t`/`-max-depth`,而**非** GNU 的 `-name`/`-type`/`-maxdepth`。example 脚本写的是 GNU 语法,被 ash-find 忽略 → 返回空。
+
+### 影响范围
+
+这不是个别脚本的笔误,而是**所有依赖内置命令的 GNU 语法的脚本的系统性失效**:
+- `filestats`/`loccount`:用 `find` 或 `ls` 统计文件,在含文件的目录却输出"0 个"——因为 find/ls 的 GNU 语法不工作。
+- `cleanup`/`disk-clean`:用 `find -name` 找文件,永远返回"没找到"。
+- `fmt-check`:`find src -name *.rs` → "没有找到 .rs 文件"(src 下全是 .rs)。
+- 相比之下,`git`/`curl`/`ps`/`crontab` 等命令(ash 无内置)经 system() 正常外部执行。
+
+### 为什么这阻塞 M2
+
+M2 的 golden 固化/bash 等价校验要求脚本产出**正确、稳定**的结果。但当前多数 example 脚本因上述语法不匹配,**产出的是错误结果**(恒为 0/空),而非 bash 的等价输出。固化这种输出等于把 bug 固化成期望,bash 等价校验会大面积失败(ash 报 0,bash 报实际数)。
+
+### 三种可能的修复方向(均超出 034 原范围,需单独决策)
+
+1. **改 example 脚本用 ash 语法**(如 `find -n` 而非 `-name`):脚本侧修复,改动集中,但要求每个脚本的每个 system() 调用都核对 ash 语法表,且混用 ash 内置/外部命令的语义不一致问题仍在。
+2. **让 ash 内置命令兼容 GNU 语法别名**(find 同时认 `-name` 和 `-n`):一次性解决,但偏入 ash 命令实现改动。
+3. **system() 增加"真 shell-out"模式**(如 `system("cmd", shell=true)` 明确走 bash):最彻底,但触及 system() 桥接的架构设计。
+
+### ✅ 已修复(2026-07-31):方向 2 — find 的 POSIX 兼容
+
+经评审确认 find/grep 是 POSIX 标准命令,ash 应兼容 GNU 语法(这是兼容承诺,不是脚本的责任),采用了方向 2,修复了 find 的 POSIX 兼容缺口:
+
+**根因精确化**:GNU find 用单横杠长 flag(`-name`/`-type`/`-maxdepth`),而 ash 的参数 parser(`cmd/parser.rs`)把单横杠后当**短标志组合**逐字符解析(`-name` 被拆成 `n`+`a`+`m`+`e`,只有 `n` 认)。`--name`(双横杠)本来就工作,问题只在单横杠。
+
+**修复**(`cmd/parser.rs` 单横杠分支):在逐字符解析前,先检查"单横杠后的完整字符串是否是已声明的长选项/flag 名"。若是,按长形式处理(取下个 token 作值 / 设 flag);否则才走短标志组合。这不影响真正的短标志组合(如 `ls -al`,因为 `al` 不是声明的长名)。
+
+同时把 find 的 `max-depth` 重命名为 POSIX 的 `maxdepth`。
+
+**验证**:修复后 `find src -name "*.rs"` 从返回 0 变为返回 154 行;`-type f`/`-maxdepth N` 组合正常;`ls -al` 等短标志组合不受影响。回归:auto-shell lib 704 + parity + examples_smoke 全过。
+
+**遗留**:find 兼容性已修,但 example 脚本还卡在更深的 system() 桥接 bug——见下文,这些也已在 034 期间修复。
+
+### ✅ 已修复(2026-07-31):system() 桥接的三个核心 bug
+
+深入诊断 `system("ls -1 . 2>/dev/null || true")` 为何返回空,拆出三个独立的 shell 核心 bug(全部影响 system() 捕获模式,不仅影响 example):
+
+**Bug A:重定向吞掉内置命令的 stdout**(`shell.rs` execute_single_command)
+- 症状:`ls . 2>/dev/null` 返回空(应返回文件列表)。
+- 根因:命令带任何 redirect(`2>`/`>`/`2>&1`)时,registry/builtin/auto 分支都 `return Ok(None)`(L727),无条件丢弃 stdout——即使 redirect 只针对 stderr。`apply_output_redirect` 只处理 `stdout` 字段,但上游不区分。
+- 修复:仅在 `redir.stdout.is_some()` 时返回 None(输出进文件);只有 stderr 重定向时正常返回 stdout output。
+
+**Bug B:`||`/`&&` 链在 system() 返回空**(`shell.rs` execute_chain)
+- 症状:`system("ls . || true")` 返回空。
+- 根因:execute_chain 为避免交互模式重复打印,硬编码 `return Ok(None)`(L1109)。但 system()/execute_capture 依赖**返回值**(host.rs:130),不是 stdout——于是拿到空。
+- 修复:bash_compat(捕获)模式下返回 `final_output`;交互模式仍返回 None(保持不重复打印)。
+
+**Bug C:`ls -1` 报 Unknown flag**
+- 症状:`ls -1` 报 "Unknown flag: -1"。
+- 根因:ash ls 未声明 POSIX 的 `-1` 标志。
+- 修复:ls signature 加 `flag_with_short("1", '1', ...)`。bash_compat 下 ls 已是单列输出,`-1` 仅需被接受。
+
+**验证**:`system("ls -1 . 2>/dev/null || true")` 从返回 0 变为返回 136 字符;`echo hi || echo bye` 在 system() 返回 "hi";交互模式下 `||` 仍不重复打印。回归:auto-shell lib 704 + ash-core 384 + parity + examples_smoke 全过。
+
+**仍遗留**:脚本参数 `$1` 仍传不进脚本(附录 B Bug 2,根因在参数传递机制,非 system())。filestats 等的统计逻辑还可能踩 `.to_uint()` VM bug(附录 B Bug 1)。这两个属 auto-lang/auto-shell 更深层,不在本轮范围。
+
+### 034 的调整决定
+
+鉴于上述根因超出 034(纯文档/示例)的合理范围:
+- **M0/M1 保留**:修损坏脚本(ext bug)+ README 补全 + 冒烟测试(守护"不崩溃")均有价值且已落地。
+- **M2 暂缓**:bash 等价校验被 system() 桥接问题阻塞。待上述修复方向之一落地后,example 脚本产出正确结果,再恢复 M2。
+- **M3 保留**:bash→ash 速查表 + README 一致性是纯文档,不依赖脚本正确性。
+

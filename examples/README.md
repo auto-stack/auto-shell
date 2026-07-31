@@ -2,6 +2,11 @@
 
 30+ 个 AutoLang 脚本实例，展示 ash 的结构化 pipeline、AutoLang 编程能力、以及对照 bash 的优势。
 
+> ⚠️ **注意**:部分实例依赖 `system()` 调用 GNU 工具(find/grep/du 等),而 ash 的这些命令是
+> 内置重实现,参数语法与 GNU 不同(如 `find -n` 而非 `-name`)。详见
+> [bash→ash 速查表](../docs/bash-to-ash.md)的注意事项,以及
+> [design 034 附录 C](../designs/034-script-examples.md)的已知限制说明。
+
 ## 运行方式
 
 ```bash
@@ -37,6 +42,7 @@ ash examples/bigfiles/bigfiles.ash
 | 实例 | 说明 |
 |------|------|
 | [buildtest](buildtest/) | 构建后测试,失败即停 |
+| [deploy](deploy/) | 端到端部署流水线(MS3 demo,综合 fn/try-catch) |
 | [git-batch](git-batch/) | 跨多仓库批量 git pull/status |
 | [deps-check](deps-check/) | 解析 Cargo.toml 列出依赖 |
 | [fmt-check](fmt-check/) | rustfmt 格式化检查 |

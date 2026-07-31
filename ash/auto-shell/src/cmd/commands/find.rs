@@ -27,7 +27,8 @@ impl Command for FindCommand {
             // polluting name_pattern detection (Plan 036 defect-C fix).
             .option_with_short("name", 'n', "Match filename pattern (supports *)")
             .option_with_short("type", 't', "Filter by type: f=file, d=dir")
-            .flag("max-depth", "Maximum directory depth")
+            // POSIX find spells this -maxdepth (single dash, no hyphenation).
+            .flag("maxdepth", "Maximum directory depth")
     }
 
     fn run(
@@ -69,7 +70,7 @@ impl Command for FindCommand {
             });
 
         // Get max depth
-        let max_depth: Option<usize> = args.named.get("max-depth")
+        let max_depth: Option<usize> = args.named.get("maxdepth")
             .and_then(|s| s.parse().ok());
 
         let mut results = Vec::new();

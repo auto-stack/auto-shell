@@ -126,6 +126,29 @@ pub fn parse_args(signature: &Signature, raw_args: &[String]) -> Result<ParsedAr
         } else if arg_str.starts_with('-') && arg_str.len() > 1 {
             let flag_short = arg_str.trim_start_matches('-');
 
+            // GNU/POSIX compatibility: many tools (notably `find`) spell their
+            // long options with a SINGLE dash (-name, -type, -maxdepth). Before
+            // treating the token as a combined short-flag cluster (-al), check
+            // whether the whole thing matches a declared long option/flag name.
+            // If it does, handle it as the long form and skip the per-char walk
+            // (which would otherwise split -name into n+a+m+e). This does NOT
+            // affect true short-flag clusters like -al, since "al" isn't a
+            // declared long name. (Plan 034: POSIX find-compatibility fix.)
+            if valid_options.contains_key(flag_short) {
+                if let Some(value) = arg_iter.next() {
+                    parsed.named.insert(flag_short.to_string(), value.clone());
+                } else {
+                    return Err(miette::miette!(
+                        "Option -{} requires a value",
+                        flag_short
+                    ));
+                }
+                continue;
+            } else if valid_flags.contains_key(flag_short) {
+                parsed.flags.insert(flag_short.to_string(), true);
+                continue;
+            }
+
             // Handle combined short flags like -al
             let chars: Vec<char> = flag_short.chars().collect();
             let mut i = 0;
