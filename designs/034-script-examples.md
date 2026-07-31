@@ -325,12 +325,30 @@ M2 的 golden 固化/bash 等价校验要求脚本产出**正确、稳定**的�
 
 **验证**:修复后 `find src -name "*.rs"` 从返回 0 变为返回 154 行;`-type f`/`-maxdepth N` 组合正常;`ls -al` 等短标志组合不受影响。回归:auto-shell lib 704 + parity + examples_smoke 全过。
 
-**遗留**:部分 example(filestats 等)仍输出 0,是因为它们用 `system("ls -1 .")` 取文件列表——这是另一个独立的 system() 桥接问题(`ls -1` 在 system() 里返回空),与 find 无关,见下文"遗留问题"。
+**遗留**:find 兼容性已修,但 example 脚本还卡在更深的 system() 桥接 bug——见下文,这些也已在 034 期间修复。
 
-### 遗留问题(仍待修,但不阻塞 find 兼容性结论)
+### ✅ 已修复(2026-07-31):system() 桥接的三个核心 bug
 
-- `system("ls -1 .")` 在脚本里返回空(但 `system("ls src")` 工作)——`ls` 的 `-1` 标志或 `.` 路径在 system() 桥接里有问题。影响 filestats/loccount 等。这是 system() 桥接的独立 bug,非 find 兼容性。
-- 脚本参数 `$1` 仍传不进(附录 B Bug 2),致多数带参数脚本 fallback 到 "."。
+深入诊断 `system("ls -1 . 2>/dev/null || true")` 为何返回空,拆出三个独立的 shell 核心 bug(全部影响 system() 捕获模式,不仅影响 example):
+
+**Bug A:重定向吞掉内置命令的 stdout**(`shell.rs` execute_single_command)
+- 症状:`ls . 2>/dev/null` 返回空(应返回文件列表)。
+- 根因:命令带任何 redirect(`2>`/`>`/`2>&1`)时,registry/builtin/auto 分支都 `return Ok(None)`(L727),无条件丢弃 stdout——即使 redirect 只针对 stderr。`apply_output_redirect` 只处理 `stdout` 字段,但上游不区分。
+- 修复:仅在 `redir.stdout.is_some()` 时返回 None(输出进文件);只有 stderr 重定向时正常返回 stdout output。
+
+**Bug B:`||`/`&&` 链在 system() 返回空**(`shell.rs` execute_chain)
+- 症状:`system("ls . || true")` 返回空。
+- 根因:execute_chain 为避免交互模式重复打印,硬编码 `return Ok(None)`(L1109)。但 system()/execute_capture 依赖**返回值**(host.rs:130),不是 stdout——于是拿到空。
+- 修复:bash_compat(捕获)模式下返回 `final_output`;交互模式仍返回 None(保持不重复打印)。
+
+**Bug C:`ls -1` 报 Unknown flag**
+- 症状:`ls -1` 报 "Unknown flag: -1"。
+- 根因:ash ls 未声明 POSIX 的 `-1` 标志。
+- 修复:ls signature 加 `flag_with_short("1", '1', ...)`。bash_compat 下 ls 已是单列输出,`-1` 仅需被接受。
+
+**验证**:`system("ls -1 . 2>/dev/null || true")` 从返回 0 变为返回 136 字符;`echo hi || echo bye` 在 system() 返回 "hi";交互模式下 `||` 仍不重复打印。回归:auto-shell lib 704 + ash-core 384 + parity + examples_smoke 全过。
+
+**仍遗留**:脚本参数 `$1` 仍传不进脚本(附录 B Bug 2,根因在参数传递机制,非 system())。filestats 等的统计逻辑还可能踩 `.to_uint()` VM bug(附录 B Bug 1)。这两个属 auto-lang/auto-shell 更深层,不在本轮范围。
 
 ### 034 的调整决定
 
