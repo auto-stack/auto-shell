@@ -1,0 +1,20 @@
+spec {
+    command : "git"
+    desc    : "Git version control (plugin-contributed spec)"
+    flags   : [
+        flag { short : "C", long : "config", takes_arg : "path" }
+    ]
+    subcommands : [
+        sub {
+            name : "stash"
+            desc : "Stash changes"
+            subcommands : []
+        }
+        sub {
+            name : "blame"
+            desc : "Show what revision and author last modified each line"
+            args : [ arg { position : 0, name : "file" } ]
+            subcommands : []
+        }
+    ]
+}

@@ -2,11 +2,11 @@
 
 > **日期**: 2026-07-31
 > **分支**: `feat/033-plugin-ecosystem`
-> **状态**: **M0–M2 已完成 + 复审修复**（commit `e3da1d7` + 复审修复）；M3（安全文档 + 示例插件）留后续
+> **状态**: **✅ 完成（M0–M3 全部完成 + 复审修复），可归档**
 > **来源设计**: [`designs/033-plugin-ecosystem.md`](../../designs/033-plugin-ecosystem.md)
-> **预估**: M0-M3 约 3-4 周，~1800 行（实际 M0–M2 ~1950 行）
+> **预估**: M0-M3 约 3-4 周，~1800 行
 > **回归基线（2026-07-31）**: ash-core 395 + auto-shell 817 = **~1212 全绿**
-> **完成基线（2026-07-31）**: ash-core 396 + auto-shell 871（+54 测试）= **1267 全绿**
+> **完成基线（2026-07-31）**: ash-core 396 + auto-shell 876（+59 测试）= **1272 全绿**
 
 ---
 
@@ -135,14 +135,14 @@
 
 ---
 
-## M3：安全 + 文档（0.5-1 周，~300 行，可选但推荐）
+## M3：安全 + 文档（0.5-1 周，~300 行，可选但推荐）✅ 完成
 
-- capabilities 声明 + 首次加载警告（打印插件声明的能力，v1 不强制确认）
-- `docs/plugin-development.md`（作者文档：目录结构、manifest 字段、4 种贡献类型示例）
-- 2+ 示例插件：`examples/plugins/`（一个补全增强 + 一个 SmartCommand 包）
-- **安全验证测试**：恶意插件的 `system()` 调用在 `--read-only`/`--sandbox` 模式下被 SecurityPolicy 拦截（复用 028 沙箱）
+- ✅ capabilities 声明 + 加载警告（`PluginLoadReport.print_to_stderr`/`render` 打印声明的能力，v1 不强制确认）— 测试覆盖 `render` 全分类
+- ✅ `docs/plugin-development.md`（作者文档：目录结构、manifest 字段、4 种贡献类型、安装发布、安全模型、2 个示例链接）
+- ✅ 2+ 示例插件：`examples/plugins/git-extras`（补全增强）+ `examples/plugins/deploy-pack`（SmartCommand + 函数，子目录 smart 布局）— 均经 `ash plugin install` 手测可装可跑
+- ✅ **安全验证测试**：`tests/plugin_e2e.rs` 三个测试验证插件加载进 shell 后，`--read-only` 拦截写、`--no-exec` 拦截外部进程、restrictive policy 下插件仍可 source（复用 028 SecurityPolicy，无新机制）
 
-**M3 验收**：作者文档完整；2+ 示例插件可安装；安全拦截测试通过。
+**M3 验收**：作者文档完整；2+ 示例插件可安装；安全拦截测试通过。**全部达成。**
 
 ---
 

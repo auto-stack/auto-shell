@@ -46,22 +46,21 @@ impl PluginLoadReport {
             && self.capability_warnings.is_empty()
     }
 
-    /// Print a human-readable summary to stderr.
-    pub fn print_to_stderr(&self) {
-        if self.is_empty() {
-            return;
-        }
+    /// Render a human-readable summary as a single string (one line per entry).
+    /// Exposed so tests can assert on the exact text without redirecting stderr.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
         for name in &self.loaded {
-            eprintln!("plugin: loaded {}", name);
+            out.push_str(&format!("plugin: loaded {}\n", name));
         }
         for name in &self.disabled {
-            eprintln!(
-                "plugin: disabled {} (enable with `ash plugin enable {}`)",
+            out.push_str(&format!(
+                "plugin: disabled {} (enable with `ash plugin enable {}`)\n",
                 name, name
-            );
+            ));
         }
         for (name, reason) in &self.skipped {
-            eprintln!("plugin: skipped {} ({})", name, reason);
+            out.push_str(&format!("plugin: skipped {} ({})\n", name, reason));
         }
         for (name, caps) in &self.capability_warnings {
             let mut parts = Vec::new();
@@ -77,11 +76,20 @@ impl PluginLoadReport {
             if caps.uses_network {
                 parts.push("uses_network");
             }
-            eprintln!(
-                "plugin: warning — '{}' declares capabilities: {}",
+            out.push_str(&format!(
+                "plugin: warning — '{}' declares capabilities: {}\n",
                 name,
                 parts.join(", ")
-            );
+            ));
+        }
+        out
+    }
+
+    /// Print a human-readable summary to stderr.
+    pub fn print_to_stderr(&self) {
+        let text = self.render();
+        if !text.is_empty() {
+            eprint!("{}", text);
         }
     }
 }
@@ -328,6 +336,40 @@ mod tests {
         let mut r = PluginLoadReport::new();
         r.loaded.push("x".into());
         assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn render_lists_each_category() {
+        // Plan 033 §3.2 / M3: capability warnings are surfaced on load (v1
+        // prints a warning but does not force confirmation). Verify every
+        // report category is represented in the rendered text.
+        let mut r = PluginLoadReport::new();
+        r.loaded.push("alpha".into());
+        r.disabled.push("beta".into());
+        r.skipped.push(("gamma".into(), "bad manifest".into()));
+        r.capability_warnings.push((
+            "delta".into(),
+            Capabilities {
+                reads_fs: true,
+                uses_network: true,
+                ..Default::default()
+            },
+        ));
+
+        let text = r.render();
+        assert!(text.contains("loaded alpha"), "loaded line:\n{text}");
+        assert!(text.contains("disabled beta"), "disabled line:\n{text}");
+        assert!(text.contains("skipped gamma"), "skipped line:\n{text}");
+        assert!(
+            text.contains("delta") && text.contains("reads_fs") && text.contains("uses_network"),
+            "capability warning line:\n{text}"
+        );
+    }
+
+    #[test]
+    fn render_silent_on_empty_report() {
+        let r = PluginLoadReport::new();
+        assert!(r.render().is_empty(), "empty report renders nothing");
     }
 
     #[test]

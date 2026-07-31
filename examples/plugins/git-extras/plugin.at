@@ -1,0 +1,23 @@
+plugin {
+    name        : "git-extras"
+    version     : "0.1.0"
+    author      : "ash"
+    description : "Example plugin (Plan 033): extra git completion spec"
+    homepage    : "https://github.com/zhaopuming/auto-shell"
+
+    contributions : {
+        completions : true
+        functions   : false
+        smart       : false
+        config      : false
+    }
+
+    capabilities : {
+        reads_fs       : false
+        writes_fs      : false
+        spawns_process : false
+        uses_network   : false
+    }
+
+    enabled : true
+}

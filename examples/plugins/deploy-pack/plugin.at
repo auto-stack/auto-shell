@@ -1,0 +1,23 @@
+plugin {
+    name        : "deploy-pack"
+    version     : "0.1.0"
+    author      : "ash"
+    description : "Example plugin (Plan 033): a SmartCommand + helper function"
+    homepage    : "https://github.com/zhaopuming/auto-shell"
+
+    contributions : {
+        completions : false
+        functions   : true
+        smart       : true
+        config      : false
+    }
+
+    capabilities : {
+        reads_fs       : true
+        writes_fs      : false
+        spawns_process : true
+        uses_network   : false
+    }
+
+    enabled : true
+}

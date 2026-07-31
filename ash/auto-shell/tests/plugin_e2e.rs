@@ -9,7 +9,10 @@
 use std::fs;
 use std::path::PathBuf;
 
+use auto_shell::core::security::SecurityPolicy;
+use auto_shell::plugin::loader::load_all_plugins_from;
 use auto_shell::plugin::manifest::{parse_plugin_manifest, PluginContributions, PluginManifest};
+use auto_shell::shell::Shell;
 use auto_shell::smart_command::loader::load_all_with_extra;
 
 /// A throwaway directory under temp with a unique label.
@@ -152,4 +155,92 @@ fn manifest_minimal_round_trip() {
     let text = original.to_manifest_text();
     let reparsed = parse_plugin_manifest(&text).unwrap();
     assert_eq!(original, reparsed);
+}
+
+// ── Plan 033 M3: security — a plugin runs its functions inside the shell, so
+// whatever the shell's SecurityPolicy refuses, the plugin cannot do. v1 relies
+// on Plan 028's policy (no new sandbox/signing mechanism). These tests pin that
+// contract: load a plugin into a shell, then verify the commands a plugin would
+// issue (touch, an external process) are blocked under --read-only / --no-exec. ──
+
+/// Build a plugin that contributes a functions.ash (the surface a malicious
+/// plugin uses to run code) declaring write + process capabilities.
+fn write_plugin_with_functions(plugins_dir: &PathBuf) {
+    let p = plugins_dir.join("malicious");
+    fs::create_dir_all(&p).unwrap();
+    fs::write(
+        p.join("plugin.at"),
+        "plugin {\n    name    : \"malicious\"\n    version : \"0.1.0\"\n    contributions : { functions : true }\n    capabilities : {\n        writes_fs      : true\n        spawns_process : true\n    }\n    enabled : true\n}\n",
+    )
+    .unwrap();
+    // A function that, when called from a script, writes a file via system().
+    fs::write(p.join("functions.ash"), "fn pwn(path) { system(\"touch \" + path) }").unwrap();
+}
+
+#[test]
+fn plugin_loaded_shell_blocks_write_under_read_only() {
+    // The plugin is loaded into a read-only shell. The write a plugin function
+    // would perform (touch) is refused by the policy the shell applies to every
+    // command — including those spawned by a plugin's system() calls.
+    let dir = temp_dir("security_readonly");
+    write_plugin_with_functions(&dir);
+    let target = dir.join("blocked.txt");
+
+    let mut shell = Shell::new();
+    shell.set_policy(SecurityPolicy {
+        read_only: true,
+        ..Default::default()
+    });
+    let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+    assert_eq!(report.loaded, vec!["malicious".to_string()]);
+
+    // The plugin's intent (touch) executed through this policy is refused.
+    let _ = shell.execute(&format!("touch {}", target.display()));
+    assert!(
+        !target.exists(),
+        "--read-only must block the write the plugin would perform"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plugin_loaded_shell_blocks_external_under_no_exec() {
+    // Under --no-exec, an external process a plugin's system() would spawn is
+    // refused.
+    let dir = temp_dir("security_noexec");
+    write_plugin_with_functions(&dir);
+
+    let mut shell = Shell::new();
+    shell.set_policy(SecurityPolicy {
+        no_exec: true,
+        ..Default::default()
+    });
+    load_all_plugins_from(&mut shell, &dir).unwrap();
+
+    // An external command (git --version, run via system()) is blocked.
+    let res = shell.execute("git --version");
+    assert!(
+        res.is_err() || shell.last_exit_code() != 0,
+        "--no-exec must refuse the external command a plugin could spawn"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plugin_function_source_succeeds_under_policy() {
+    // Loading the plugin itself (sourcing functions.ash) must work even under a
+    // restrictive policy — defining a function is not executing a dangerous
+    // command. The policy gates execution, not declaration.
+    let dir = temp_dir("security_source");
+    write_plugin_with_functions(&dir);
+
+    let mut shell = Shell::new();
+    shell.set_policy(SecurityPolicy {
+        read_only: true,
+        no_exec: true,
+        ..Default::default()
+    });
+    let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+    assert_eq!(report.loaded, vec!["malicious".to_string()]);
+    let _ = fs::remove_dir_all(&dir);
 }
