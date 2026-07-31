@@ -12,13 +12,13 @@
 | Plan | 方向 | Design | Plan(详细 TDD) | 估算 |
 |---|---|---|---|---|
 | **028** | Agent 执行引擎 | (已删,M1+M2 已落地) | (已删) | M3+M4 待定 |
-| **029** | AI 能力增强(含 SmartCommand) | ✅ 1064 行（v1 已过时，§0 已重评） | 🟡 已有（核心交付物完成，余 P0-P2） | auto-ai 侧 ✅ + auto-shell 侧 🟡（核心 ~2700 行已落地，余 ~4 周补缺口） |
+| **029** | AI 能力增强(含 SmartCommand) | ✅ 1064 行（v1 已过时，§0 已重评） | ✅ 完成（5 子能力全落地，见 `old/029-ai-capabilities.md`） | ✅ 完成（仅 1 个不阻塞的小缺口：`.at` 配 preferred_provider） |
 | **030** | ash-gui(Shell-native UI) | ✅ 1048 行 | ✅ 1671 行(M0-M2) | 13-20 周(M0-M5) |
 | **031** | 数据处理框架(lazy pipeline) | ✅ 538 行 | ✅ 已归档（M0-M3 完成） | ✅ 完成 |
 | **032** | 智能补全(AI 层) | ✅ 405 行 | ✅ 已实施并归档(M0-M3 + 审计修复,见 `old/032-intelligent-completion.md`) | ✅ 完成 |
 | **033** | 插件生态(data-only) | ✅ 437 行 | ✅ 完成（M0-M3 全部完成 + 复审修复，见 `old/033-plugin-ecosystem.md`） | ✅ 完成（v1） |
 | **034** | 脚本实例库 | ✅ 194 行 | ✅ 已实施并归档(M0/M1/M3 + M2 核心等价,见 `old/034-script-examples.md`) | ✅ 完成 |
-| **035** | 文档+分发 | ✅ 240 行 | ❌ 待写 | 1.5-2 周 |
+| **035** | 文档+分发 | ✅ 240 行 | ✅ 完成（M0-M3，见 `old/035-documentation-distribution.md`） | ✅ 完成 |
 
 ---
 
@@ -65,15 +65,17 @@ Layer 5(独立后续):
 
 ## 各方向里程碑速查
 
-### 029 AI 能力增强(最大,12-16 周)
+### 029 AI 能力增强(最大,12-16 周) ✅ 完成（5 子能力全落地）
 
-| M | 内容 | 依赖 | 估算 |
+| M | 内容 | 依赖 | 状态 |
 |---|---|---|---|
-| M0 | 共享基础设施(OllamaProvider + 桥 + 上下文) | auto-ai 改造 | 3-4 周 |
-| M1 | SmartCommand 完整 + git.finish-worktree | M0 | 3-4 周 |
-| M2 | F4 tool-calling(ChatSession → Agent::run) | M0 | 2-3 周 |
-| M3 | F3 增强 + NL→AutoLang | M2 | 2-3 周 |
-| M4 | 上下文感知 + Warp 式建议 | M0 | 2 周 |
+| M0 | 共享基础设施(OllamaProvider + 桥 + 上下文) | auto-ai 改造 | ✅ |
+| M1 | SmartCommand 完整 + git.finish-worktree | M0 | ✅ |
+| M2 | F4 tool-calling(ChatSession → Agent::run) | M0 | ✅ |
+| M3 | F3 增强 + NL→AutoLang | M2 | ✅ |
+| M4 | 上下文感知 + Warp 式建议 | M0 | ✅ |
+
+详见 `old/029-ai-capabilities.md`（auto-shell ~2700 行 + 43 测试，auto-ai 侧前置依赖已合并）。唯一小缺口：`.at` 配置层未加 `preferred_provider` 字段（不阻塞，低优先级）。
 
 ### 030 ash-gui(已有详细 plan)
 
@@ -140,14 +142,18 @@ Layer 5(独立后续):
 - auto-lang 的 `.to_uint()` bug —— disk-clean 改用原生单位绕过（属 auto-lang 仓库）
 - 完整应用级脚本、性能基准、完整迁移指南 —— 超出 v1 范围
 
-### 035 文档+分发(1.5-2 周)
+### 035 文档+分发(1.5-2 周) ✅ 完成（M0-M3）
 
-| M | 内容 | 依赖 |
-|---|---|---|
-| M0 | README + quickstart | 所有(引用) |
-| M1 | 三类入口 + 速查表 | 034(速查表共建) |
-| M2 | CI + release | 无 |
-| M3 | cargo install 验证 | M2 |
+| M | 内容 | 依赖 | 状态 |
+|---|---|---|---|
+| M0 | README + quickstart + installation | 所有(引用) | ✅ |
+| M1 | 三类入口 + 速查表 | 034(速查表共建) | ✅ |
+| M2 | CI + release（sibling-clone 解路径依赖） | 无 | ✅ |
+| M3 | cargo install 验证 + 安装脚本 | M2 | ✅ |
+
+详见 `old/035-documentation-distribution.md`。M3 用 `install.sh`/`install.ps1`（克隆三个 sibling 仓库 + `cargo install --path`）解决 `cargo install --git` 单仓的路径依赖限制（Cargo 禁止 path+git，见 [Issue #8747](https://github.com/rust-lang/cargo/issues/8747)）。
+
+**v2 / 后续**：`cargo install ash`（待 crates.io 发布 ash + sibling）、brew/winget/scoop、完整文档网站。
 
 ---
 
