@@ -14,9 +14,7 @@ use auto_shell::smart_command::loader::load_all_with_extra;
 
 /// A throwaway directory under temp with a unique label.
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("ash_plugin_e2e")
-        .join(label);
+    let dir = std::env::temp_dir().join("ash_plugin_e2e").join(label);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -76,12 +74,15 @@ fn manifest_disable_then_reparse() {
 
 #[test]
 fn smart_loader_picks_up_plugin_smart_dir() {
-    // Build a fake plugin tree with a `smart/` dir containing a command.at.
+    // Plan 033 §3.1 documented layout: smart/<cmd>/command.at (+ body.ash
+    // alongside). The plugin loader passes the plugin's `smart/` dir as an
+    // extra search dir.
     let tree = temp_dir("smart_loader");
     let smart_dir = tree.join("my-plugin").join("smart");
-    fs::create_dir_all(&smart_dir).unwrap();
+    let deploy_dir = smart_dir.join("deploy");
+    fs::create_dir_all(&deploy_dir).unwrap();
     fs::write(
-        smart_dir.join("deploy.at"),
+        deploy_dir.join("command.at"),
         r#"command "plugin.deploy" {
     description : "deploy via plugin"
     body        : "deploy.ash"
@@ -89,7 +90,7 @@ fn smart_loader_picks_up_plugin_smart_dir() {
 "#,
     )
     .unwrap();
-    fs::write(smart_dir.join("deploy.ash"), "> echo deploy").unwrap();
+    fs::write(deploy_dir.join("deploy.ash"), "> echo deploy").unwrap();
 
     // load_all_with_extra scans cwd, home, then extra dirs. Pass empty cwd/home
     // and the plugin smart dir as the only extra.

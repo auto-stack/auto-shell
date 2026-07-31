@@ -101,7 +101,7 @@ ash 只能 build from source(无 crates.io,无 release 二进制)。路径依赖
 │       ├── command.at
 │       ├── body.ash
 │       └── skill.md
-├── config.at              # 配置段(可选,merge 进主 config)
+├── config.at              # 配置段(可选;**v1 占位,声明但暂不 merge**)
 └── README.md              # 给人读(可选)
 ```
 

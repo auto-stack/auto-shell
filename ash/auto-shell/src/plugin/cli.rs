@@ -147,11 +147,12 @@ fn cmd_list(args: &[String]) -> Result<()> {
     for (name, m) in visible {
         let state = if m.enabled { "enabled" } else { "disabled" };
         let desc = m.description.as_deref().unwrap_or("");
-        let author = m.author.as_deref().map(|a| format!("  by {a}")).unwrap_or_default();
-        println!(
-            "  {} v{} [{}]  {}{}",
-            name, m.version, state, desc, author
-        );
+        let author = m
+            .author
+            .as_deref()
+            .map(|a| format!("  by {a}"))
+            .unwrap_or_default();
+        println!("  {} v{} [{}]  {}{}", name, m.version, state, desc, author);
     }
     Ok(())
 }
@@ -165,7 +166,12 @@ fn cmd_show(name: &str) -> Result<()> {
             std::process::exit(1);
         }
     };
-    println!("name        : {}", manifest.name);
+    // The directory name is the plugin's identity (what enable/disable/remove
+    // operate on). Show it first; note the manifest name if it differs.
+    println!("plugin      : {}", name);
+    if manifest.name != name {
+        println!("            (manifest name: {})", manifest.name);
+    }
     println!("version     : {}", manifest.version);
     if let Some(a) = &manifest.author {
         println!("author      : {}", a);
@@ -181,6 +187,10 @@ fn cmd_show(name: &str) -> Result<()> {
         "contributions : completions={}, functions={}, smart={}, config={}",
         c.completions, c.functions, c.smart, c.config
     );
+    if c.config {
+        // config.at merge is a v1 placeholder — make clear it isn't applied yet.
+        println!("            (note: config contribution declared but not merged in v1)");
+    }
     let cap = &manifest.capabilities;
     if cap.is_empty() {
         println!("capabilities : (none declared)");
@@ -249,7 +259,11 @@ fn cmd_install(args: &[String]) -> Result<()> {
     let dir = plugins_dir().ok_or_else(|| miette::miette!("cannot resolve ash config dir"))?;
     let target = dir.join(&name);
     if target.exists() {
-        eprintln!("ash plugin install: '{}' already installed at {}", name, target.display());
+        eprintln!(
+            "ash plugin install: '{}' already installed at {}",
+            name,
+            target.display()
+        );
         std::process::exit(1);
     }
 
@@ -259,21 +273,47 @@ fn cmd_install(args: &[String]) -> Result<()> {
         install_git(source, &target, &name)?;
     }
 
-    if target.join("plugin.at").exists() {
-        println!("✓ installed {}", name);
-    } else {
-        eprintln!(
-            "⚠ installed {} — but no plugin.at manifest found (not a valid plugin?)",
-            name
-        );
+    // Validate the install: plugin.at must exist and parse. A broken manifest
+    // means this isn't a real plugin — clean up rather than leave junk behind.
+    let manifest_path = target.join("plugin.at");
+    let manifest = match std::fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|s| parse_plugin_manifest(&s).ok())
+    {
+        Some(m) => m,
+        None => {
+            eprintln!(
+                "ash plugin install: '{}' has no valid plugin.at manifest — removing",
+                name
+            );
+            let _ = std::fs::remove_dir_all(&target);
+            std::process::exit(1);
+        }
+    };
+
+    // Warn (don't block) if the plugin requires a newer ash than we are.
+    if let Some(min) = &manifest.min_ash_version {
+        if !crate::plugin::loader::ash_version_meets(min) {
+            eprintln!(
+                "⚠ plugin '{}' requires ash >= {} (you have {}); it will be skipped at load time",
+                name,
+                min,
+                crate::plugin::loader::current_ash_version()
+            );
+        }
     }
+
+    println!("✓ installed {} v{}", name, manifest.version);
     Ok(())
 }
 
 /// Copy a local directory tree into the plugins dir.
 fn install_local(src: &Path, target: &Path, name: &str) -> Result<()> {
     if !src.is_dir() {
-        eprintln!("ash plugin install --local: '{}' is not a directory", src.display());
+        eprintln!(
+            "ash plugin install --local: '{}' is not a directory",
+            src.display()
+        );
         std::process::exit(1);
     }
     std::fs::create_dir_all(target)
@@ -347,7 +387,11 @@ fn cmd_set_enabled(name: &str, enabled: bool) -> Result<()> {
         }
     };
     if manifest.enabled == enabled {
-        let state = if enabled { "already enabled" } else { "already disabled" };
+        let state = if enabled {
+            "already enabled"
+        } else {
+            "already disabled"
+        };
         println!("plugin {} {}", name, state);
         return Ok(());
     }
@@ -464,10 +508,7 @@ mod tests {
 
     #[test]
     fn derive_name_trailing_slash() {
-        assert_eq!(
-            derive_name_from_url("https://example.com/repo/"),
-            "repo"
-        );
+        assert_eq!(derive_name_from_url("https://example.com/repo/"), "repo");
     }
 
     #[test]
@@ -491,5 +532,14 @@ mod tests {
     fn cmd_list_empty_dir_prints_none() {
         // cmd_list reads the real plugins dir; just ensure it returns Ok.
         cmd_list(&[]).unwrap();
+    }
+
+    #[test]
+    fn version_check_is_permissive_on_garbage() {
+        // A malformed min_ash_version must never block (the loader/installer
+        // treat it as "any version satisfies").
+        assert!(crate::plugin::loader::ash_version_meets("not-a-version"));
+        assert!(crate::plugin::loader::ash_version_meets("0.0.1"));
+        assert!(!crate::plugin::loader::ash_version_meets("99.0.0"));
     }
 }

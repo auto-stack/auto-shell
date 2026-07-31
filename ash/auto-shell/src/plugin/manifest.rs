@@ -141,7 +141,10 @@ impl PluginManifest {
     pub fn to_manifest_text(&self) -> String {
         let mut out = String::new();
         out.push_str("plugin {\n");
-        out.push_str(&format!("    name        : \"{}\"\n", escape_string(&self.name)));
+        out.push_str(&format!(
+            "    name        : \"{}\"\n",
+            escape_string(&self.name)
+        ));
         out.push_str(&format!(
             "    version     : \"{}\"\n",
             escape_string(&self.version)
@@ -150,10 +153,7 @@ impl PluginManifest {
             out.push_str(&format!("    author      : \"{}\"\n", escape_string(a)));
         }
         if let Some(d) = &self.description {
-            out.push_str(&format!(
-                "    description : \"{}\"\n",
-                escape_string(d)
-            ));
+            out.push_str(&format!("    description : \"{}\"\n", escape_string(d)));
         }
         if let Some(h) = &self.homepage {
             out.push_str(&format!("    homepage    : \"{}\"\n", escape_string(h)));
@@ -171,25 +171,16 @@ impl PluginManifest {
         if !cap.is_empty() {
             out.push_str("    capabilities : {\n");
             out.push_str(&format!("        reads_fs       : {}\n", cap.reads_fs));
-            out.push_str(&format!(
-                "        writes_fs      : {}\n",
-                cap.writes_fs
-            ));
+            out.push_str(&format!("        writes_fs      : {}\n", cap.writes_fs));
             out.push_str(&format!(
                 "        spawns_process : {}\n",
                 cap.spawns_process
             ));
-            out.push_str(&format!(
-                "        uses_network   : {}\n",
-                cap.uses_network
-            ));
+            out.push_str(&format!("        uses_network   : {}\n", cap.uses_network));
             out.push_str("    }\n");
         }
         if let Some(m) = &self.min_ash_version {
-            out.push_str(&format!(
-                "    min_ash_version : \"{}\"\n",
-                escape_string(m)
-            ));
+            out.push_str(&format!("    min_ash_version : \"{}\"\n", escape_string(m)));
         }
         out.push_str(&format!("    enabled : {}\n", self.enabled));
         out.push_str("}\n");
@@ -242,11 +233,7 @@ pub fn parse_plugin_manifest(content: &str) -> Result<PluginManifest, PluginErro
 }
 
 /// Apply one `key : value` entry to the manifest (string or bool interpretation).
-fn apply_field(
-    manifest: &mut PluginManifest,
-    key: &str,
-    value: &str,
-) -> Result<(), PluginError> {
+fn apply_field(manifest: &mut PluginManifest, key: &str, value: &str) -> Result<(), PluginError> {
     match key {
         "name" => manifest.name = parse_string_value(value)?,
         "version" => manifest.version = parse_string_value(value)?,
@@ -255,7 +242,9 @@ fn apply_field(
         "homepage" => manifest.homepage = Some(parse_string_value(value)?),
         "min_ash_version" => manifest.min_ash_version = Some(parse_string_value(value)?),
         "enabled" => manifest.enabled = parse_bool_value(value)?,
-        "contributions.completions" => manifest.contributions.completions = parse_bool_value(value)?,
+        "contributions.completions" => {
+            manifest.contributions.completions = parse_bool_value(value)?
+        }
         "contributions.functions" => manifest.contributions.functions = parse_bool_value(value)?,
         "contributions.smart" => manifest.contributions.smart = parse_bool_value(value)?,
         "contributions.config" => manifest.contributions.config = parse_bool_value(value)?,
@@ -264,7 +253,9 @@ fn apply_field(
         "capabilities.spawns_process" => {
             manifest.capabilities.spawns_process = parse_bool_value(value)?
         }
-        "capabilities.uses_network" => manifest.capabilities.uses_network = parse_bool_value(value)?,
+        "capabilities.uses_network" => {
+            manifest.capabilities.uses_network = parse_bool_value(value)?
+        }
         _ => { /* ignore unknown fields for forward-compat */ }
     }
     Ok(())
@@ -452,9 +443,8 @@ fn skip_inline_ws(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>, _s
 
 /// A value that is a quoted string → its content.
 fn parse_string_value(raw: &str) -> Result<String, PluginError> {
-    parse_leading_quoted_string(raw).ok_or_else(|| {
-        PluginError::InvalidFormat(format!("expected a quoted string, got: {raw}"))
-    })
+    parse_leading_quoted_string(raw)
+        .ok_or_else(|| PluginError::InvalidFormat(format!("expected a quoted string, got: {raw}")))
 }
 
 /// A value that is `true` / `false`.
@@ -642,7 +632,10 @@ mod tests {
     version : "0.1.0"
 }
 "#;
-        assert_eq!(parse_plugin_manifest(content).unwrap_err(), PluginError::MissingName);
+        assert_eq!(
+            parse_plugin_manifest(content).unwrap_err(),
+            PluginError::MissingName
+        );
     }
 
     #[test]
@@ -779,5 +772,31 @@ mod tests {
         assert!(format!("{}", PluginError::MissingName).contains("name"));
         assert!(format!("{}", PluginError::MissingVersion).contains("version"));
         assert!(format!("{}", PluginError::InvalidFormat("x".into())).contains("x"));
+    }
+
+    /// Documented limitation: a nested block may have at most ONE field per
+    /// line. The canonical form (one key per line, see designs/033 §3.2) parses
+    /// fine; the comma-separated single-line form does not. This is a conscious
+    /// scope decision — the parser stays simple and the documented format works.
+    #[test]
+    fn single_line_multi_field_block_is_not_supported() {
+        let content = r#"plugin {
+    name    : "p"
+    version : "0.1.0"
+    contributions : { completions : true, functions : true }
+}
+"#;
+        // This errors rather than silently dropping fields, so authors get
+        // feedback instead of a partially-loaded plugin.
+        assert!(parse_plugin_manifest(content).is_err());
+    }
+
+    /// Two nested fields each on their own line parse correctly (canonical form).
+    #[test]
+    fn multi_line_block_fields_parse() {
+        let content = "plugin {\n    name    : \"p\"\n    version : \"0.1.0\"\n    contributions : {\n        completions : true\n        functions   : true\n    }\n}\n";
+        let m = parse_plugin_manifest(content).unwrap();
+        assert!(m.contributions.completions);
+        assert!(m.contributions.functions);
     }
 }

@@ -18,7 +18,7 @@ use miette::Result;
 use crate::auto_config::ash_dir;
 use crate::shell::Shell;
 
-use super::manifest::{parse_plugin_manifest, Capabilities, PluginManifest};
+use super::manifest::{parse_plugin_manifest, Capabilities, PluginContributions, PluginManifest};
 
 /// Report of what happened during a plugin load pass. Printed to stderr.
 #[derive(Debug, Default, Clone)]
@@ -55,7 +55,10 @@ impl PluginLoadReport {
             eprintln!("plugin: loaded {}", name);
         }
         for name in &self.disabled {
-            eprintln!("plugin: disabled {} (enable with `ash plugin enable {}`)", name, name);
+            eprintln!(
+                "plugin: disabled {} (enable with `ash plugin enable {}`)",
+                name, name
+            );
         }
         for (name, reason) in &self.skipped {
             eprintln!("plugin: skipped {} ({})", name, reason);
@@ -96,13 +99,16 @@ pub fn plugins_dir() -> Option<PathBuf> {
 ///
 /// Called from `Repl::new` after `.ashrc` is sourced.
 pub fn load_all_plugins(shell: &mut Shell) -> Result<PluginLoadReport> {
-    let mut report = PluginLoadReport::new();
-    let plugins_dir = match plugins_dir() {
-        Some(d) => d,
-        None => return Ok(report), // no config dir — nothing to do
-    };
+    load_all_plugins_from(shell, &plugins_dir().unwrap_or_default())
+}
 
-    let entries = match std::fs::read_dir(&plugins_dir) {
+/// Like [`load_all_plugins`], but scans an explicit `plugins_dir` (so tests can
+/// point at a temp dir instead of the real `~/.config/ash`). A missing or
+/// unreadable dir yields an empty report.
+pub fn load_all_plugins_from(shell: &mut Shell, plugins_dir: &Path) -> Result<PluginLoadReport> {
+    let mut report = PluginLoadReport::new();
+
+    let entries = match std::fs::read_dir(plugins_dir) {
         Ok(e) => e,
         Err(_) => return Ok(report), // missing dir is normal
     };
@@ -196,50 +202,37 @@ pub fn load_all_plugins(shell: &mut Shell) -> Result<PluginLoadReport> {
 /// This is a file-scan (no `&mut Shell` needed) so the completion layer — which
 /// does not have a Shell handle — can call it directly.
 pub fn enabled_plugin_completion_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    let plugins_dir = match plugins_dir() {
-        Some(d) => d,
-        None => return dirs,
-    };
-    let entries = match std::fs::read_dir(&plugins_dir) {
-        Ok(e) => e,
-        Err(_) => return dirs,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let manifest = match read_manifest(&path.join("plugin.at")) {
-            Some(m) => m,
-            None => continue,
-        };
-        if !manifest.enabled || !manifest.contributions.completions {
-            continue;
-        }
-        if let Some(min) = &manifest.min_ash_version {
-            if !ash_version_meets(min) {
-                continue;
-            }
-        }
-        let completions = path.join("completions");
-        if completions.is_dir() {
-            dirs.push(completions);
-        }
-    }
-    dirs
+    enabled_plugin_completion_dirs_from(&plugins_dir().unwrap_or_default())
+}
+
+/// Like [`enabled_plugin_completion_dirs`], but scans an explicit `plugins_dir`
+/// (so tests can point at a temp dir instead of the real `~/.config/ash`).
+pub fn enabled_plugin_completion_dirs_from(plugins_dir: &Path) -> Vec<PathBuf> {
+    enabled_contribution_dirs_from(plugins_dir, "completions", |c| c.completions)
 }
 
 /// Return the `smart/` directory of every enabled, version-compatible plugin
 /// that declares a smart contribution. Called by the SmartCommand lazy loader
 /// (`smart_command::loader`) so `ash smart` picks up plugin commands.
 pub fn enabled_plugin_smart_dirs() -> Vec<PathBuf> {
+    enabled_plugin_smart_dirs_from(&plugins_dir().unwrap_or_default())
+}
+
+/// Like [`enabled_plugin_smart_dirs`], but scans an explicit `plugins_dir`.
+pub fn enabled_plugin_smart_dirs_from(plugins_dir: &Path) -> Vec<PathBuf> {
+    enabled_contribution_dirs_from(plugins_dir, "smart", |c| c.smart)
+}
+
+/// Shared scan: for each plugin under `plugins_dir`, if it is enabled,
+/// version-compatible, and declares the given contribution (per `declared`),
+/// collect its `<subdir>/` directory.
+fn enabled_contribution_dirs_from(
+    plugins_dir: &Path,
+    subdir: &str,
+    declared: fn(&PluginContributions) -> bool,
+) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    let plugins_dir = match plugins_dir() {
-        Some(d) => d,
-        None => return dirs,
-    };
-    let entries = match std::fs::read_dir(&plugins_dir) {
+    let entries = match std::fs::read_dir(plugins_dir) {
         Ok(e) => e,
         Err(_) => return dirs,
     };
@@ -252,7 +245,7 @@ pub fn enabled_plugin_smart_dirs() -> Vec<PathBuf> {
             Some(m) => m,
             None => continue,
         };
-        if !manifest.enabled || !manifest.contributions.smart {
+        if !manifest.enabled || !declared(&manifest.contributions) {
             continue;
         }
         if let Some(min) = &manifest.min_ash_version {
@@ -260,9 +253,9 @@ pub fn enabled_plugin_smart_dirs() -> Vec<PathBuf> {
                 continue;
             }
         }
-        let smart = path.join("smart");
-        if smart.is_dir() {
-            dirs.push(smart);
+        let dir = path.join(subdir);
+        if dir.is_dir() {
+            dirs.push(dir);
         }
     }
     dirs
@@ -274,14 +267,14 @@ fn read_manifest(path: &Path) -> Option<PluginManifest> {
 }
 
 /// The running ash version (compile-time crate version).
-fn current_ash_version() -> &'static str {
+pub fn current_ash_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
 /// True when `current_ash_version()` satisfies the required `min` version.
 /// Compares major.minor numerically (patch ignored); a malformed `min` is
 /// treated as "any version satisfies" so a bad manifest never blocks startup.
-fn ash_version_meets(min: &str) -> bool {
+pub fn ash_version_meets(min: &str) -> bool {
     let cur = match parse_semver(current_ash_version()) {
         Some(c) => c,
         None => return true, // can't parse our own version — be permissive
@@ -319,9 +312,7 @@ mod tests {
 
     /// A throwaway plugins dir under temp, with a unique suffix.
     fn temp_plugins_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("ash_plugin_tests")
-            .join(label);
+        let dir = std::env::temp_dir().join("ash_plugin_tests").join(label);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -372,11 +363,15 @@ mod tests {
         let dir = temp_plugins_dir("completion_enabled");
         let p = dir.join("demo");
         std::fs::create_dir_all(p.join("completions")).unwrap();
-        write_manifest(&p, "demo", "0.1.0", "    contributions : { completions : true }\n");
+        write_manifest(
+            &p,
+            "demo",
+            "0.1.0",
+            "    contributions : { completions : true }\n",
+        );
 
-        // Override the plugins dir for the test by calling the scan against the
-        // temp dir directly via a helper that mirrors enabled_plugin_completion_dirs.
-        let dirs = scan_completion_dirs(&dir);
+        // Call the real public function with the temp dir injected.
+        let dirs = enabled_plugin_completion_dirs_from(&dir);
         assert_eq!(dirs.len(), 1);
         assert!(dirs[0].ends_with("completions"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -394,7 +389,7 @@ mod tests {
             "    enabled : false\n    contributions : { completions : true }\n",
         );
 
-        let dirs = scan_completion_dirs(&dir);
+        let dirs = enabled_plugin_completion_dirs_from(&dir);
         assert!(dirs.is_empty(), "disabled plugin must not contribute");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -411,7 +406,7 @@ mod tests {
             "    min_ash_version : \"99.0.0\"\n    contributions : { completions : true }\n",
         );
 
-        let dirs = scan_completion_dirs(&dir);
+        let dirs = enabled_plugin_completion_dirs_from(&dir);
         assert!(dirs.is_empty(), "version-incompatible plugin skipped");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -421,76 +416,152 @@ mod tests {
         let dir = temp_plugins_dir("smart_enabled");
         let p = dir.join("demo");
         std::fs::create_dir_all(p.join("smart")).unwrap();
-        write_manifest(&p, "demo", "0.1.0", "    contributions : { smart : true }\n");
+        write_manifest(
+            &p,
+            "demo",
+            "0.1.0",
+            "    contributions : { smart : true }\n",
+        );
 
-        let dirs = scan_smart_dirs(&dir);
+        let dirs = enabled_plugin_smart_dirs_from(&dir);
         assert_eq!(dirs.len(), 1);
         assert!(dirs[0].ends_with("smart"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Scan a given plugins dir for enabled completion dirs (test-only variant
-    /// so tests don't depend on the real `~/.config/ash`).
-    fn scan_completion_dirs(plugins_dir: &Path) -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
-        let entries = match std::fs::read_dir(plugins_dir) {
-            Ok(e) => e,
-            Err(_) => return dirs,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let manifest = match read_manifest(&path.join("plugin.at")) {
-                Some(m) => m,
-                None => continue,
-            };
-            if !manifest.enabled || !manifest.contributions.completions {
-                continue;
-            }
-            if let Some(min) = &manifest.min_ash_version {
-                if !ash_version_meets(min) {
-                    continue;
-                }
-            }
-            let completions = path.join("completions");
-            if completions.is_dir() {
-                dirs.push(completions);
-            }
-        }
-        dirs
+    // ── load_all_plugins_from: the real loader, exercised with a Shell ──────
+
+    #[test]
+    fn load_all_from_missing_dir_is_empty_report() {
+        let mut shell = Shell::new();
+        let dir = temp_plugins_dir("load_missing");
+        let report = load_all_plugins_from(&mut shell, &dir.join("does-not-exist")).unwrap();
+        assert!(report.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Scan a given plugins dir for enabled smart dirs (test-only variant).
-    fn scan_smart_dirs(plugins_dir: &Path) -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
-        let entries = match std::fs::read_dir(plugins_dir) {
-            Ok(e) => e,
-            Err(_) => return dirs,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let manifest = match read_manifest(&path.join("plugin.at")) {
-                Some(m) => m,
-                None => continue,
-            };
-            if !manifest.enabled || !manifest.contributions.smart {
-                continue;
-            }
-            if let Some(min) = &manifest.min_ash_version {
-                if !ash_version_meets(min) {
-                    continue;
-                }
-            }
-            let smart = path.join("smart");
-            if smart.is_dir() {
-                dirs.push(smart);
-            }
+    #[test]
+    fn load_all_skips_dir_without_manifest() {
+        let dir = temp_plugins_dir("load_no_manifest");
+        std::fs::create_dir_all(dir.join("no-manifest")).unwrap(); // no plugin.at
+
+        let mut shell = Shell::new();
+        let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+        assert!(report.loaded.is_empty());
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].0, "no-manifest");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_all_marks_disabled_plugin_in_report() {
+        let dir = temp_plugins_dir("load_disabled");
+        let p = dir.join("off");
+        std::fs::create_dir_all(&p).unwrap();
+        write_manifest(&p, "off", "0.1.0", "    enabled : false\n");
+
+        let mut shell = Shell::new();
+        let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+        assert!(report.loaded.is_empty());
+        assert_eq!(report.disabled, vec!["off".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_all_skips_version_incompatible() {
+        let dir = temp_plugins_dir("load_version");
+        let p = dir.join("future");
+        std::fs::create_dir_all(&p).unwrap();
+        write_manifest(&p, "future", "0.1.0", "    min_ash_version : \"99.0.0\"\n");
+
+        let mut shell = Shell::new();
+        let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+        assert!(report.loaded.is_empty());
+        assert_eq!(report.skipped.len(), 1);
+        assert!(
+            report.skipped[0].1.contains("requires ash"),
+            "skip reason should mention version requirement: {}",
+            report.skipped[0].1
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_all_records_capability_warning() {
+        let dir = temp_plugins_dir("load_caps");
+        let p = dir.join("cap");
+        std::fs::create_dir_all(&p).unwrap();
+        // Canonical one-field-per-line form (matches designs/033 §3.2).
+        write_manifest(
+            &p,
+            "cap",
+            "0.1.0",
+            "    capabilities : {\n        reads_fs     : true\n        uses_network : true\n    }\n",
+        );
+
+        let mut shell = Shell::new();
+        let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+        assert_eq!(report.loaded, vec!["cap".to_string()]);
+        assert_eq!(report.capability_warnings.len(), 1);
+        assert_eq!(report.capability_warnings[0].0, "cap");
+        assert!(report.capability_warnings[0].1.reads_fs);
+        assert!(report.capability_warnings[0].1.uses_network);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_all_sources_functions_into_shell() {
+        // A plugin contributing functions.ash: a valid AutoLang function. We
+        // verify the plugin lands in `loaded` (i.e. `source_file` succeeded)
+        // and the function is callable without error.
+        let dir = temp_plugins_dir("load_functions");
+        let p = dir.join("funcs");
+        std::fs::create_dir_all(&p).unwrap();
+        write_manifest(
+            &p,
+            "funcs",
+            "0.1.0",
+            "    contributions : { functions : true }\n",
+        );
+        std::fs::write(
+            p.join("functions.ash"),
+            "fn plugin_hello() { print(\"from-plugin\") }",
+        )
+        .unwrap();
+
+        let mut shell = Shell::new();
+        let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+        assert_eq!(report.loaded, vec!["funcs".to_string()]);
+        // Calling the sourced function must not error (it was defined).
+        let call = shell.execute("plugin_hello()");
+        assert!(
+            call.is_ok(),
+            "sourced function should be callable: {:?}",
+            call
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_all_multiple_plugins_report() {
+        // Two enabled plugins + one disabled: report tracks each correctly.
+        let dir = temp_plugins_dir("load_multi");
+        for (name, extra) in [
+            ("alpha", ""),
+            ("beta", ""),
+            ("gamma", "    enabled : false\n"),
+        ] {
+            let p = dir.join(name);
+            std::fs::create_dir_all(&p).unwrap();
+            write_manifest(&p, name, "0.1.0", extra);
         }
-        dirs
+
+        let mut shell = Shell::new();
+        let report = load_all_plugins_from(&mut shell, &dir).unwrap();
+        let mut loaded = report.loaded.clone();
+        loaded.sort();
+        assert_eq!(loaded, vec!["alpha".to_string(), "beta".to_string()]);
+        assert_eq!(report.disabled, vec!["gamma".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
