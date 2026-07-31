@@ -199,21 +199,25 @@ ash 版一行 pipeline,输出结构化。
 
 在编写 30 个实例时发现 5 个运行时 bug。以下为根因分析和修复方案。
 
-### Bug 1:`.to_uint()` 返回垃圾值且算术错误 —— **auto-lang 仓库**
+### Bug 1:`.to_uint()` 返回垃圾值且算术错误 —— **auto-lang 仓库**(已精确定位,待修)
 
-**症状**:`"42".to_uint()` 返回 `0-2147483647` 之类的垃圾值。`"5".to_uint() + 3` 给出错误结果。但 `var x = 0; x = x + 1` 正常。
+**症状**:`"42".to_uint()` 返回 `0-2147483647` 之类的垃圾值。`"5".to_uint() + 3` 给出错误结果。但 `var x = 0; x = x + 1` 正常;`"hello".len()` 在某些路径也受影响。
 
-**根因**:`codegen.rs` 的 `contains_u64`(line 8772)和 `is_u64_expr`(line 8743)在处理 `Expr::Call` 时,只检查 `Expr::Ident`(函数名)形式的调用,**不处理 `Expr::Dot`(方法调用)**。所以 `"42".to_uint()` 的返回类型被误判为 I32(1 slot),而实际 native 返回 I64(2 slot),导致栈对齐错乱。
+**根因(2026-07-31 复核确认,行号已更新)**:`codegen.rs` 的 `contains_u64`(L9310)在处理 `Expr::Call` 时(L9317-9325),只在 `call.name` 是 `Expr::Ident(fn_name)` 时查 `fn_return_types`;当 `call.name` 是 `Expr::Dot(obj, method)`(方法调用,如 `"42".to_uint()`)时,`if let Expr::Ident` 不匹配 → 返回 `false`。于是 codegen 误判返回类型为 I32(1 slot),而 native 实际返回 I64(2 slot),栈对齐错乱 → 垃圾值。
 
-**影响**:所有返回 I64/U64 的实例方法(`.to_uint()`、`.len()` 等)在算术/打印中都会出错。影响 csvsum、filestats、loccount、dedupe、diagnose、disk-clean、biglog 等实例。
+**补充发现**:codegen 有现成的 `infer_call_spec_return_type`(L9543)按方法名推断返回类型,但它的表里 `to_int`/`len` 标为 `ObjectType::Int`(I32),**缺少 `to_uint`**(应返回 U64/I64)。`fn_return_types` 的 key 是 `type.method` 形式(如 `str.len`,见 L6704 的 type_name 拼接),裸方法名查不到。
 
-**修复**:
-- `codegen.rs` `contains_u64` 的 `Expr::Call` 分支:增加对 `Expr::Dot` 方法调用的处理
-- `is_u64_expr`:同样增加 Dot 分支
-- 启动时从 native_catalog 填充 `fn_return_types`,让 I64 返回的 native 被正确识别
-- 范围:~30 行,3 个函数
+**影响**:所有返回 I64/U64 的实例方法(`.to_uint()`)在算术/打印中出错。影响 csvsum、filestats、loccount、dedupe、diagnose、biglog 等实例的计数/求和逻辑(这就是 filestats 拿到文件列表却统计为 0 的直接原因)。
 
-### Bug 2:位置参数 `$1`/`$@` 不传递给脚本 —— **auto-shell 仓库**
+**修复方向(需在 auto-lang 仓库实施)**:
+- `contains_u64` 的 `Expr::Call` 分支:增加 `Expr::Dot(obj, method)` 处理,推断 obj 类型拼 `type.method` key 查 `fn_return_types`
+- `infer_call_spec_return_type`:补 `to_uint` → U64 映射
+- 注意 key 格式必须与 `build_fn_return_types`(L10903)的 `type.method` 一致
+- 风险:影响所有 I64 返回方法的栈布局,需全面回归 auto-lang 测试
+
+**034 范围外**:此修复在 auto-lang 仓库(`D:\autostack\auto-lang`),是独立 VM codegen 改动,不属于 034(脚本示例库)。建议作为独立的 auto-lang 修复任务。
+
+### Bug 2:位置参数 `$1`/`$@` 不传递给脚本 —— **auto-shell 仓库** ✅ 已修复(2026-07-31)
 
 **症状**:`ash script.ash hello world` → 脚本内 `system("echo $1")` 返回空字符串。
 
