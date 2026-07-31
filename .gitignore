@@ -24,3 +24,6 @@
 
 # Git worktrees (isolated workspaces for feature branches)
 /.worktrees/
+
+# ZCode session cache (per-session plan artifacts — not project content)
+/.zcode/
