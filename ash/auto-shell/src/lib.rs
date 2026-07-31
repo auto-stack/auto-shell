@@ -24,6 +24,7 @@ pub mod data;
 pub mod host;
 pub mod job;
 pub mod menu;
+pub mod plugin;
 pub mod prompt;
 pub mod repl_mode;
 pub mod shell;

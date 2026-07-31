@@ -125,7 +125,8 @@ impl ShellCompleter {
     }
 
     /// Load `generated/` then `user/` tier specs into the provider (override order:
-    /// user > generated > built-in).
+    /// user > generated > built-in). Plan 033: plugin `completions/` dirs load
+    /// last, so installed plugins take the highest precedence.
     fn load_tier_specs(provider: &mut CompletionProvider) {
         if let Some(dir) = crate::completions::spec_tiers::generated_dir() {
             for spec in crate::completions::spec_tiers::load_dir(&dir) {
@@ -133,6 +134,12 @@ impl ShellCompleter {
             }
         }
         if let Some(dir) = crate::completions::spec_tiers::user_dir() {
+            for spec in crate::completions::spec_tiers::load_dir(&dir) {
+                provider.register(spec);
+            }
+        }
+        // Plan 033: plugin-contributed completion specs (highest precedence).
+        for dir in crate::plugin::loader::enabled_plugin_completion_dirs() {
             for spec in crate::completions::spec_tiers::load_dir(&dir) {
                 provider.register(spec);
             }

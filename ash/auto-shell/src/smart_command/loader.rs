@@ -19,10 +19,25 @@ use super::config::{parse_at, SmartCommandSpec};
 /// `home` is the user home (search root for user-global). Both are passed in
 /// so tests can control them without depending on env lookups.
 pub fn load_all_from(cwd: &Path, home: &Path) -> Vec<SmartCommandSpec> {
-    let dirs = [
+    load_all_with_extra(cwd, home, &[])
+}
+
+/// Like [`load_all_from`], but also scans the given `extra_dirs` (each an
+/// already-resolved `smart/` directory). Extra dirs are searched *after* the
+/// built-in paths, so project-local and user-global still win on collisions.
+///
+/// Plan 033: the plugin loader passes each enabled plugin's `smart/` directory
+/// here so `ash smart` picks up plugin-contributed SmartCommands.
+pub fn load_all_with_extra(
+    cwd: &Path,
+    home: &Path,
+    extra_dirs: &[PathBuf],
+) -> Vec<SmartCommandSpec> {
+    let mut dirs = vec![
         cwd.join("smart"),
         home.join(".config").join("ash").join("smart"),
     ];
+    dirs.extend(extra_dirs.iter().cloned());
     let mut specs: Vec<SmartCommandSpec> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for dir in dirs {
@@ -35,11 +50,13 @@ pub fn load_all_from(cwd: &Path, home: &Path) -> Vec<SmartCommandSpec> {
     specs
 }
 
-/// Convenience: load using the real cwd + home dir.
+/// Convenience: load using the real cwd + home dir, plus any plugin `smart/`
+/// dirs discovered by the Plan 033 plugin loader.
 pub fn load_all() -> Vec<SmartCommandSpec> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    load_all_from(&cwd, &home)
+    let extra = crate::plugin::loader::enabled_plugin_smart_dirs();
+    load_all_with_extra(&cwd, &home, &extra)
 }
 
 /// Parse every `*.at` file in `dir` (non-recursive). Missing dir → empty.

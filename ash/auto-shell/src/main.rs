@@ -55,6 +55,13 @@ fn main() -> Result<()> {
                 let smart_args: Vec<String> = args[i + 1..].to_vec();
                 return auto_shell::smart_command::cli::run(&smart_args);
             }
+            // Plan 033: `ash plugin <subcommand>` — plugin manager
+            // (install/list/enable/disable/remove/update/show). Consumes all
+            // remaining args.
+            "plugin" => {
+                let plugin_args: Vec<String> = args[i + 1..].to_vec();
+                return auto_shell::plugin::cli::run(&plugin_args);
+            }
             // Plan 029 §6: `ash ask "<nl>"` — NL→AutoLang. Generates and runs
             // an AutoLang script via the cloud model + eval_auto tool.
             "ask" => {
