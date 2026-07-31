@@ -1,11 +1,12 @@
 # Plan 033: ASH 插件/扩展生态（data-only 目录包 + git 分发）— TDD 计划
 
 > **日期**: 2026-07-31
-> **分支**: `feat/033-plugin-ecosystem`（新建）
-> **状态**: 待实施
+> **分支**: `feat/033-plugin-ecosystem`
+> **状态**: **M0–M2 已完成**（commit `e3da1d7`）；M3（安全文档 + 示例插件）留后续
 > **来源设计**: [`designs/033-plugin-ecosystem.md`](../../designs/033-plugin-ecosystem.md)
-> **预估**: M0-M3 约 3-4 周，~1800 行
-> **回归基线（2026-07-31）**: ash-core 395 + auto-shell 817 = **~1213 全绿**
+> **预估**: M0-M3 约 3-4 周，~1800 行（实际 M0–M2 ~1950 行）
+> **回归基线（2026-07-31）**: ash-core 395 + auto-shell 817 = **~1212 全绿**
+> **完成基线（2026-07-31）**: ash-core 396 + auto-shell 859（+42 插件测试）= **1255 全绿**
 
 ---
 
@@ -22,6 +23,23 @@
 | 5 | SmartCommand loader 需加 `extra_dirs` 参数 | 现状 `load_all()` / `load_all_from(cwd, home)`，无插件目录 | 需小改：加 `load_all_with_extra(extra_dirs)` 或扩展 `load_all_from` |
 
 **结论**：设计可实施，唯一需适配的是 SmartCommand loader 加插件搜索路径。
+
+### 实施记录（2026-07-31，M0–M2 完成）
+
+实施中对照代码发现并处理的额外偏差：
+
+| # | 计划假设 | 实际 | 处理 |
+|---|---|---|---|
+| A | 复用 `parse_smart_command` | 实为 `parse_at`（`smart_command/config.rs:66`），错误类型 `Result<_, String>` | manifest 解析沿用同款手写解析器，但用类型化 `PluginError` |
+| B | 复用 028/029 的 `Capabilities` | **代码中不存在**，仅见于设计文档 | 在 `plugin/manifest.rs` 新建 `Capabilities` + `is_empty()` |
+| C | `Shell::completion_provider_mut()` 接入补全 | **不存在**——provider 由 `ShellCompleter` 持有 | 补全贡献接入 `ShellCompleter::load_tier_specs`（现成 tier 扫描，天然契合） |
+| D | SmartCommand 启动时加载 | **懒加载**——每次 `ash smart` 才 `load_all()` | 扩展为 `load_all_with_extra(extra_dirs)`，懒加载器自动拾取插件 `smart/` |
+
+**交付物**：
+- `ash/auto-shell/src/plugin/`（mod/manifest/loader/cli，~1800 行）
+- `ash/auto-shell/tests/plugin_e2e.rs`（5 个集成测试）
+- 接线：`lib.rs`（pub mod）、`main.rs`（`ash plugin` 分发）、`repl.rs`（启动加载）、`completions_reedline.rs`（补全第四层）、`smart_command/loader.rs`（`load_all_with_extra`，原签名保持兼容）
+- `ash plugin install/list/show/enable/disable/remove/update` 全流程经手测验证（install --local → list/show → disable/enable → `smart list` 见插件命令 → remove）
 
 ---
 
