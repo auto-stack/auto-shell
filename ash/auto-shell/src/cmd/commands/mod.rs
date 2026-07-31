@@ -29,6 +29,8 @@ pub mod http_head;
 pub mod http_post;
 pub mod http_put;
 pub mod insert;
+// Plan 030 M0: `less` pager needs crossterm (frontend-tui).
+#[cfg(feature = "frontend-tui")]
 pub mod less;
 pub mod ln;
 pub mod ls;

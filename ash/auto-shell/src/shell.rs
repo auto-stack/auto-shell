@@ -236,8 +236,12 @@ impl Shell {
             reg.register(Box::new(commands::file::FileCommand));
             reg.register(Box::new(commands::tee::TeeCommand));
             reg.register(Box::new(commands::ln::LnCommand));
-            reg.register(Box::new(commands::less::LessCommand));
-            reg.register(Box::new(commands::less::MoreCommand));
+            // Plan 030 M0: `less`/`more` pagers need crossterm (frontend-tui).
+            #[cfg(feature = "frontend-tui")]
+            {
+                reg.register(Box::new(commands::less::LessCommand));
+                reg.register(Box::new(commands::less::MoreCommand));
+            }
             // Batch 2: Text processing
             reg.register(Box::new(commands::sort::SortCommand));
             reg.register(Box::new(commands::source::SourceCommand));
@@ -546,6 +550,8 @@ impl Shell {
                 "path" => return self.cmd_path(&parts),
                 "env" | "env.path" => return self.cmd_env(&parts),
                 "completions" => return self.cmd_completions(&parts),
+                // Plan 030 M0: `color` needs the TUI frontend (nu-ansi-term).
+                #[cfg(feature = "frontend-tui")]
                 "color" => return self.cmd_color(&parts),
                 "def" => return self.cmd_def(trimmed),
                 "hook" => return self.cmd_hook(&parts),
@@ -957,7 +963,11 @@ impl Shell {
             return pipeline.into_text();
         }
 
-        // Try ratatui table rendering for structured Atom data
+        // Try ratatui table rendering for structured Atom data.
+        // Plan 030 M0: gated behind frontend-tui (needs crossterm::terminal::size
+        // + the ratatui renderer). Without the frontend, structured data falls
+        // through to plain text.
+        #[cfg(feature = "frontend-tui")]
         if let AtomPipeline::Atom(ref atom) = pipeline {
             if atom.is_structured() {
                 let term_width = crossterm::terminal::size()
@@ -3726,6 +3736,14 @@ impl Shell {
     ///   color depth     → report the detected color depth + relevant env vars
     fn cmd_color(&mut self, parts: &[&str]) -> Result<Option<String>> {
         let sub = parts.get(1).copied().unwrap_or("depth");
+        // Plan 030 M0: the `color` builtin depends on the TUI frontend's
+        // color helpers (nu-ansi-term). Without the frontend it is unavailable.
+        #[cfg(not(feature = "frontend-tui"))]
+        {
+            let _ = sub;
+            miette::bail!("color: this command requires the frontend-tui feature");
+        }
+        #[cfg(feature = "frontend-tui")]
         match sub {
             "rainbow" | "rb" => {
                 let text = "Ash 24-bit Truecolor Rainbow!";

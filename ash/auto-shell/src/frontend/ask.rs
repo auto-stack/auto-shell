@@ -118,10 +118,10 @@ pub fn run(args: &[String]) -> Result<()> {
             let _ = std::io::stdout().flush();
         }
         StreamEvent::ToolStart { tool, args } => {
-            println!("\n  \x1b[2m\u{2699} {tool} {}\x1b[0m", crate::frontend::repl::brief_args(&args));
+            println!("\n  \x1b[2m\u{2699} {tool} {}\x1b[0m", crate::frontend::brief::brief_args(&args));
         }
         StreamEvent::Tool { tool, result, .. } => {
-            println!("\n  \x1b[2m\u{2190} {tool}: {}\x1b[0m", crate::frontend::repl::brief_result(&result));
+            println!("\n  \x1b[2m\u{2190} {tool}: {}\x1b[0m", crate::frontend::brief::brief_result(&result));
         }
         StreamEvent::Warning { text } => println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m"),
         StreamEvent::Done { .. } => {}

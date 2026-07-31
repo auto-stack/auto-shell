@@ -1070,43 +1070,11 @@ pub fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
     }
 }
 
-/// Render tool-call args as a brief one-line summary (for StreamEvent rendering).
-/// Shared by F4 (handle_chat_turn) and `ash ask`.
-pub fn brief_args(args: &serde_json::Value) -> String {
-    let s = match args {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::Object(map) => {
-            // Show {"key": value, ...} compactly, focusing on string args.
-            let parts: Vec<String> = map
-                .iter()
-                .map(|(k, v)| match v {
-                    serde_json::Value::String(s) => format!("{k}: {s}"),
-                    _ => format!("{k}: {v}"),
-                })
-                .collect();
-            parts.join(", ")
-        }
-        other => other.to_string(),
-    };
-    brief_truncate(&s, 80)
-}
-
-/// Render a tool result as a brief one-line summary (first non-empty line).
-/// Shared by F4 (handle_chat_turn) and `ash ask`.
-pub fn brief_result(result: &str) -> String {
-    let first_line = result.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-    brief_truncate(first_line.trim(), 80)
-}
-
-/// Truncate to `max` chars, appending an ellipsis if cut.
-fn brief_truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut: String = s.chars().take(max).collect();
-        format!("{cut}\u{2026}")
-    }
-}
+// Plan 030 M0: brief_args / brief_result / brief_truncate moved to the
+// terminal-dep-free `super::brief` module so `ash ask` (frontend/ask.rs) can use
+// them without the frontend-tui feature. This file re-exports them for its own
+// StreamEvent rendering below.
+use super::brief::{brief_args, brief_result};
 
 #[cfg(test)]
 mod read_recent_history_tests {

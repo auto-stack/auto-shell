@@ -13,7 +13,8 @@ pub use ash_core::completions::{
     WhenCondition, CompletionSource, ParseMode,
 };
 
-// Frontend-only: reedline integration
+// Frontend-only: reedline integration (Plan 030 M0: gated with frontend-tui)
+#[cfg(feature = "frontend-tui")]
 pub mod reedline;
 
 // Plan 315: three-tier spec loading + runtime probe helpers.

@@ -63,7 +63,9 @@ pub fn highlight_code(text: &str, ext: &str) -> String {
     let extension = ext.to_ascii_lowercase();
 
     // TOML/INI are not in syntect's default syntax set — use a lightweight
-    // regex-based highlighter.
+    // regex-based highlighter. Plan 030 M0: that path uses nu-ansi-term
+    // (frontend-tui); without it, TOML/INI fall through to plain syntect.
+    #[cfg(feature = "frontend-tui")]
     if matches!(extension.as_str(), "toml" | "ini" | "conf" | "cfg") {
         return highlight_toml_like(text);
     }
@@ -132,6 +134,9 @@ pub fn highlight_code_to_writer(
     let extension = ext.to_ascii_lowercase();
 
     // TOML/INI go through the lightweight hand-rolled highlighter.
+    // Plan 030 M0: that path uses nu-ansi-term (frontend-tui); without it,
+    // TOML/INI fall through to plain text below.
+    #[cfg(feature = "frontend-tui")]
     if matches!(extension.as_str(), "toml" | "ini" | "conf" | "cfg") {
         return highlight_toml_like_to_writer(text, writer);
     }
@@ -172,6 +177,9 @@ pub fn highlight_code_to_writer(
 
 /// Streaming variant of [`highlight_toml_like`]: highlight each line and
 /// write it to `writer` immediately.
+/// Streaming variant of [`highlight_toml_like`]: highlight each line and
+/// write it to `writer` immediately.
+#[cfg(feature = "frontend-tui")]
 fn highlight_toml_like_to_writer(
     text: &str,
     writer: &mut dyn std::io::Write,
@@ -233,6 +241,7 @@ fn highlight_toml_like_to_writer(
 }
 
 /// Lightweight highlighter for TOML/INI-style config files.
+#[cfg(feature = "frontend-tui")]
 fn highlight_toml_like(text: &str) -> String {
     use nu_ansi_term::{Color, Style};
 

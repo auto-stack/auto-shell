@@ -9,6 +9,23 @@ license = "MIT"
 [[bin]]
 name = "ash"
 path = "src/main.rs"
+# Plan 030 M0: the CLI binary needs the TUI frontend (REPL/reedline). Building
+# without `frontend-tui` produces the library only (for ash-gui to consume).
+required-features = ["frontend-tui"]
+
+# Plan 030 M0: terminal/frontend deps are optional behind the `frontend-tui`
+# feature. This lets a GUI frontend (ash-gui) depend on auto-shell's logic
+# without pulling reedline/crossterm/ratatui/nu-ansi-term. `default` keeps the
+# CLI build identical to before.
+[features]
+default = ["frontend-tui"]
+frontend-tui = [
+    "dep:reedline",
+    "dep:crossterm",
+    "dep:nu-ansi-term",
+    "dep:ratatui-core",
+    "dep:ratatui-widgets",
+]
 
 [dependencies]
 # AutoLang integration (Plan 330: paths point back to the auto-lang repo)
@@ -30,14 +47,14 @@ serde_json = "1.0"
 # Ash Core (pure logic, zero terminal deps)
 ash-core = { path = "../../ash-core" }
 
-# Terminal and REPL
-reedline = "0.44.0"
-crossterm = "0.27"
-nu-ansi-term = "0.50"
+# Terminal and REPL (Plan 030 M0: optional, gated behind `frontend-tui`)
+reedline = { version = "0.44.0", optional = true }
+crossterm = { version = "0.27", optional = true }
+nu-ansi-term = { version = "0.50", optional = true }
 
 # Ratatui rendering (core + widgets without crossterm backend)
-ratatui-core = "0.1"
-ratatui-widgets = "0.3"
+ratatui-core = { version = "0.1", optional = true }
+ratatui-widgets = { version = "0.3", optional = true }
 
 # Data structures
 indexmap = "2.0"
