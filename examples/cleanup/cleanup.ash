@@ -10,15 +10,25 @@ fn main() {
 
     print("扫描 " + dir + " 下的临时文件...")
 
-    // 用 find 搜索多种临时文件扩展名
-    var files = system("find " + dir + " -maxdepth 1 \\( -name \"*.tmp\" -o -name \"*.bak\" -o -name \"*.log\" \\) -type f 2>/dev/null || true")
+    // 收集多种临时文件扩展名。ash 的内置 find 不支持 GNU 的 -o(OR)/分组,
+    // 所以这里循环每个扩展名单独 find,再合并(等价的 bash 是
+    // `find . \( -name '*.tmp' -o -name '*.bak' -o -name '*.log' \)`)。
+    var patterns = ["*.tmp", "*.bak", "*.log"]
+    var found = ""
+    for p in patterns {
+        var r = system("find " + dir + " -maxdepth 1 -name " + p + " -type f 2>/dev/null || true")
+        if r.trim().len() > 0 {
+            if found.len() > 0 { found = found + "\n" }
+            found = found + r.trim()
+        }
+    }
 
-    if files.trim().len() == 0 {
+    if found.trim().len() == 0 {
         print("✓ 没有找到临时文件")
         return
     }
 
-    var lines = files.trim().lines()
+    var lines = found.trim().lines()
     print("找到 " + lines.len().str() + " 个临时文件:")
     for line in lines {
         print("  " + line)

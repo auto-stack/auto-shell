@@ -33,36 +33,34 @@
 
 **结果**:31/31 通过(~12s)。这是 example 库此前完全缺失的回归网。
 
-## M2:bash 等价校验 — 🟡 暂缓(根因记录在 design 附录 C)
+## M2:bash 等价校验 — 🟡 暂缓(被 auto-lang plan 378 阻塞)
 
-实施 M2 时深入调查发现一个**比预期严重得多的架构问题**,导致 bash 等价校验不可行。
+### 演进:从"system() 桥接阻塞"到"plan 378 阻塞"
 
-### 根因(2026-07-31 实测)
+M2 一度被 5 个 system() 桥接 bug 阻塞(find 不认 `-name`、redirect 吞 stdout、`||` 链返回空、`ls -1` 报错、`$1` 传不进)。**这 5 个在 034 期间已全部修复**(见各 commit)。修完后验证发现:cwd 其实是对的(此前"cwd 错"是测试时的误判),`find -name`/`ls -1`/`||`/`$1` 都工作了。
 
-example 脚本普遍用 `system("find . -name *.rs")` 等,假设 system() 走真 bash。实测:`system()` 走 `Shell::execute_capture → execute()`,即**让 ash 自己执行命令**。ash 对 find/grep/wc/du 有**内置重实现**,语法与 GNU 不同。
+但深入验证"有数据等价校验"(cleanup 找到 N 个文件、filestats 统计分布)时,暴露出**真正的阻塞:auto-lang 的 `.to_uint()`/`.len()` VM bug(plan 378)**。
 
-**决定性证据**(在含 163 个 .rs 文件的目录):
+### 当前阻塞:plan 378(native 方法返回 I64 的栈错位)
 
-| 命令 | 真 bash | ash `system()` |
-|------|---------|---------------|
-| `find . -name '*.rs'` | 163 个 | **0** |
-| `find . -n *.rs` | (bash 不认) | 4452 字符(正常) |
-| `ls src` | 列出 | 列出(兼容) |
-| `git status` | 正常 | 正常(无内置,fallback 外部) |
+不只是 `filestats` 的 `to_uint()` 返回垃圾值——**`cleanup` 的 `str.lines().len()` 也是垃圾值**(`3-2147483647`)。根因同一:native 方法调用(`Expr::Dot`)返回 I64 时,codegen 的 `contains_u64`/`is_u64_expr` 不识别 `Expr::Dot`,误判为 I32(1 slot)→ 栈错位。
 
-即 ash 的 find 用 `-n`/`name`,**不认 GNU 的 `-name`**。脚本写 GNU 语法 → find 返回空 → filestats/loccount/cleanup 等恒输出"0/没找到"(错误结果)。
+实测分类(2026-07-31,仓库根无参数跑):
+- 🟢 **可跑(11)**:cleanup/cron-list/deploy/deps-check/disk-clean/du-top/fmt-check/git-batch/loccount/smart-commit/svc-status/user-activity — 但"可跑"指不崩溃,**多数的计数/聚合输出仍是垃圾值**(因 `.len()`/`.to_uint()`)
+- 🟡 **缺参数(11)**:正常优雅报错
+- 🔴 **to_uint 直接报错(4)**:buildtest/deploy-ai/filestats(`Invalid string ID`)
 
-### 为什么阻塞 M2
+### cleanup 改造(避开 find -o)
 
-M2 要求脚本产出正确稳定结果。当前多数 example 因语法不匹配产出**错误结果**(恒 0/空),固化它等于把 bug 固化成期望,bash 等价会大面积失败。
+cleanup 原用 `find \( -name *.tmp -o -name *.bak \)`(ash 的 find 不支持 `-o`/分组)。已改为**循环扩展名列表多次 find 再合并**(等价语义),验证:在有 a.tmp/b.log 的目录正确找到两个文件 ✅。但"找到 X 个"的 `lines.len()` 仍是垃圾值(plan 378)。
 
-### 三种修复方向(均超 034 范围,需单独决策)
+### M2 暂缓决定
 
-1. 改 example 脚本用 ash 语法(`find -n`)
-2. 让 ash 内置命令兼容 GNU 语法别名
-3. system() 增加"真 shell-out"模式
+"有数据等价校验"被 plan 378 全面阻塞——任何用 native 方法返回值(`.len()`/`.to_uint()`)做计数/聚合的脚本都产出垃圾值。固化垃圾值无意义,逐个改脚本绕过每个 `.len()` 是治标不治本。
 
-详见 `designs/034-script-examples.md` 附录 C。
+**M2 待 plan 378(to_uint/len 栈错位修复)落地后恢复**。届时 filestats/loccount/csvsum/cleanup 等都能产出正确数值,M2 可做真正的 bash 等价。
+
+详见 `designs/034-script-examples.md` 附录 B Bug 1 + 附录 C。
 
 ## M3:文档收尾 ✅
 
