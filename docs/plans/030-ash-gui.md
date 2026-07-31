@@ -1,13 +1,19 @@
 # ash-gui Implementation Plan
 
-> **M0 可行性验证（2026-07-30，基于当前 main 代码）**：下方"关键背景知识"中的 M0 断言（"只有 shell.rs:866 一处 crossterm、约 100 行"）**已过时，勿照搬**。实际核查发现 M0 被低估约 2-2.5 倍：
-> - **crossterm 实际散布 3 个文件 40+ 处**，不是 1 处：`shell.rs:928`（format_output，行号已从 866 变 928）、**`cmd/commands/less.rs`（1197 行、33 处 crossterm 深度耦合，本计划完全没提到）**、`show.rs:149-151`（经 `super::less::*` 间接耦合）。
-> - **shell.rs 对 frontend 有第二处耦合**（计划只识别 format_output）：`cmd_color`（shell.rs:3612-3644）调用 `frontend::term::color` 6 处。
-> - **less.rs 是 M0 真正的大头**：经 `shell.rs:239-240` 命令注册硬依赖，照搬 M0.3 改完 format_output 后 `--no-default-features` 仍会连环失败。
-> - **真实 M0 约 180-250 行**（非 100）。建议拆 **M0a（frontend/ 隔离 ~30 行）+ M0b（less.rs/show.rs/cmd_color 隔离 ~150-200 行）**，M0b 单独评估 less.rs 命运（整模块 cfg / trait 抽象 / 妥协保留三选一）。
-> - **行号普遍偏移约 +47**：format_output 856→903，crossterm 866→928。
+> **M0 可行性评估（2026-08-01，基于当前代码重新核实）**：上方 07-30 评估的数字已再次过时（029-035 期间代码持续重构，行号再次漂移）。本次逐点重新核实如下：
 >
-> **仍然成立的论点**：①`ash-core` 真正零终端依赖（M1 的 Renderer trait 基础牢固）；②frontend/ 隔离方向正确；③ash-gui scaffold 已就位。**结论**：M0 仍是 GUI 路线的合理入口，但不是"低成本"，less.rs 的处理策略需先决策。
+> **耦合点现状（2026-08-01 实测）：**
+> - **crossterm 引用集中度比 07-30 评估更低**：shell.rs **仅 1 处**（`shell.rs:963` `crossterm::terminal::size()`，在 format_output 内），不是"散布 40+ 处"。其余 crossterm 在 `signal.rs`（1）、`frontend/mod.rs`（1）、`less.rs`（**33**）。
+> - **`format_output` 是渲染分发点**（`shell.rs:938`）：三分支（json / bash_compat / ratatui 表格），crossterm 仅用于取终端宽度，`frontend::renderer::render_table_with` 才是真正的终端渲染。这是 M1 Renderer trait 要替换的核心。
+> - **`cmd_color` 是第二处 frontend 耦合**（`shell.rs:3727`）：调用 `frontend::term::color::{resolve_fg,detect_color_depth}` 等 6 处（3738-3748）。
+> - **`less.rs` 是 M0 的大头**（1197 行，**33 处 crossterm**：43×style + 13×terminal + 1×event）。经 `shell.rs:239-240` 命令注册硬依赖（`LessCommand`/`MoreCommand`）。`show.rs:149-151` 经 `super::less::{RawModeGuard,AltScreenGuard,CodePager}` 间接耦合。
+> - **当前无 `[features]` 段**：auto-shell 是扁平 binary，M0「feature 隔离」= 新增 `terminal` feature，把所有 crossterm/frontend/less 用法置于 `#[cfg(feature="terminal")]` 下。命令注册（shell.rs:239-240）也要 cfg 化。
+>
+> **仍然成立的论点（已复核）：** ①`ash-core` **真正零终端依赖**（grep 命中全在注释里，明确写 "no dependency on reedline/crossterm/ratatui"）→ M1 Renderer trait 基础牢固；②frontend/ 隔离方向正确（10 个文件，含 renderer/ 子模块）；③**ash-gui scaffold 已就位**（独立 workspace `ash-gui/`，含 `ash-gui-bin` 成员，刻意与 `ash/` 隔离以防 ui-iced feature 交叉污染）。
+>
+> **less.rs 处理三选项的评估（见下方 §M0 决策）：** 推荐 **方案 A（整模块 cfg-gate）**——成本最低、风险最小、可逆。less/more/show 是终端 pager，GUI 模式下本就无意义。
+>
+> **结论：M0 可行，是 GUI 路线的合理入口。** 拆 M0a（frontend/ + format_output + cmd_color 隔离，~40 行 cfg）+ M0b（less.rs/show.rs 整模块 cfg-gate，~20 行 cfg + 验证 `--no-default-features` 编译）。真实工作量 ~60-100 行 cfg + 充分回归，**比 07-30 评估的 180-250 行更小**（因为 shell.rs 的 crossterm 已收敛到 1 处）。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
