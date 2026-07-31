@@ -16,7 +16,7 @@
 | **030** | ash-gui(Shell-native UI) | ✅ 1048 行 | ✅ 1671 行(M0-M2) | 13-20 周(M0-M5) |
 | **031** | 数据处理框架(lazy pipeline) | ✅ 538 行 | ✅ 已归档（M0-M3 完成） | ✅ 完成 |
 | **032** | 智能补全(AI 层) | ✅ 405 行 | ✅ 已实施并归档(M0-M3 + 审计修复,见 `old/032-intelligent-completion.md`) | ✅ 完成 |
-| **033** | 插件生态(data-only) | ✅ 437 行 | ✅ 已有（M0-M3 待实施） | 3-4 周 |
+| **033** | 插件生态(data-only) | ✅ 437 行 | ✅ 完成（M0-M3 全部完成 + 复审修复，见 `033-plugin-ecosystem.md`） | ✅ 完成（v1） |
 | **034** | 脚本实例库 | ✅ 194 行 | ✅ 已实施并归档(M0/M1/M3 + M2 核心等价,见 `old/034-script-examples.md`) | ✅ 完成 |
 | **035** | 文档+分发 | ✅ 240 行 | ❌ 待写 | 1.5-2 周 |
 
@@ -102,14 +102,21 @@ Layer 5(独立后续):
 | M2 | AI 补全(LLM/NL) | 029 NL 共享层 |
 | M3 | 缺失动态源(可选) | 无 |
 
-### 033 插件生态(3-4 周)
+### 033 插件生态(3-4 周) ✅ v1 完成（M0-M3）
 
-| M | 内容 | 依赖 |
-|---|---|---|
-| M0 | plugin.at manifest + parse | 无 |
-| M1 | 加载器(4 贡献类型) | 029 SmartCommand loader(可选) |
-| M2 | ash plugin CLI | M0+M1 |
-| M3 | 安全 + 文档 | M2 |
+| M | 内容 | 依赖 | 状态 |
+|---|---|---|---|
+| M0 | plugin.at manifest + parse | 无 | ✅ |
+| M1 | 加载器(4 贡献类型) | 029 SmartCommand loader(可选) | ✅ |
+| M2 | ash plugin CLI | M0+M1 | ✅ |
+| M3 | 安全测试 + 作者文档 + 2 示例插件 | M2 | ✅ |
+
+**v2 / 后续**（v1 有意不做，记录于此防遗忘；详见 `033-plugin-ecosystem.md` §非目标与 `designs/033-plugin-ecosystem.md` §6.4）：
+- 动态库 / native 插件（需 ash-plugin-sdk + ABI 稳定）
+- 中央 registry（类 crates.io）
+- 插件签名 / 沙箱（v1 仅 capabilities 警告 + 复用 028 SecurityPolicy）
+- `config.at` merge（v1 占位，声明但不合并）
+- 热加载、插件依赖关系、插件市场网站
 
 ### 034 实例库(1-2 周,纯写作)
 
