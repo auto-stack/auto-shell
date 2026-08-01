@@ -607,6 +607,59 @@ impl Repl {
         Ok(())
     }
 
+    /// Plan 037 M3: execute a command and print a colored block header +
+    /// the command's output. Used by every execution site that captures and
+    /// prints output (main command, AI multi-step, AI suggestion accept/edit).
+    ///
+    /// Returns `(output_snippet, exit_code)`:
+    /// - `output_snippet` — first 200 chars of output (for the suggest-next
+    ///   context; empty on error or no output).
+    /// - `exit_code` — the command's exit code (0 on success, non-zero on
+    ///   error; for an `Err` from `execute` we report 1 since no code was set).
+    ///
+    /// reedline 0.44.0 cannot pin a header while output scrolls, so this is
+    /// the plan's documented fallback: a single header line printed before the
+    /// output. Non-interactive paths (`-c`/`-s`/script) do NOT go through here,
+    /// keeping their machine-readable output free of decoration.
+    fn execute_with_header(&mut self, command: &str) -> (String, i32) {
+        let start = std::time::Instant::now();
+        let result = self.shell.execute(command);
+        let elapsed = start.elapsed();
+
+        // Exit code: Shell sets last_exit_code even on Err for security denies
+        // etc.; for a generic Err with no code set, fall back to 1.
+        let exit_code = result.as_ref().map(|_| self.shell.last_exit_code()).unwrap_or_else(|_| {
+            let code = self.shell.last_exit_code();
+            if code != 0 { code } else { 1 }
+        });
+
+        // Terminal width for right-aligning the status (0 = unknown).
+        let term_width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(0);
+
+        // Print the header, then the output/error.
+        let header = crate::block_header::render_block_header(
+            command,
+            exit_code,
+            elapsed,
+            term_width,
+        );
+        println!("{}", header);
+
+        let snippet = match result {
+            Ok(Some(s)) => {
+                let snippet: String = s.chars().take(200).collect();
+                auto_shell::shell::print_command_output(&s);
+                snippet
+            }
+            Ok(None) => String::new(),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                String::new()
+            }
+        };
+        (snippet, exit_code)
+    }
+
     /// Plan 029 §5: run a multi-step `&&` chain one step at a time. Before
     /// each step, prompt the user (Enter = run, anything else = skip-and-abort).
     /// If a step fails (non-zero exit), abort the rest of the chain — matching
@@ -621,16 +674,11 @@ impl Repl {
                 println!("  已中止 (剩余 {} 步未执行)", steps.len() - i);
                 return;
             }
-            match self.shell.execute(step) {
-                Ok(output) => {
-                    if let Some(s) = output {
-                        auto_shell::shell::print_command_output(&s);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error (中止链): {}", e);
-                    return;
-                }
+            // Plan 037 M3: execute_with_header prints the block header + output.
+            // A non-zero exit aborts the rest of the chain (&& semantics).
+            let (_snippet, exit_code) = self.execute_with_header(step);
+            if exit_code != 0 {
+                return;
             }
         }
     }
@@ -789,14 +837,8 @@ impl Repl {
                                     let cmd = decision.trim();
                                     if cmd.is_empty() {
                                         // Empty Enter → execute the suggestion as-is.
-                                        match self.shell.execute(&suggestion) {
-                                            Ok(output) => {
-                                                if let Some(s) = output {
-                                                    auto_shell::shell::print_command_output(&s);
-                                                }
-                                            }
-                                            Err(e) => eprintln!("Error: {}", e),
-                                        }
+                                        // Plan 037 M3: prints block header + output.
+                                        self.execute_with_header(&suggestion);
                                     } else if cmd == "s" && multi {
                                         // Step-by-step: run each step, prompting
                                         // before each, aborting on failure or skip.
@@ -808,14 +850,8 @@ impl Repl {
                                         if let Ok(Signal::Success(edited)) = &e_sig {
                                             let edited = edited.trim();
                                             if !edited.is_empty() {
-                                                match self.shell.execute(edited) {
-                                                    Ok(output) => {
-                                                        if let Some(s) = output {
-                                                            auto_shell::shell::print_command_output(&s);
-                                                        }
-                                                    }
-                                                    Err(e) => eprintln!("Error: {}", e),
-                                                }
+                                                // Plan 037 M3: block header + output.
+                                                self.execute_with_header(edited);
                                             }
                                         }
                                     }
@@ -953,30 +989,17 @@ impl Repl {
                         };
                     }
 
-                    // Evaluate the line
-                    let mut output_snippet = String::new();
-                    match self.shell.execute(&line) {
-                        Ok(output) => {
-                            if let Some(s) = output {
-                                // Capture a short snippet for the suggest-next
-                                // context (§7.3) before printing.
-                                output_snippet = s.chars().take(200).collect();
-                                // Use print_command_output to avoid a spurious
-                                // trailing blank line when output already ends
-                                // in '\n' (e.g. echo). Same fix as R4/script path.
-                                auto_shell::shell::print_command_output(&s);
-                            }
-                            // After command execution, async-refresh git cache
-                            // (most changes are caught by filesystem watcher,
-                            //  but this covers edge cases like external git commands)
-                            auto_shell::prompt::context::refresh_git_info_async(
-                                self.shell.pwd(),
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("Error: {}", e);
-                        }
-                    }
+                    // Evaluate the line. Plan 037 M3: execute_with_header
+                    // prints the block header (command + duration + status)
+                    // before the output, and returns the snippet for the
+                    // suggest-next context (§7.3).
+                    let (output_snippet, _exit_code) = self.execute_with_header(&line);
+                    // After command execution, async-refresh git cache (most
+                    // changes are caught by filesystem watcher, but this covers
+                    // edge cases like external git commands).
+                    auto_shell::prompt::context::refresh_git_info_async(
+                        self.shell.pwd(),
+                    );
 
                     // Sync completion state (cwd may have changed after cd/pushd)
                     self.sync_completion_state();

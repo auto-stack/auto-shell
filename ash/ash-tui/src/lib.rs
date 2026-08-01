@@ -9,6 +9,7 @@
 //! flag used to give.
 
 // Terminal-dependent modules moved here from auto-shell in Plan 037 M2.2.
+pub mod block_header;
 pub mod commands;
 // `commands_less.rs` is the original `less`/`more` implementation (crossterm),
 // moved verbatim; `commands` re-exports it and adds `color`.
