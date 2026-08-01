@@ -327,6 +327,13 @@ fn parse_block_body(
                 chars.next();
                 return Ok(entries);
             }
+            // Optional comma separator between fields/blocks. Both the
+            // multi-line (one field per line, no comma) and the single-line
+            // comma-separated forms (`{ a : true, b : true }`) are accepted.
+            Some(&(_, ',')) => {
+                chars.next(); // consume the comma
+                continue;
+            }
             Some(&(i, c)) if c.is_alphabetic() || c == '_' => {
                 // Read an identifier (field key or nested-block keyword).
                 let start = i;
@@ -380,10 +387,11 @@ fn parse_block_body(
     }
 }
 
-/// Read a value up to the end of its line, stopping early at an unquoted `}`.
-/// Plugin.at field values are single-line (a quoted string or a bool), so a `}`
-/// always marks the end of a block on the same line (`{ completions : true }`)
-/// and must not be swallowed into the value.
+/// Read a value up to the end of its line, stopping early at an unquoted `}` or
+/// `,`. Plugin.at field values are single-line (a quoted string or a bool), so:
+/// - a `}` marks the end of a block on the same line (`{ a : true }`)
+/// - a `,` separates fields on the same line (`{ a : true, b : true }`)
+/// Neither must be swallowed into the value.
 fn read_value(
     src: &str,
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
@@ -395,13 +403,15 @@ fn read_value(
         if c == '\n' {
             break;
         }
-        // Track string state so a `}` inside a quoted value isn't treated as a
-        // block terminator. (Plugin values rarely contain braces, but be safe.)
+        // Stop at an unquoted `}` (block close) or `,` (field separator).
+        if (c == '}' || c == ',') && !in_string {
+            break;
+        }
+        // Track string state so a `}`/`,` inside a quoted value isn't treated as
+        // a block terminator / separator. (Plugin values rarely contain these,
+        // but be safe.)
         if c == '"' {
             in_string = !in_string;
-        }
-        if c == '}' && !in_string {
-            break;
         }
         value.push(c);
         chars.next();
@@ -774,21 +784,39 @@ mod tests {
         assert!(format!("{}", PluginError::InvalidFormat("x".into())).contains("x"));
     }
 
-    /// Documented limitation: a nested block may have at most ONE field per
-    /// line. The canonical form (one key per line, see designs/033 §3.2) parses
-    /// fine; the comma-separated single-line form does not. This is a conscious
-    /// scope decision — the parser stays simple and the documented format works.
+    /// Comma-separated fields on a single line parse correctly (the natural
+    /// `.at` form, e.g. `{ completions : true, functions : true }`). Previously
+    /// a parser bug rejected this; it's now supported alongside the one-field-
+    /// per-line form.
     #[test]
-    fn single_line_multi_field_block_is_not_supported() {
+    fn single_line_comma_separated_block_fields_parse() {
         let content = r#"plugin {
     name    : "p"
     version : "0.1.0"
     contributions : { completions : true, functions : true }
+    capabilities : { reads_fs : true, uses_network : false }
 }
 "#;
-        // This errors rather than silently dropping fields, so authors get
-        // feedback instead of a partially-loaded plugin.
-        assert!(parse_plugin_manifest(content).is_err());
+        let m = parse_plugin_manifest(content).unwrap();
+        assert!(m.contributions.completions);
+        assert!(m.contributions.functions);
+        assert!(m.capabilities.reads_fs);
+        assert!(!m.capabilities.uses_network);
+    }
+
+    /// Three fields on one line, all comma-separated.
+    #[test]
+    fn single_line_three_comma_separated_fields() {
+        let content = r#"plugin {
+    name    : "p"
+    version : "0.1.0"
+    capabilities : { reads_fs : true, writes_fs : true, uses_network : true }
+}
+"#;
+        let m = parse_plugin_manifest(content).unwrap();
+        assert!(m.capabilities.reads_fs);
+        assert!(m.capabilities.writes_fs);
+        assert!(m.capabilities.uses_network);
     }
 
     /// Two nested fields each on their own line parse correctly (canonical form).
