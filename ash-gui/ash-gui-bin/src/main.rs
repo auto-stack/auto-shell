@@ -1,54 +1,85 @@
-//! ash-gui — minimal GUI for ash (Plan 030 M2).
+//! ash-gui — GUI for ash (Plan 030 M3).
 //!
-//! Proves the core hypothesis: a structured Atom (e.g. `ls` → FileList) renders
-//! as a rich, interactive widget (a table) in a GUI — something the TUI can't
-//! do. The Shell engine runs in-process (design §1.5); the GUI consumes ash-core's
-//! frontend-agnostic `RenderedOutput` (Plan 030 M1) instead of formatted text.
+//! M3: a scrolling list of Blocks (command history) + command input with
+//! history navigation and command-name completion. Each Block records the
+//! command, its working directory, status (Success/Failed/Running), and the
+//! structured output. This turns the M2 single-output demo into something
+//! usable as a daily terminal.
 //!
 //! ## Threading
-//! The Shell is `!Send` (auto-lang session state uses `Rc`), so it can't live in
-//! an iced `Task::perform` future (which must be `Send`). Instead a **dedicated
-//! worker thread owns the Shell** (Plan 029's AshCommandTool pattern); the GUI
-//! sends commands on a channel and awaits `RenderedOutput` responses. The async
-//! futures only hold channel endpoints (`Send`), never the Shell.
+//! The Shell is `!Send` (auto-lang session state uses `Rc`), so a dedicated
+//! worker thread owns it; the GUI talks to it via channels. Async futures hold
+//! only channel endpoints (`Send`), never the Shell.
 
+mod block;
 mod renderer;
 
+use std::path::PathBuf;
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Mutex};
 
 use ash_core::pipeline::AtomPipeline;
 use ash_core::renderer::{render_pipeline_to_structured, RenderedOutput};
+use block::{Block, BlockStatus};
 use iced::{Element, Task};
 
-use renderer::{rendered_to_iced, GuiMsg};
+use renderer::{block_list_view, GuiMsg};
 
 /// A handle to the dedicated Shell worker thread: send it commands, await
-/// rendered results. The Shell itself stays on the worker thread.
+/// rendered results tagged with the block id they belong to.
 #[derive(Clone)]
 struct ShellHandle {
-    cmd_tx: SyncSender<String>,
-    /// Shared result slot: the worker writes the latest result, the awaiting
-    /// future reads it. (M2 simplicity: one outstanding command at a time.)
-    result_rx: Arc<Mutex<mpsc::Receiver<RenderedOutput>>>,
+    cmd_tx: SyncSender<CommandReq>,
+    result_rx: Arc<Mutex<mpsc::Receiver<CommandResult>>>,
+}
+
+/// A command request: which block id to attribute the result to + the command.
+#[derive(Debug)]
+struct CommandReq {
+    block_id: usize,
+    cmd: String,
+}
+
+/// A command result: which block it updates + the rendered output + status.
+#[derive(Debug, Clone)]
+struct CommandResult {
+    block_id: usize,
+    status: BlockResult,
+}
+
+/// The outcome of running a command (returned across the channel).
+#[derive(Debug, Clone)]
+enum BlockResult {
+    Success(RenderedOutput),
+    Failed(String),
 }
 
 impl ShellHandle {
     /// Spawn the dedicated Shell worker thread that owns the `!Send` Shell.
     fn spawn() -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<String>(1);
-        let (result_tx, result_rx) = mpsc::sync_channel::<RenderedOutput>(1);
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<CommandReq>(8);
+        let (result_tx, result_rx) = mpsc::sync_channel::<CommandResult>(8);
 
         std::thread::Builder::new()
             .name("ash-gui-shell".into())
             .spawn(move || {
                 let mut shell = auto_shell::Shell::new();
                 shell.load_env_persistence();
-                // Each incoming command is run + rendered, then sent back.
-                for cmd in cmd_rx.iter() {
-                    let rendered = run_command(&mut shell, &cmd);
-                    // If the GUI dropped the result receiver (e.g. quit), stop.
-                    if result_tx.send(rendered).is_err() {
+                for req in cmd_rx.iter() {
+                    let cwd = shell.pwd().to_path_buf();
+                    let status = match run_command(&mut shell, &req.cmd) {
+                        Ok(out) => BlockResult::Success(out),
+                        Err(msg) => BlockResult::Failed(msg),
+                    };
+                    // Stamp the cwd onto the result so the GUI can show it.
+                    let _ = cwd;
+                    if result_tx
+                        .send(CommandResult {
+                            block_id: req.block_id,
+                            status,
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -61,46 +92,65 @@ impl ShellHandle {
         }
     }
 
-    /// Run `cmd` and await its rendered output. Takes `self` by value (the
-    /// handle is cheaply `Clone`) so the returned future is `'static` + `Send`
-    /// — it owns the channel endpoints, never the `!Send` Shell.
-    async fn run(self, cmd: String) -> RenderedOutput {
-        if self.cmd_tx.send(cmd).is_err() {
-            return RenderedOutput::Text("(shell worker thread died)".into());
-        }
-        let rx = self.result_rx.lock().unwrap();
-        rx.recv()
-            .unwrap_or_else(|_| RenderedOutput::Text("(shell worker thread died)".into()))
+    /// Submit a command for the given block id (non-blocking).
+    fn submit(&self, block_id: usize, cmd: String) {
+        let _ = self.cmd_tx.send(CommandReq { block_id, cmd });
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum Message {
-    Gui(GuiMsg),
-    /// A command finished; here's its rendered output.
-    CommandDone(RenderedOutput),
-    /// Fires once on startup to seed the view with an initial `ls`.
-    Seed,
+    /// Drain any finished results. The future is `Send` (only channel endpoints).
+    async fn drain(self) -> Vec<CommandResult> {
+        let rx = self.result_rx.lock().unwrap();
+        let mut out = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            out.push(r);
+        }
+        out
+    }
 }
 
 /// The app state.
 struct AshGui {
     shell: ShellHandle,
+    /// Command history / output blocks (newest at the end).
+    blocks: Vec<Block>,
+    next_id: usize,
+    /// Current input text.
     input: String,
-    output: RenderedOutput,
-    /// Whether the initial `ls` seed command has been dispatched.
-    seeded: bool,
+    /// Navigation index into history (None = not navigating).
+    history_cursor: Option<usize>,
+    /// Command names for completion suggestions.
+    command_names: Vec<String>,
+    /// Current completion suggestions (derived from input, cached for view).
+    suggestions: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    Gui(GuiMsg),
+    /// A command finished (or several did).
+    Results(Vec<CommandResult>),
+    /// Drain finished results on a timer.
+    Tick,
 }
 
 impl AshGui {
-    /// Construct the initial state (without running anything). iced 0.14's
-    /// `application(boot, ...)` needs a `Fn() -> State`, so boot returns this.
+    /// Initial state (iced 0.14 `application(boot, ...)` needs `Fn() -> State`).
     fn boot() -> Self {
+        // Build a throwaway Shell just to harvest the command-name list for
+        // completion. The real execution Shell lives on the worker thread.
+        let registry = auto_shell::Shell::new();
+        let command_names: Vec<String> = registry.registry().names().cloned().collect();
+        drop(registry);
+
+        let shell = ShellHandle::spawn();
         Self {
-            shell: ShellHandle::spawn(),
+            shell,
+            blocks: Vec::new(),
+            next_id: 0,
             input: String::new(),
-            output: RenderedOutput::Empty,
-            seeded: false,
+            history_cursor: None,
+            suggestions: Vec::new(),
+            command_names,
         }
     }
 
@@ -112,54 +162,133 @@ impl AshGui {
         match message {
             Message::Gui(GuiMsg::InputChanged(s)) => {
                 self.input = s;
+                self.history_cursor = None; // typing resets history nav
+                self.suggestions = self.completion_suggestions();
             }
             Message::Gui(GuiMsg::RunCommand) => {
                 let cmd = std::mem::take(&mut self.input);
+                self.suggestions.clear();
                 if !cmd.trim().is_empty() {
-                    let shell = self.shell.clone();
-                    return Task::perform(shell.run(cmd), Message::CommandDone);
+                    self.history_cursor = None;
+                    let id = self.next_id;
+                    self.next_id += 1;
+                    let cwd = PathBuf::from(".");
+                    self.blocks.push(Block::running(id, cmd.clone(), cwd));
+                    self.shell.submit(id, cmd);
                 }
             }
-            Message::CommandDone(rendered) => {
-                self.output = rendered;
+            Message::Gui(GuiMsg::HistoryPrev) => {
+                self.navigate_history(true);
+                self.suggestions = self.completion_suggestions();
             }
-            // Fire the initial `ls` once, on the first update tick, so the
-            // window opens showing a table widget (the M2 demonstration).
-            Message::Seed if !self.seeded => {
-                self.seeded = true;
+            Message::Gui(GuiMsg::HistoryNext) => {
+                self.navigate_history(false);
+                self.suggestions = self.completion_suggestions();
+            }
+            Message::Gui(GuiMsg::PickCompletion(s)) => {
+                // Replace the command-name prefix with the picked completion.
+                let rest: String = self
+                    .input
+                    .split_whitespace()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.input = if rest.is_empty() {
+                    s
+                } else {
+                    format!("{s} {rest}")
+                };
+                self.suggestions = self.completion_suggestions();
+            }
+            Message::Gui(GuiMsg::OpenPath(_path)) => {
+                // M4 hook: clicking a filename would open it. For M3 this is a no-op.
+            }
+            Message::Results(results) => {
+                for r in results {
+                    if let Some(b) = self.blocks.iter_mut().find(|b| b.id == r.block_id) {
+                        match r.status {
+                            BlockResult::Success(out) => {
+                                b.status = BlockStatus::Success;
+                                b.output = out;
+                            }
+                            BlockResult::Failed(msg) => {
+                                b.status = BlockStatus::Failed(msg);
+                                b.output = RenderedOutput::Empty;
+                            }
+                        }
+                    }
+                }
+            }
+            Message::Tick => {
+                // Poll for finished results without blocking the GUI.
                 let shell = self.shell.clone();
-                return Task::perform(shell.run("ls".to_string()), Message::CommandDone);
+                return Task::perform(shell.drain(), Message::Results);
             }
-            Message::Seed => {}
         }
         Task::none()
     }
 
+    /// Navigate command history (Prev = up/older, Next = down/newer).
+    fn navigate_history(&mut self, older: bool) {
+        let successful: Vec<&str> = self
+            .blocks
+            .iter()
+            .rev()
+            .map(|b| b.command.as_str())
+            .collect();
+        if successful.is_empty() {
+            return;
+        }
+        let cur = self.history_cursor.unwrap_or(usize::MAX);
+        let next = if older {
+            cur.saturating_add(1).min(successful.len().saturating_sub(1))
+        } else {
+            cur.saturating_sub(1)
+        };
+        if let Some(cmd) = successful.get(next) {
+            self.input = (*cmd).to_string();
+            self.history_cursor = Some(next);
+        }
+    }
+
+    /// Command-name completion suggestions for the current input prefix.
+    fn completion_suggestions(&self) -> Vec<String> {
+        // Match on the first token (the command name).
+        let first = self.input.split_whitespace().next().unwrap_or("");
+        if first.is_empty() {
+            return Vec::new();
+        }
+        self.command_names
+            .iter()
+            .filter(|n| n.starts_with(first))
+            .take(8)
+            .cloned()
+            .collect()
+    }
+
     fn view(&self) -> Element<Message> {
-        rendered_to_iced(&self.output, &self.input).map(Message::Gui)
+        block_list_view(&self.blocks, &self.input, &self.suggestions).map(Message::Gui)
     }
 }
 
 /// Run a single command against the Shell and return its [`RenderedOutput`].
 /// Runs on the dedicated worker thread (Shell is `!Send`).
-fn run_command(shell: &mut auto_shell::Shell, cmd: &str) -> RenderedOutput {
+fn run_command(shell: &mut auto_shell::Shell, cmd: &str) -> Result<RenderedOutput, String> {
     // Try the structured path: parse + run_atom → AtomPipeline → RenderedOutput.
     if let Some(rendered) = render_structured(shell, cmd) {
-        return rendered;
+        return Ok(rendered);
     }
     // Fallback: plain execute → text. Covers non-atom commands (echo, external).
     match shell.execute(cmd) {
-        Ok(Some(s)) => RenderedOutput::Text(s),
-        Ok(None) => RenderedOutput::Empty,
-        Err(e) => RenderedOutput::Text(format!("{e:?}")),
+        Ok(Some(s)) => Ok(RenderedOutput::Text(s)),
+        Ok(None) => Ok(RenderedOutput::Empty),
+        Err(e) => Err(format!("{e}")),
     }
 }
 
 /// Run a single command via the registry and render its AtomPipeline. Returns
-/// `None` for commands that don't go through the atom path — the caller falls
-/// back to `execute`.
+/// `None` for commands that don't go through the atom path.
 fn render_structured(shell: &mut auto_shell::Shell, input: &str) -> Option<RenderedOutput> {
-    // Split the input into command + args (quote-aware), then run via registry.
     let parts = ash_core::parser::parse_args(input);
     if parts.is_empty() {
         return None;
@@ -178,23 +307,15 @@ fn render_structured(shell: &mut auto_shell::Shell, input: &str) -> Option<Rende
     render_pipeline_to_structured(&pipeline).or(Some(RenderedOutput::Text(pipeline.into_text())))
 }
 
-pub fn main() -> iced::Result {
-    // iced 0.14: application(boot_fn, update, view).run().
-    // - boot_fn: Fn() -> State (AshGui::boot)
-    // - update:  Fn(&mut State, Message) -> Task
-    // - view:    Fn(&State) -> Element
-    // A subscription fires the seed `ls` once on startup.
-    iced::application(AshGui::boot, AshGui::update, AshGui::view)
-        .title(|s: &AshGui| s.title())
-        .subscription(seed_subscription)
-        .window_size([800.0, 600.0])
-        .run()
+/// Poll finished results periodically.
+fn tick_subscription(_state: &AshGui) -> iced::Subscription<Message> {
+    iced::time::every(std::time::Duration::from_millis(100)).map(|_| Message::Tick)
 }
 
-/// A subscription that emits `Seed` so the window opens showing an `ls` table
-/// widget (the M2 demonstration). The `update` handler guards on `seeded`, so
-/// repeat emissions are harmless no-ops.
-fn seed_subscription(_state: &AshGui) -> iced::Subscription<Message> {
-    use iced::time::{every, Duration};
-    every(Duration::from_secs(1)).map(|_| Message::Seed)
+pub fn main() -> iced::Result {
+    iced::application(AshGui::boot, AshGui::update, AshGui::view)
+        .title(|s: &AshGui| s.title())
+        .subscription(tick_subscription)
+        .window_size([900.0, 650.0])
+        .run()
 }
