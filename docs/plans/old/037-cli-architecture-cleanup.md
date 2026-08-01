@@ -1,10 +1,15 @@
 # Plan 037: ASH CLI 架构收尾 — Block UX + crate 拆分 + Command trait 解耦
 
 > **日期**: 2026-08-01
-> **分支**: 待建（`feat/037-cli-architecture-cleanup`）
-> **状态**: 待实施
+> **分支**: `feat/037-cli-architecture-cleanup`
+> **状态**: ✅ 完成（M1 + M2 + M3 全部交付，回归全绿）
 > **来源**: 从归档的 Plan 013（Phase 4）、014（A4/A5 + §II）、020（5.1/A.2）收拢的残留架构优化项
 > **预估**: 3 个里程碑，~2000 行，2-3 周
+>
+> **完成情况**：
+> - **M1**（Command trait 解耦）：`Command::run` 接 `&mut dyn ShellContext`，79 命令迁移
+> - **M2**（ash-tui crate 拆分）：auto-shell 零终端依赖，移除 frontend-tui feature；新建 ash-tui（lib）+ ash（bin）crate
+> - **M3**（CLI Block UX）：采用**降级方案**（reedline 0.44.0 无法 sticky）——命令头着色（`block_header.rs`）。真正的 sticky block 迁移见 **Plan 038**（实验性质，另开分支）
 
 ---
 
@@ -96,7 +101,7 @@ M1 是 M2 的前置（解耦后 frontend 对 Shell 的依赖更干净）。M3 �
 | M2 crate 拆分路径调整量大 | 中 | 中 | 先建 crate 骨架验证编译，再逐步迁移 |
 | M3 reedline 限制 Block UX | 中 | 低 | M3 标注可选，降级方案明确 |
 
-## 成功指标
-1. M1：Command::run 接 `&mut dyn ShellContext`，回归全绿
-2. M2：ash-tui 独立 crate，auto-shell 无终端依赖，移除 frontend-tui feature
-3. M3（若做）：CLI 命令输出带 sticky 头 + 状态色
+## 成功指标（实际达成）
+1. ✅ M1：Command::run 接 `&mut dyn ShellContext`，回归全绿（auto-shell 765 + ash-tui 104 + ash 7 = 876，零回归）
+2. ✅ M2：ash-tui 独立 crate，auto-shell 无终端依赖（`cargo tree` 确认 0），移除 frontend-tui feature
+3. ✅ M3（降级方案）：CLI 命令输出带命令头着色（命令 + 耗时 + 状态色 ✓/✗，`block_header.rs`）。真正的 sticky block 见 Plan 038
