@@ -13,7 +13,7 @@
 |---|---|---|---|---|
 | **028** | Agent 执行引擎 | (已删,M1+M2 已落地) | (已删) | M3+M4 待定 |
 | **029** | AI 能力增强(含 SmartCommand) | ✅ 1064 行（v1 已过时，§0 已重评） | ✅ 完成（5 子能力全落地，见 `old/029-ai-capabilities.md`） | ✅ 完成（仅 1 个不阻塞的小缺口：`.at` 配 preferred_provider） |
-| **030** | ash-gui(Shell-native UI) | ✅ 1048 行 | ✅ 1671 行(M0-M2) | 13-20 周(M0-M5) |
+| **030** | ash-gui(Shell-native UI) | ✅ 1048 行 | 🟡 M0-M2 完成（feature 隔离 + Renderer trait + 最小 GUI），余 M3-M5 | 核心假设已验证（M2）；M3-M5 为增量扩展 |
 | **031** | 数据处理框架(lazy pipeline) | ✅ 538 行 | ✅ 已归档（M0-M3 完成） | ✅ 完成 |
 | **032** | 智能补全(AI 层) | ✅ 405 行 | ✅ 已实施并归档(M0-M3 + 审计修复,见 `old/032-intelligent-completion.md`) | ✅ 完成 |
 | **033** | 插件生态(data-only) | ✅ 437 行 | ✅ 完成（M0-M3 全部完成 + 复审修复，见 `old/033-plugin-ecosystem.md`） | ✅ 完成（v1） |
@@ -77,14 +77,16 @@ Layer 5(独立后续):
 
 详见 `old/029-ai-capabilities.md`（auto-shell ~2700 行 + 43 测试，auto-ai 侧前置依赖已合并）。唯一小缺口：`.at` 配置层未加 `preferred_provider` 字段（不阻塞，低优先级）。
 
-### 030 ash-gui(已有详细 plan)
+### 030 ash-gui(已有详细 plan) 🟡 M0-M2 完成（核心假设已验证）
 
-| M | 内容 | 估算 |
+| M | 内容 | 状态 |
 |---|---|---|
-| M0 | auto-shell feature 隔离 | 1 周 |
-| M1 | Renderer trait + RenderedOutput | 2-3 周 |
-| M2 | 最小 GUI(**关键检查点**) | 2-3 周 |
-| M3-M5 | 日常可用/全 AtomType/AI 面板 | 8-12 周 |
+| M0 | auto-shell feature 隔离（`frontend-tui` feature，`--no-default-features` lib 可编译） | ✅ |
+| M1 | Renderer trait + RenderedOutput（ash-core 纯逻辑）+ TuiRenderer + golden 对比（视觉零变化） | ✅ |
+| M2 | 最小 GUI（**关键检查点**：ash-gui-bin 跑起来，ls → iced 表格 widget；核心假设验证通过） | ✅ |
+| M3-M5 | 日常可用/全 AtomType/AI 面板（纯增量扩展） | 未做 |
+
+详见 `030-ash-gui.md`。**M2 关键检查点通过**——"结构化 Atom → 富 widget"的核心假设成立（ls 的 FileList 在 GUI 里渲染成可交互表格）。M3-M5（Block 列表 + 富输入 + 补全 / 18 种 AtomType 全 widget / AI 面板 + SmartCommand 表单）是建立在此基础上的增量扩展，无技术阻塞。
 
 ### 031 数据处理(独立性强,4-6 周)
 
