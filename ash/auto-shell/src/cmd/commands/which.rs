@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::Value;
 use miette::Result;
@@ -27,7 +28,7 @@ impl Command for WhichCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let name = args
             .first()
@@ -53,7 +54,7 @@ impl Command for WhichCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let name = args
             .first()

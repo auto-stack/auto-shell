@@ -5,6 +5,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use miette::{IntoDiagnostic, Result};
 use std::path::PathBuf;
@@ -28,7 +29,7 @@ impl Command for LnCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         if args.positionals.len() < 2 {
             miette::bail!("ln: missing target or link argument");
@@ -98,7 +99,7 @@ impl Command for LnCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy = self.run(args, PipelineData::empty(), shell)?;
         Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy))

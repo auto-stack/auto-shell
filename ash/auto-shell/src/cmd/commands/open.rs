@@ -13,6 +13,7 @@ use crate::cmd::parser::ParsedArgs;
 use crate::cmd::pipeline_convert::{atom_to_pipeline_data, pipeline_data_to_atom};
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 
 pub struct OpenCommand;
 
@@ -35,7 +36,7 @@ impl Command for OpenCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         // Rule 5: open is a launcher, not a pipeline filter; ignore input.
         let path = args
@@ -58,7 +59,7 @@ impl Command for OpenCommand {
         &self,
         args: &ParsedArgs,
         input: ash_core::pipeline::AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<ash_core::pipeline::AtomPipeline> {
         let legacy_in = atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;
@@ -67,7 +68,7 @@ impl Command for OpenCommand {
 }
 
 /// Resolve a path relative to the shell's CWD (mirrors cat's resolve_path).
-fn resolve_path(arg: &str, shell: &Shell) -> PathBuf {
+fn resolve_path(arg: &str, shell: &dyn ShellContext) -> PathBuf {
     let path = Path::new(arg);
     if path.is_absolute() {
         path.to_path_buf()

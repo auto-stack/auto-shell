@@ -5,6 +5,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Value, Obj};
 use miette::Result;
@@ -28,7 +29,7 @@ impl Command for VersionCommand {
         &self,
         _args: &ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let obj = build_version_record();
         Ok(PipelineData::from_value(Value::Obj(obj)))
@@ -38,7 +39,7 @@ impl Command for VersionCommand {
         &self,
         _args: &ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let obj = build_version_record();
         Ok(AtomPipeline::from_atom(Atom::new(

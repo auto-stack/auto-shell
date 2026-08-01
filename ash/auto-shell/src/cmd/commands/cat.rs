@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -29,7 +30,7 @@ impl Command for CatCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let number = args.has_flag("number");
         let number_nonblank = args.has_flag("number-nonblank");
@@ -69,7 +70,7 @@ impl Command for CatCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;

@@ -1,5 +1,6 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use miette::Result;
 
@@ -20,7 +21,7 @@ impl Command for EchoCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         Ok(PipelineData::from_text(echo_text(
             &args.positionals,
@@ -33,7 +34,7 @@ impl Command for EchoCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         Ok(AtomPipeline::text(echo_text(
             &args.positionals,

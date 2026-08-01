@@ -4,6 +4,7 @@
 
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use miette::Result;
 
@@ -25,7 +26,7 @@ impl Command for RunCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let target = args.positionals.get(0).map(|s| s.as_str());
         match target {
@@ -38,7 +39,7 @@ impl Command for RunCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let target = args.positionals.get(0).map(|s| s.as_str());
         let msg = match target {

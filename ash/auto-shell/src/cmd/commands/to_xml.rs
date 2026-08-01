@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::{Obj, Value};
 use miette::Result;
@@ -28,7 +29,7 @@ impl Command for ToXmlCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let value = match input {
             PipelineData::Value(v) => v,
@@ -61,7 +62,7 @@ impl Command for ToXmlCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;

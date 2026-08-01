@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -30,7 +31,7 @@ impl Command for TailCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let _follow = args.has_flag("follow");
         let num_lines: usize = 10; // default
@@ -62,7 +63,7 @@ impl Command for TailCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;
@@ -75,7 +76,7 @@ impl Command for TailCommand {
 fn read_tail_content(
     args: &ParsedArgs,
     input: &PipelineData,
-    shell: &mut Shell,
+    shell: &mut dyn ShellContext,
 ) -> Result<String> {
     let file_arg = args.positionals.iter().find(|p| {
         !p.parse::<usize>().is_ok()

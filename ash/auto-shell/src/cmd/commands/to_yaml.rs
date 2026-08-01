@@ -5,6 +5,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::{Array, Obj, Value};
 use miette::Result;
@@ -25,7 +26,7 @@ impl Command for ToYamlCommand {
         &self,
         _args: &ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let value = match input {
             PipelineData::Value(v) => v,
@@ -40,7 +41,7 @@ impl Command for ToYamlCommand {
         &self,
         _args: &ParsedArgs,
         input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         // Plan 031 M0.3: operate directly on AtomPipeline via the Format trait
         // instead of routing through the lossy atom_to_pipeline_data bridge.

@@ -1,5 +1,6 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use miette::Result;
 
@@ -18,7 +19,7 @@ impl Command for CdCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let path = args.positionals.get(0).map(|s| s.as_str()).unwrap_or("~");
         shell.cd(path).map(|_| PipelineData::empty())
@@ -28,7 +29,7 @@ impl Command for CdCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let path = args.positionals.get(0).map(|s| s.as_str()).unwrap_or("~");
         shell.cd(path).map(|_| AtomPipeline::empty())

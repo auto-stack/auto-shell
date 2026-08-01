@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Value, Obj, Array};
 use miette::Result;
@@ -30,7 +31,7 @@ impl Command for DuCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let path_arg = args.first().unwrap_or(".");
         let summarize = args.has_flag("summarize");
@@ -87,7 +88,7 @@ impl Command for DuCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;

@@ -4,6 +4,7 @@
 
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use auto_val::{Value, Obj};
 use miette::Result;
@@ -26,7 +27,7 @@ impl Command for PsCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let value = self.build_process_list(args)?;
         Ok(PipelineData::from_value(value))
@@ -36,7 +37,7 @@ impl Command for PsCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let value = self.build_process_list(args)?;
         Ok(AtomPipeline::from_atom(Atom::process_list(value)))

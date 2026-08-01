@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::Value;
 use miette::Result;
@@ -27,7 +28,7 @@ impl Command for UrlEncodeCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let text = get_text(args, &input)?;
         let result = if args.has_flag("decode") {
@@ -42,7 +43,7 @@ impl Command for UrlEncodeCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let text = get_text(args, &legacy_in)?;

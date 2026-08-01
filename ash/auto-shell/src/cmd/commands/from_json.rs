@@ -3,6 +3,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Array, Obj, Value};
 use miette::{IntoDiagnostic, Result};
@@ -22,7 +23,7 @@ impl Command for FromJsonCommand {
         &self,
         _args: &ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let text = match input {
             PipelineData::Text(s) => s,
@@ -38,7 +39,7 @@ impl Command for FromJsonCommand {
         &self,
         _args: &ParsedArgs,
         input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         // Plan 034 Bug 5: Don't go through the lossy atom_to_pipeline_data
         // bridge — it silently turns ExternalStream read errors into empty

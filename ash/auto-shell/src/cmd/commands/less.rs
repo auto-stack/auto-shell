@@ -18,6 +18,7 @@ use miette::{IntoDiagnostic, Result};
 use crate::cmd::parser::ParsedArgs;
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 
 // ── RAII terminal guards ────────────────────────────────────────────
 
@@ -989,7 +990,7 @@ fn truncate_to_width(s: &str, max_width: usize) -> &str {
 fn read_input(
     args: &ParsedArgs,
     input: PipelineData,
-    shell: &mut Shell,
+    shell: &mut dyn ShellContext,
 ) -> Result<Vec<String>> {
     let text = if let Some(path) = args.positionals.first() {
         let resolved = shell.resolve_path(path, false)?;
@@ -1043,7 +1044,7 @@ impl Command for LessCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         run_less(args, input, shell)
     }
@@ -1052,7 +1053,7 @@ impl Command for LessCommand {
         &self,
         args: &ParsedArgs,
         input: ash_core::pipeline::AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<ash_core::pipeline::AtomPipeline> {
         run_less_atom(args, input, shell)
     }
@@ -1091,7 +1092,7 @@ impl Command for MoreCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         run_less(args, input, shell)
     }
@@ -1100,7 +1101,7 @@ impl Command for MoreCommand {
         &self,
         args: &ParsedArgs,
         input: ash_core::pipeline::AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<ash_core::pipeline::AtomPipeline> {
         run_less_atom(args, input, shell)
     }
@@ -1114,7 +1115,7 @@ impl Command for MoreCommand {
 fn run_less_atom(
     args: &ParsedArgs,
     input: ash_core::pipeline::AtomPipeline,
-    shell: &mut Shell,
+    shell: &mut dyn ShellContext,
 ) -> Result<ash_core::pipeline::AtomPipeline> {
     // File argument → read file directly (no streaming needed).
     let has_file = args.positionals.first().is_some();
@@ -1168,7 +1169,7 @@ fn run_less_atom(
 fn run_less(
     args: &ParsedArgs,
     input: PipelineData,
-    shell: &mut Shell,
+    shell: &mut dyn ShellContext,
 ) -> Result<PipelineData> {
     if args.positionals.len() > 1 {
         miette::bail!("less: only one file argument is supported");

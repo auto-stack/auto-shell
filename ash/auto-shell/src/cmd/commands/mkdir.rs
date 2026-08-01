@@ -4,6 +4,7 @@
 
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -29,7 +30,7 @@ impl Command for MkdirCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         if args.positionals.is_empty() {
             miette::bail!("mkdir: missing operand");
@@ -93,7 +94,7 @@ impl Command for MkdirCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         // Delegate to run() — mkdir is a side-effect command, result is for info only
         let legacy = self.run(args, PipelineData::empty(), shell)?;

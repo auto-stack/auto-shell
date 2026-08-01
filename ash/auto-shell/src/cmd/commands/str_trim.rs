@@ -1,6 +1,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::Value;
 use miette::Result;
@@ -22,7 +23,7 @@ impl Command for StrTrimCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let text = extract_text(&input)?;
         let trim_left = args.has_flag("left");
@@ -43,7 +44,7 @@ impl Command for StrTrimCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;

@@ -16,6 +16,7 @@ use crate::cmd::parser::ParsedArgs;
 use crate::cmd::pipeline_convert::{atom_to_pipeline_data, pipeline_data_to_atom};
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 
 /// The target output format for `show`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,7 +109,7 @@ impl Command for ShowCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         // Rule 10: only a single file is supported this iteration.
         if args.positionals.len() > 1 {
@@ -180,7 +181,7 @@ impl Command for ShowCommand {
         &self,
         args: &ParsedArgs,
         input: ash_core::pipeline::AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<ash_core::pipeline::AtomPipeline> {
         // ── Streaming path for code files in a pipeline ──
         //

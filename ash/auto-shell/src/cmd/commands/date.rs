@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::Value;
 use chrono::{Local, Utc, TimeZone};
@@ -29,7 +30,7 @@ impl Command for DateCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let value = build_date_value(args);
         Ok(PipelineData::from_value(value))
@@ -39,7 +40,7 @@ impl Command for DateCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let value = build_date_value(args);
         Ok(AtomPipeline::from_atom(Atom::new(value, AtomType::Record)))

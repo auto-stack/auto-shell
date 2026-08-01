@@ -4,6 +4,7 @@
 
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -33,7 +34,7 @@ impl Command for CpCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         if args.positionals.len() < 2 {
             miette::bail!("cp: missing source or destination argument");
@@ -80,7 +81,7 @@ impl Command for CpCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy = self.run(args, PipelineData::empty(), shell)?;
         Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy))

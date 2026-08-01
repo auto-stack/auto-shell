@@ -1,5 +1,6 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Value, Obj, Array};
 use miette::Result;
@@ -24,7 +25,7 @@ impl Command for WcCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         // Extract flags
         let count_lines = args.has_flag("lines");
@@ -243,7 +244,7 @@ impl Command for WcCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;
@@ -259,7 +260,7 @@ impl Command for WcCommand {
 /// Called when file arguments are given (e.g., `wc -l shell.rs` or `wc file1 file2`).
 fn wc_files(
     args: &crate::cmd::parser::ParsedArgs,
-    shell: &mut Shell,
+    shell: &mut dyn ShellContext,
     count_lines: bool,
     count_words: bool,
     count_bytes: bool,

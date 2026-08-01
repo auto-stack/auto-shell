@@ -1,6 +1,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::{Array, Value};
 use miette::{IntoDiagnostic, Result};
@@ -41,7 +42,7 @@ impl Command for SortCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let reverse = args.has_flag("reverse");
         let numeric = args.has_flag("numeric");
@@ -94,7 +95,7 @@ impl Command for SortCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         // Use the generic bridge so that structured (-w) output keeps its
         // Table/Record type tag and renders as a table. Previously this

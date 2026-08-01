@@ -15,7 +15,7 @@ use ash_core::pipeline::AtomPipeline;
 pub use crate::core::shell::vars;
 
 use crate::bookmarks::BookmarkManager;
-use crate::cmd::{commands, CommandRegistry};
+use crate::cmd::{commands, CommandRegistry, ShellContext};
 use crate::job::JobManager;
 use vars::ShellVars;
 
@@ -193,6 +193,32 @@ fn canonicalize_or_parent(path: &std::path::Path) -> Result<PathBuf> {
         }
     }
     Ok(path.to_path_buf())
+}
+
+/// Plan 037 M1: Shell implements the narrow `ShellContext` trait so commands
+/// depend on the trait, not the concrete Shell type.
+impl ShellContext for Shell {
+    fn pwd(&self) -> std::path::PathBuf {
+        Shell::pwd(self)
+    }
+    fn resolve_path(&self, arg: &str, for_write: bool) -> miette::Result<std::path::PathBuf> {
+        Shell::resolve_path(self, arg, for_write)
+    }
+    fn is_pipeline_last(&self) -> bool {
+        Shell::is_pipeline_last(self)
+    }
+    fn registry(&self) -> &CommandRegistry {
+        Shell::registry(self)
+    }
+    fn execute(&mut self, input: &str) -> miette::Result<Option<String>> {
+        Shell::execute(self, input)
+    }
+    fn cd(&mut self, path: &str) -> miette::Result<()> {
+        Shell::cd(self, path)
+    }
+    fn execute_script_file(&mut self, path: &std::path::Path) -> miette::Result<()> {
+        Shell::execute_script_file(self, path)
+    }
 }
 
 impl Shell {

@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Value, Obj};
 use miette::{IntoDiagnostic, Result};
@@ -27,7 +28,7 @@ impl Command for HttpHeadCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let url = args.first().ok_or_else(|| miette::miette!("http head: missing URL"))?;
         let obj = curl_head(url, args)?;
@@ -38,7 +39,7 @@ impl Command for HttpHeadCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let url = args.first().ok_or_else(|| miette::miette!("http head: missing URL"))?;
         let obj = curl_head(url, args)?;

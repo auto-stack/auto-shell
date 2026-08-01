@@ -1,5 +1,6 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Value, Obj, Array};
 use miette::{IntoDiagnostic, Result};
@@ -36,7 +37,7 @@ impl Command for GrepCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         // Extract pattern
         let pattern = args.positionals.get(0)
@@ -147,7 +148,7 @@ impl Command for GrepCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         // Handle ExternalStream with line-by-line streaming — avoids
         // buffering the entire output before processing.

@@ -1,5 +1,6 @@
 use crate::cmd::{fs, Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use miette::Result;
 use std::path::Path;
@@ -32,7 +33,7 @@ impl Command for LsCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let all = args.has_flag("all") || args.has_flag("almost-all");
         // -a (all) includes . and ..; -A (almost-all) does not. (bash semantics)
@@ -50,7 +51,7 @@ impl Command for LsCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let all = args.has_flag("all") || args.has_flag("almost-all");
         let include_dots = args.has_flag("all") && !args.has_flag("almost-all");

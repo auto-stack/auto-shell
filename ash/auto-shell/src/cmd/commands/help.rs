@@ -1,5 +1,6 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use miette::Result;
 
@@ -19,7 +20,7 @@ impl Command for HelpCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let text = self.build_help_text(args, shell)?;
         Ok(PipelineData::from_text(text))
@@ -29,7 +30,7 @@ impl Command for HelpCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let text = self.build_help_text(args, shell)?;
         Ok(AtomPipeline::from_atom(Atom::new(
@@ -39,7 +40,7 @@ impl Command for HelpCommand {
 }
 
 impl HelpCommand {
-    fn build_help_text(&self, args: &crate::cmd::parser::ParsedArgs, shell: &Shell) -> Result<String> {
+    fn build_help_text(&self, args: &crate::cmd::parser::ParsedArgs, shell: &dyn ShellContext) -> Result<String> {
         let registry = shell.registry();
 
         if let Some(cmd_name) = args.positionals.get(0) {

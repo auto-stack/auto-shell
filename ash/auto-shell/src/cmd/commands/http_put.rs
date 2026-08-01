@@ -5,6 +5,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -28,7 +29,7 @@ impl Command for HttpPutCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let url = args.first().ok_or_else(|| miette::miette!("http put: missing URL"))?;
         let output = curl_put(url, args)?;
@@ -39,7 +40,7 @@ impl Command for HttpPutCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let url = args.first().ok_or_else(|| miette::miette!("http put: missing URL"))?;
         let output = curl_put(url, args)?;

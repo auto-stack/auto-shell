@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -28,7 +29,7 @@ impl Command for TeeCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let file_arg = args.first()
             .ok_or_else(|| miette::miette!("tee: missing file argument"))?;
@@ -78,7 +79,7 @@ impl Command for TeeCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         // Get text for writing to file without consuming the pipeline
         let text = input.as_text();

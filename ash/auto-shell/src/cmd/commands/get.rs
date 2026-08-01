@@ -1,5 +1,6 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use auto_val::{Value, Array};
 use miette::Result;
@@ -20,7 +21,7 @@ impl Command for GetCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         // Extract field names from positionals
         if args.positionals.is_empty() {
@@ -91,7 +92,7 @@ impl Command for GetCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;

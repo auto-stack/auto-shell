@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use miette::{IntoDiagnostic, Result};
 use auto_val::Value;
@@ -26,7 +27,7 @@ impl Command for RealpathCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         if args.positionals.is_empty() {
             miette::bail!("realpath: missing operand");
@@ -54,7 +55,7 @@ impl Command for RealpathCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy = self.run(args, PipelineData::empty(), shell)?;
         let value = match legacy {
@@ -87,7 +88,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    fn cmd_run(cmd: &RealpathCommand, args: &ParsedArgs, shell: &mut Shell) -> Result<PipelineData> {
+    fn cmd_run(cmd: &RealpathCommand, args: &ParsedArgs, shell: &mut dyn ShellContext) -> Result<PipelineData> {
         cmd.run(args, PipelineData::empty(), shell)
     }
 }

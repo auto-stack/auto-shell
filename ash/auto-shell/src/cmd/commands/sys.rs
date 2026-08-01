@@ -4,6 +4,7 @@
 
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use auto_val::{Value, Obj};
 use miette::Result;
@@ -25,7 +26,7 @@ impl Command for SysCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let (value, _atom_type) = self.build_sys_info(args)?;
         Ok(PipelineData::from_value(value))
@@ -35,7 +36,7 @@ impl Command for SysCommand {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        _shell: &mut Shell,
+        _shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let (value, atom_type) = self.build_sys_info(args)?;
         Ok(AtomPipeline::from_atom(Atom::new(value, atom_type)))

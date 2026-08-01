@@ -5,6 +5,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use auto_val::{Value, Obj, Array};
 use miette::{IntoDiagnostic, Result};
@@ -27,7 +28,7 @@ impl Command for GlobCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let pattern = args.first()
             .ok_or_else(|| miette::miette!("glob: pattern argument required"))?;
@@ -86,7 +87,7 @@ impl Command for GlobCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;

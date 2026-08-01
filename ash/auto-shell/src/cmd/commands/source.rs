@@ -13,10 +13,11 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline, AtomType};
 use miette::Result;
 
-fn do_source(args: &ParsedArgs, shell: &mut Shell) -> Result<()> {
+fn do_source(args: &ParsedArgs, shell: &mut dyn ShellContext) -> Result<()> {
     let path_str = args
         .positionals
         .first()
@@ -53,7 +54,7 @@ impl Command for SourceCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         do_source(args, shell)?;
         Ok(PipelineData::from_text(String::new()))
@@ -63,7 +64,7 @@ impl Command for SourceCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         do_source(args, shell)?;
         Ok(AtomPipeline::from_atom(Atom::new(
@@ -95,7 +96,7 @@ impl Command for DotCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         do_source(args, shell)?;
         Ok(PipelineData::from_text(String::new()))
@@ -105,7 +106,7 @@ impl Command for DotCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         do_source(args, shell)?;
         Ok(AtomPipeline::from_atom(Atom::new(

@@ -5,6 +5,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use auto_val::Value;
 use miette::{IntoDiagnostic, Result};
@@ -27,7 +28,7 @@ impl Command for HeadCommand {
         &self,
         args: &ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let num_lines = parse_named_or_default(args, "lines", 10);
         let num_bytes: Option<usize> = args.flags.get("bytes")
@@ -58,7 +59,7 @@ impl Command for HeadCommand {
         &self,
         args: &ParsedArgs,
         input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;
@@ -76,7 +77,7 @@ fn parse_named_or_default(_args: &ParsedArgs, _name: &str, default: usize) -> us
 }
 
 /// Read content from file argument or pipeline input.
-fn read_content(args: &ParsedArgs, input: &PipelineData, shell: &mut Shell) -> Result<String> {
+fn read_content(args: &ParsedArgs, input: &PipelineData, shell: &mut dyn ShellContext) -> Result<String> {
     // Look for a file path in positionals (skip numeric args that are flag values)
     let file_arg = args.positionals.iter().find(|p| {
         !p.parse::<usize>().is_ok() // not a number

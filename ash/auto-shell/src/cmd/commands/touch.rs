@@ -6,6 +6,7 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::cmd::parser::ParsedArgs;
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::AtomPipeline;
 use miette::{IntoDiagnostic, Result};
 use std::path::PathBuf;
@@ -31,7 +32,7 @@ impl Command for TouchCommand {
         &self,
         args: &ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         if args.positionals.is_empty() {
             miette::bail!("touch: missing file operand");
@@ -90,7 +91,7 @@ impl Command for TouchCommand {
         &self,
         args: &ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let legacy = self.run(args, PipelineData::empty(), shell)?;
         Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy))
@@ -99,7 +100,7 @@ impl Command for TouchCommand {
 
 /// Resolve path relative to shell CWD, honoring the security policy
 /// (Plan 009: --sandbox / --read-only). touch writes, so for_write=true.
-fn resolve_touch_path(arg: &str, shell: &mut Shell) -> Result<PathBuf> {
+fn resolve_touch_path(arg: &str, shell: &mut dyn ShellContext) -> Result<PathBuf> {
     shell.resolve_path(arg, true)
 }
 

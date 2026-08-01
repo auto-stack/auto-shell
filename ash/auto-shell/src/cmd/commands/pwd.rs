@@ -1,5 +1,6 @@
 use crate::cmd::{Command, PipelineData, Signature};
 use crate::shell::Shell;
+use crate::cmd::ShellContext;
 use ash_core::pipeline::{Atom, AtomPipeline};
 use miette::Result;
 
@@ -18,7 +19,7 @@ impl Command for PwdCommand {
         &self,
         _args: &crate::cmd::parser::ParsedArgs,
         _input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let path_str = normalize_path(shell.pwd().display().to_string());
         Ok(PipelineData::from_text(path_str))
@@ -28,7 +29,7 @@ impl Command for PwdCommand {
         &self,
         _args: &crate::cmd::parser::ParsedArgs,
         _input: AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<AtomPipeline> {
         let path_str = normalize_path(shell.pwd().display().to_string());
         Ok(AtomPipeline::from_atom(Atom::path(path_str)))

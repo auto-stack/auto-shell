@@ -248,6 +248,30 @@ impl Signature {
     }
 }
 
+/// The minimal Shell API that commands need (Plan 037 M1).
+///
+/// Commands access the Shell exclusively through these 7 methods — never via
+/// direct field access. Defining them as a trait decouples `Command::run` from
+/// the concrete `Shell` type, so the command layer doesn't depend on the full
+/// Shell implementation (a prerequisite for splitting the TUI into its own
+/// crate in M2).
+pub trait ShellContext {
+    /// Current working directory.
+    fn pwd(&self) -> std::path::PathBuf;
+    /// Resolve a path argument relative to cwd, with sandbox enforcement.
+    fn resolve_path(&self, arg: &str, for_write: bool) -> Result<std::path::PathBuf>;
+    /// Whether this command is the last stage of a pipeline (writes to terminal).
+    fn is_pipeline_last(&self) -> bool;
+    /// The command registry (for help/introspection).
+    fn registry(&self) -> &crate::cmd::registry::CommandRegistry;
+    /// Execute a sub-command string (returns captured stdout, if any).
+    fn execute(&mut self, input: &str) -> Result<Option<String>>;
+    /// Change the working directory.
+    fn cd(&mut self, path: &str) -> Result<()>;
+    /// Source (execute) a script file.
+    fn execute_script_file(&mut self, path: &std::path::Path) -> Result<()>;
+}
+
 /// Trait that all shell commands must implement
 pub trait Command {
     /// Get the command name
@@ -260,11 +284,14 @@ pub trait Command {
     ///
     /// Commands now receive PipelineData (structured Value or text) and return PipelineData.
     /// This enables zero-copy structured data pipelines between commands.
+    ///
+    /// Plan 037 M1: `shell` is now `&mut dyn ShellContext` (the narrow trait),
+    /// not `&mut Shell`, decoupling commands from the concrete Shell type.
     fn run(
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: PipelineData,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<PipelineData>;
 
     /// Execute the command with typed AtomPipeline data
@@ -275,7 +302,7 @@ pub trait Command {
         &self,
         args: &crate::cmd::parser::ParsedArgs,
         input: ash_core::pipeline::AtomPipeline,
-        shell: &mut Shell,
+        shell: &mut dyn ShellContext,
     ) -> Result<ash_core::pipeline::AtomPipeline> {
         let legacy_in = pipeline_convert::atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;
