@@ -142,6 +142,9 @@ impl Command for ShowCommand {
         // syntax highlighting — only the visible lines are highlighted,
         // so the first screen appears in milliseconds regardless of file
         // size.  Only when stdout is a terminal.
+        // Plan 030 M0: the pager needs crossterm (frontend-tui); without it,
+        // `--pager` on a code file falls through to streamed highlighting.
+        #[cfg(feature = "frontend-tui")]
         if want_pager {
             if let Format::Code(ref ext) = fmt {
                 if std::io::stdout().is_terminal() {

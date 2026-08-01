@@ -16,11 +16,19 @@
 
 pub mod config;
 pub mod context;
+// Plan 030 M0: the prompt engine/module styling use nu-ansi-term + reedline —
+// gate them with the TUI frontend. `config` and `context` are terminal-dep-free
+// and consumed by shell.rs, so they stay ungated.
+#[cfg(feature = "frontend-tui")]
 pub mod engine;
+#[cfg(feature = "frontend-tui")]
 pub mod module;
+#[cfg(feature = "frontend-tui")]
 pub mod modules;
 
 pub use config::AshConfig;
 pub use context::AshContext;
+#[cfg(feature = "frontend-tui")]
 pub use engine::AshPrompt;
+#[cfg(feature = "frontend-tui")]
 pub use module::{PromptModule, PromptSegment, SegmentStyle};

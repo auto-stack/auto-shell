@@ -2,7 +2,38 @@
 //!
 //! Provides structured table display with alignment and color support.
 
+// Plan 030 M0: nu-ansi-term is optional (frontend-tui feature). The Table type
+// is consumed by cmd/fs (used by ls/builtin) regardless of frontend, so we keep
+// it compiled but stub out the ANSI styling when the frontend is absent.
+#[cfg(feature = "frontend-tui")]
 use nu_ansi_term::{Color, Style};
+#[cfg(not(feature = "frontend-tui"))]
+mod stub {
+    /// Stand-in for nu_ansi_term::Style when the frontend is absent: a no-op
+    /// that stringifies to its input (no ANSI escapes).
+    #[derive(Debug, Clone, Default)]
+    pub struct Style;
+    impl Style {
+        /// Mirror nu_ansi_term::Style::paint's openness to &str / String by
+        /// accepting any Display value and returning it unchanged.
+        pub fn paint<I: std::fmt::Display>(&self, input: I) -> String {
+            input.to_string()
+        }
+    }
+    pub struct Color;
+    impl Color {
+        pub const Blue: DummyColor = DummyColor;
+        pub const Green: DummyColor = DummyColor;
+        pub const Cyan: DummyColor = DummyColor;
+    }
+    pub struct DummyColor;
+    impl DummyColor {
+        pub fn bold(self) -> Style { Style }
+        pub fn normal(self) -> Style { Style }
+    }
+}
+#[cfg(not(feature = "frontend-tui"))]
+use stub::{Color, Style};
 
 /// Alignment for table columns
 #[derive(Debug, Clone, Copy, PartialEq)]
