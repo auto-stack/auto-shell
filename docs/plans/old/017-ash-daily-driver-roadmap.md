@@ -1,6 +1,8 @@
 # Plan 017: ASH 日常可用 Shell — 完整功能补充路线图
 > 迁入自 auto-lang `docs/plans/302-ash-daily-driver-roadmap.md`（原 Plan 302），已重编号为 Plan 017。
 
+> **状态**: **已归档（2026-08-01）。** Phase 1-4 全部 100% 实现（I/O 重定向、管道、glob、&&/||、别名、函数、pushd/popd/dirs、补全、vi 模式、统一 lexer 等）。经代码核实无一遗漏。
+
 ## Context
 
 ASH (Auto Shell) 已具备 75 个内置命令、结构化管道、后台任务、Tab 补全、模块化 Prompt、历史记录+灰色提示（Plan 012）等功能。但对比 bash/zsh/fish，缺失多个日常必需的 shell 特性，导致用户 5 分钟内就会切回 bash。

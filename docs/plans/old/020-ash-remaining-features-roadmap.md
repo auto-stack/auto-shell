@@ -1,6 +1,8 @@
 # Plan 020: ASH 剩余功能收尾路线图
 > 迁入自 auto-lang `docs/plans/archive/309-ash-remaining-features-roadmap.md`（原 Plan 309），已重编号为 Plan 020。
 
+> **状态**: **已归档（2026-08-01）。** 绝大部分功能已实现（heredoc、Atom 管道、统一 Command 框架、插件系统由 Plan 033 实现等）。残留的架构优化项（ash-tui crate 拆分、Command trait 解耦、Block UX）收入 [Plan 037](../037-cli-architecture-cleanup.md)。
+
 ## Context
 
 近期 ash 共有 8 篇计划（281 / 291 / 295 / 297 / 301 / 302 / 303 / 304）。经代码核实，281、297 已完成，302 / 303 基本完成，其余每篇都残留若干未做项。本计划**把所有未完成项收拢成单一总计划**，每项精确引用老计划的对应章节作为详细设计来源；**本计划全部完成后，所有老 ash 计划即可统一标记为完成**。

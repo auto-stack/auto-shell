@@ -2,8 +2,8 @@
 > 迁入自 auto-lang `docs/plans/archive/291-autoshell-warp-design.md`（原 Plan 291），已重编号为 Plan 013。
 
 > **日期**: 2026-06-10
-> **最后更新**: 2026-06-11
-> **状态**: Phase 1-2 已完成，Phase 3-4 推迟到未来单独规划
+> **最后更新**: 2026-08-01
+> **状态**: **已归档（2026-08-01）。** Phase 0-2 完成；Phase 3（AI 集成）已由 Plan 027/029 基本实现（auto-ai-agent）；Phase 4（Block UX 现代化）的残留工作收入 [Plan 037](../037-cli-architecture-cleanup.md)。功能性工作已被后续计划覆盖，本计划不再单独推进。
 > **策略**: 自底向上，数据管线优先
 > **总预估**: 15-22 周（实际 Phase 0-2 已用约 2 周）
 

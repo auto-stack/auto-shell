@@ -2,8 +2,8 @@
 > 迁入自 auto-lang `docs/plans/295-ash-layered-architecture-ratatui.md`（原 Plan 295），已重编号为 Plan 014。
 
 > **日期**: 2026-06-10
-> **状态**: 设计阶段
-> **影响范围**: Plan 013/292/293/294 全部需要调整
+> **最后更新**: 2026-08-01
+> **状态**: **已归档（2026-08-01）。** 核心架构已成现实（ash-core 纯逻辑 crate + ratatui buffer→ANSI 桥 + ash-gui 独立 workspace）。残留的 ash-tui crate 拆分 + Command trait 解耦收入 [Plan 037](../037-cli-architecture-cleanup.md)。`frontend-tui` feature flag 已实质性达成依赖隔离目标。
 > **前置条件**: 无（这是其他计划的前置）
 
 ---
