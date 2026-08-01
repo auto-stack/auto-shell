@@ -13,6 +13,20 @@ use iced::{Color, Element, Length};
 
 use crate::block::{Block, BlockStatus};
 
+/// One entry in the tool browser sidebar: a command name + its description.
+#[derive(Debug, Clone)]
+pub struct ToolEntry {
+    pub name: String,
+    pub description: String,
+}
+
+/// One entry in the SmartCommand browser: name + description.
+#[derive(Debug, Clone)]
+pub struct SmartCommandEntry {
+    pub name: String,
+    pub description: String,
+}
+
 /// The messages the GUI widgets produce.
 #[derive(Debug, Clone)]
 pub enum GuiMsg {
@@ -24,14 +38,21 @@ pub enum GuiMsg {
     PickCompletion(String),
     /// User clicked a file name cell (open it).
     OpenPath(String),
+    /// Toggle the tool/SmartCommand sidebar.
+    ToggleSidebar,
+    /// User clicked a tool in the sidebar → put its name in the input.
+    PickTool(String),
+    /// User clicked a SmartCommand → run it.
+    RunSmartCommand(String),
 }
 
-/// The full GUI view: a scrollable list of Blocks + an input box (with
-/// completion suggestions) pinned at the bottom.
+/// The full GUI view: optional tool sidebar + a scrollable list of Blocks + an
+/// input box (with completion suggestions) pinned at the bottom.
 pub fn block_list_view<'a>(
     blocks: &'a [Block],
     input: &'a str,
     suggestions: &'a [String],
+    sidebar: Option<&'a SidebarData>,
 ) -> Element<'a, GuiMsg> {
     // Build the block list (newest at the bottom).
     let block_widgets: Vec<Element<GuiMsg>> = if blocks.is_empty() {
@@ -43,7 +64,6 @@ pub fn block_list_view<'a>(
 
     // Completion suggestions (if any), just above the input.
     let mut footer_children: Vec<Element<GuiMsg>> = Vec::new();
-    // Input box: Enter runs.
     let input_box = TextInput::new("type a command (e.g. ls)", input)
         .on_input(GuiMsg::InputChanged)
         .on_submit(GuiMsg::RunCommand)
@@ -62,8 +82,89 @@ pub fn block_list_view<'a>(
     }
     let footer = Column::with_children(footer_children).spacing(4);
 
-    let content = column![scrollable(list).height(Length::Fill), footer].spacing(8);
-    container(content).padding(12).into()
+    let main = column![scrollable(list).height(Length::Fill), footer].spacing(8);
+    let main_area: Element<GuiMsg> = container(main).padding(12).into();
+
+    // Optional sidebar (tool browser + SmartCommand browser).
+    let toggle_btn = iced::widget::button("🛠 tools")
+        .on_press(GuiMsg::ToggleSidebar)
+        .style(iced::widget::button::primary);
+    match sidebar {
+        Some(data) => {
+            let sidebar_el = sidebar_view(data);
+            row![sidebar_el, column![toggle_btn, main_area].spacing(0)]
+                .spacing(0)
+                .into()
+        }
+        None => column![toggle_btn, main_area].spacing(0).into(),
+    }
+}
+
+/// The sidebar's data: tool entries + SmartCommand entries.
+pub struct SidebarData {
+    pub tools: Vec<ToolEntry>,
+    pub smart_commands: Vec<SmartCommandEntry>,
+}
+
+/// Render the sidebar: a scrollable list of commands + SmartCommands.
+fn sidebar_view<'a>(data: &'a SidebarData) -> Element<'a, GuiMsg> {
+    let mut children: Vec<Element<GuiMsg>> = Vec::new();
+    children.push(
+        text("Commands")
+            .style(|_t| text::Style {
+                color: Some(Color::from_rgb8(120, 160, 255)),
+            })
+            .into(),
+    );
+    for t in &data.tools {
+        let name = t.name.clone();
+        children.push(
+            mouse_area(
+                row![
+                    text(t.name.clone()).style(|_t| text::Style {
+                        color: Some(Color::from_rgb8(180, 220, 255))
+                    }),
+                    text(t.description.as_str()).size(11).style(|_t| text::Style {
+                        color: Some(Color::from_rgb8(110, 110, 110))
+                    }),
+                ]
+                .spacing(6),
+            )
+            .on_press(GuiMsg::PickTool(name))
+            .into(),
+        );
+    }
+    if !data.smart_commands.is_empty() {
+        children.push(
+            text("SmartCommands")
+                .style(|_t| text::Style {
+                    color: Some(Color::from_rgb8(180, 140, 255)),
+                })
+                .into(),
+        );
+        for s in &data.smart_commands {
+            let name = s.name.clone();
+            children.push(
+                mouse_area(
+                    row![
+                        text(s.name.clone()).style(|_t| text::Style {
+                            color: Some(Color::from_rgb8(210, 180, 255))
+                        }),
+                        text(s.description.as_str()).size(11).style(|_t| text::Style {
+                            color: Some(Color::from_rgb8(110, 110, 110))
+                        }),
+                    ]
+                    .spacing(6),
+                )
+                .on_press(GuiMsg::RunSmartCommand(name))
+                .into(),
+            );
+        }
+    }
+    let list = Column::with_children(children).spacing(3);
+    container(scrollable(list).width(220).height(Length::Fill))
+        .padding(8)
+        .into()
 }
 
 /// Render one Block: a status-colored header line + the output body.

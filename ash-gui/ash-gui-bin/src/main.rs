@@ -122,6 +122,10 @@ struct AshGui {
     command_names: Vec<String>,
     /// Current completion suggestions (derived from input, cached for view).
     suggestions: Vec<String>,
+    /// Whether the tool/SmartCommand sidebar is shown.
+    sidebar_open: bool,
+    /// Sidebar entries (commands + SmartCommands), built once at boot.
+    sidebar_data: renderer::SidebarData,
 }
 
 #[derive(Debug, Clone)]
@@ -136,11 +140,36 @@ pub enum Message {
 impl AshGui {
     /// Initial state (iced 0.14 `application(boot, ...)` needs `Fn() -> State`).
     fn boot() -> Self {
-        // Build a throwaway Shell just to harvest the command-name list for
-        // completion. The real execution Shell lives on the worker thread.
-        let registry = auto_shell::Shell::new();
-        let command_names: Vec<String> = registry.registry().names().cloned().collect();
-        drop(registry);
+        // Build a throwaway Shell to harvest the command list (for completion
+        // + the tool sidebar). The real execution Shell lives on the worker.
+        let probe = auto_shell::Shell::new();
+        let reg = probe.registry();
+        let mut command_names: Vec<String> = reg.names().cloned().collect();
+        command_names.sort();
+        // Tool sidebar: name + description for every registered command.
+        let tools: Vec<renderer::ToolEntry> = command_names
+            .iter()
+            .filter_map(|n| {
+                reg.get(n).map(|cmd| {
+                    let sig = cmd.signature();
+                    renderer::ToolEntry {
+                        name: sig.name,
+                        description: sig.description,
+                    }
+                })
+            })
+            .collect();
+        drop(probe);
+
+        // SmartCommand sidebar: list available smart commands.
+        let smart_specs = auto_shell::smart_command::loader::load_all();
+        let smart_commands: Vec<renderer::SmartCommandEntry> = smart_specs
+            .iter()
+            .map(|s| renderer::SmartCommandEntry {
+                name: s.name.clone(),
+                description: s.description.clone(),
+            })
+            .collect();
 
         let shell = ShellHandle::spawn();
         Self {
@@ -151,6 +180,11 @@ impl AshGui {
             history_cursor: None,
             suggestions: Vec::new(),
             command_names,
+            sidebar_open: false,
+            sidebar_data: renderer::SidebarData {
+                tools,
+                smart_commands,
+            },
         }
     }
 
@@ -202,11 +236,25 @@ impl AshGui {
             }
             Message::Gui(GuiMsg::OpenPath(path)) => {
                 // M4: clicking a filename opens it with the OS default handler.
-                // Done on the GUI thread via a detached spawn (no Shell needed —
-                // this is a pure OS launch, best-effort, failures ignored).
                 if !path.trim().is_empty() {
                     open_with_default(&path);
                 }
+            }
+            Message::Gui(GuiMsg::ToggleSidebar) => {
+                self.sidebar_open = !self.sidebar_open;
+            }
+            Message::Gui(GuiMsg::PickTool(name)) => {
+                // Put the picked command name into the input for the user to
+                // complete with args + Enter.
+                self.input = format!("{name} ");
+                self.suggestions = self.completion_suggestions();
+            }
+            Message::Gui(GuiMsg::RunSmartCommand(name)) => {
+                // Insert `smart run <name>` into the input for the user to add
+                // args + run. (Direct SmartCommand execution needs the executor
+                // + arg filling, which is the M5 AI-panel path, deferred.)
+                self.input = format!("smart run {name} ");
+                self.suggestions = self.completion_suggestions();
             }
             Message::Results(results) => {
                 for r in results {
@@ -272,7 +320,13 @@ impl AshGui {
     }
 
     fn view(&self) -> Element<Message> {
-        block_list_view(&self.blocks, &self.input, &self.suggestions).map(Message::Gui)
+        let sidebar = if self.sidebar_open {
+            Some(&self.sidebar_data)
+        } else {
+            None
+        };
+        block_list_view(&self.blocks, &self.input, &self.suggestions, sidebar)
+            .map(Message::Gui)
     }
 }
 
