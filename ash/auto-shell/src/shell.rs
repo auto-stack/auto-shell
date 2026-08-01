@@ -964,6 +964,10 @@ impl Shell {
         }
 
         // Try ratatui table rendering for structured Atom data.
+        // Plan 030 M1: now goes through the shared Renderer-trait path —
+        // `render_pipeline_to_structured` (ash-core, pure logic) produces a
+        // frontend-agnostic RenderedOutput, then `rendered_to_ansi` (TUI) draws
+        // it. Visually identical to the old `render_table_with` (golden-tested).
         // Plan 030 M0: gated behind frontend-tui (needs crossterm::terminal::size
         // + the ratatui renderer). Without the frontend, structured data falls
         // through to plain text.
@@ -973,12 +977,15 @@ impl Shell {
                 let term_width = crossterm::terminal::size()
                     .map(|(w, _)| w)
                     .unwrap_or(80);
-                if let Some(rendered) = crate::frontend::renderer::render_table_with(
-                    &atom.value,
-                    term_width,
-                    self.ls_icons,
-                ) {
-                    return rendered;
+                if let Some(rendered) = ash_core::renderer::render_pipeline_to_structured(&pipeline)
+                {
+                    if let Some(out) = crate::frontend::renderer::rendered_to_ansi(
+                        &rendered,
+                        term_width,
+                        self.ls_icons,
+                    ) {
+                        return out;
+                    }
                 }
             }
         }

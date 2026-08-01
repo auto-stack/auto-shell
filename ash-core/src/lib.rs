@@ -21,5 +21,6 @@ pub mod completions;
 pub mod data;
 pub mod pipeline;
 pub mod parser;
+pub mod renderer;
 pub mod security;
 pub mod shell;
