@@ -89,7 +89,7 @@ Layer 5(独立后续):
 | M5 | 工具浏览器侧边栏（79 命令 + 描述，可折叠）+ SmartCommand 浏览器（列出 smart 命令 + 插入运行） | ✅ |
 | M5（deferred） | AI 面板（F4 chat + NL→SmartCommand）—— 需 auto-ai-client + 运行的 daemon | 未做 |
 
-详见 `030-ash-gui.md`。**M2 关键检查点通过**——"结构化 Atom → 富 widget"的核心假设成立。M3-M5 把它从单输出演示打磨成日常可用的 GUI 终端：Block 历史、历史导航、补全、全 AtomType 渲染、MemoryInfo 仪表、点击打开文件、工具/SmartCommand 浏览器侧边栏。
+详见 `old/030-ash-gui.md`。**M2 关键检查点通过**——"结构化 Atom → 富 widget"的核心假设成立。M3-M5 把它从单输出演示打磨成日常可用的 GUI 终端：Block 历史、历史导航、补全、全 AtomType 渲染、MemoryInfo 仪表、点击打开文件、工具/SmartCommand 浏览器侧边栏。
 
 **M5 的 AI 面板（F4 chat + NL→SmartCommand）deferred**：GUI 当前无 auto-ai-client 依赖、Shell 无 AI client，AI 面板需要运行的 daemon 才能验证。这是 M5 中唯一需要 AI 后端的部分；工具浏览器 + SmartCommand 浏览器（纯 UI + Shell 能力）已完成。
 
