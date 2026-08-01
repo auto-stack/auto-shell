@@ -13,7 +13,7 @@
 |---|---|---|---|---|
 | **028** | Agent 执行引擎 | (已删,M1+M2 已落地) | (已删) | M3+M4 待定 |
 | **029** | AI 能力增强(含 SmartCommand) | ✅ 1064 行（v1 已过时，§0 已重评） | ✅ 完成（5 子能力全落地，见 `old/029-ai-capabilities.md`） | ✅ 完成（仅 1 个不阻塞的小缺口：`.at` 配 preferred_provider） |
-| **030** | ash-gui(Shell-native UI) | ✅ 1048 行 | 🟡 M0-M2 完成（feature 隔离 + Renderer trait + 最小 GUI），余 M3-M5 | 核心假设已验证（M2）；M3-M5 为增量扩展 |
+| **030** | ash-gui(Shell-native UI) | ✅ 1048 行 | 🟡 M0-M4 完成（feature 隔离 + Renderer trait + 最小 GUI + Block 列表 + 全 AtomType 渲染），余 M5 | 核心假设已验证（M2）；M5（AI 面板）为最后增量 |
 | **031** | 数据处理框架(lazy pipeline) | ✅ 538 行 | ✅ 已归档（M0-M3 完成） | ✅ 完成 |
 | **032** | 智能补全(AI 层) | ✅ 405 行 | ✅ 已实施并归档(M0-M3 + 审计修复,见 `old/032-intelligent-completion.md`) | ✅ 完成 |
 | **033** | 插件生态(data-only) | ✅ 437 行 | ✅ 完成（M0-M3 全部完成 + 复审修复，见 `old/033-plugin-ecosystem.md`） | ✅ 完成（v1） |
@@ -77,16 +77,18 @@ Layer 5(独立后续):
 
 详见 `old/029-ai-capabilities.md`（auto-shell ~2700 行 + 43 测试，auto-ai 侧前置依赖已合并）。唯一小缺口：`.at` 配置层未加 `preferred_provider` 字段（不阻塞，低优先级）。
 
-### 030 ash-gui(已有详细 plan) 🟡 M0-M2 完成（核心假设已验证）
+### 030 ash-gui(已有详细 plan) 🟡 M0-M4 完成（核心假设已验证）
 
 | M | 内容 | 状态 |
 |---|---|---|
 | M0 | auto-shell feature 隔离（`frontend-tui` feature，`--no-default-features` lib 可编译） | ✅ |
 | M1 | Renderer trait + RenderedOutput（ash-core 纯逻辑）+ TuiRenderer + golden 对比（视觉零变化） | ✅ |
 | M2 | 最小 GUI（**关键检查点**：ash-gui-bin 跑起来，ls → iced 表格 widget；核心假设验证通过） | ✅ |
-| M3-M5 | 日常可用/全 AtomType/AI 面板（纯增量扩展） | 未做 |
+| M3 | Block 列表（命令历史 + 状态着色）+ 历史导航（↑↓）+ 命令名补全 | ✅ |
+| M4 | 全 AtomType 渲染（Record 路由 + MemoryInfo 进度条 + atom_type 分派）+ CellTag 点击打开文件 | ✅ |
+| M5 | AI 面板 + SmartCommand 表单 + 工具浏览器（依赖 Plan 029，已完成） | 未做 |
 
-详见 `030-ash-gui.md`。**M2 关键检查点通过**——"结构化 Atom → 富 widget"的核心假设成立（ls 的 FileList 在 GUI 里渲染成可交互表格）。M3-M5（Block 列表 + 富输入 + 补全 / 18 种 AtomType 全 widget / AI 面板 + SmartCommand 表单）是建立在此基础上的增量扩展，无技术阻塞。
+详见 `030-ash-gui.md`。**M2 关键检查点通过**——"结构化 Atom → 富 widget"的核心假设成立。M3 把单输出升级为命令历史 Block 列表（日常可用）；M4 让 sys mem 显示进度条仪表、点击文件名能打开。研究发现多数 AtomType 已自动表格渲染，M4 实际只补了 Record 路由 + MemoryInfo 进度条 + CellTag 交互。M5（AI 面板）是最后增量，无技术阻塞。
 
 ### 031 数据处理(独立性强,4-6 周)
 

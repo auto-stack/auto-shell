@@ -200,8 +200,13 @@ impl AshGui {
                 };
                 self.suggestions = self.completion_suggestions();
             }
-            Message::Gui(GuiMsg::OpenPath(_path)) => {
-                // M4 hook: clicking a filename would open it. For M3 this is a no-op.
+            Message::Gui(GuiMsg::OpenPath(path)) => {
+                // M4: clicking a filename opens it with the OS default handler.
+                // Done on the GUI thread via a detached spawn (no Shell needed —
+                // this is a pure OS launch, best-effort, failures ignored).
+                if !path.trim().is_empty() {
+                    open_with_default(&path);
+                }
             }
             Message::Results(results) => {
                 for r in results {
@@ -310,6 +315,18 @@ fn render_structured(shell: &mut auto_shell::Shell, input: &str) -> Option<Rende
 /// Poll finished results periodically.
 fn tick_subscription(_state: &AshGui) -> iced::Subscription<Message> {
     iced::time::every(std::time::Duration::from_millis(100)).map(|_| Message::Tick)
+}
+
+/// Open `path` with the OS default application (best-effort, detached).
+fn open_with_default(path: &str) {
+    use std::process::Command;
+    let _ = if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/C", "start", "", path]).spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(path).spawn()
+    } else {
+        Command::new("xdg-open").arg(path).spawn()
+    };
 }
 
 pub fn main() -> iced::Result {

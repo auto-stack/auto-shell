@@ -4,9 +4,10 @@
 //! status-colored header (command + status icon) and its `RenderedOutput` body.
 //! M2's `rendered_to_iced` is reused for each Block's body.
 
+use ash_core::pipeline::AtomType;
 use ash_core::renderer::{CellTag, FileNameKind, RenderedCell, RenderedOutput};
 use iced::widget::{
-    column, container, mouse_area, row, scrollable, space, text, text_input, Column, TextInput,
+    column, container, mouse_area, progress_bar, row, scrollable, space, text, Column, TextInput,
 };
 use iced::{Color, Element, Length};
 
@@ -98,30 +99,75 @@ fn status_icon(status: &BlockStatus) -> (&'static str, Color) {
 
 // ── RenderedOutput → iced widget (carried over from M2, with M4 hooks) ──────
 
-/// Render a [`RenderedOutput`] into an iced [`Element`].
+/// Render a [`RenderedOutput`] into an iced [`Element`]. Plan 030 M4: dispatches
+/// on `atom_type` for specialized widgets (MemoryInfo gauge, BuildResult status
+/// card, SystemInfo dashboard); everything else falls back to table/record/text.
 pub fn rendered_to_iced(rendered: &RenderedOutput) -> Element<'_, GuiMsg> {
     match rendered {
-        RenderedOutput::Table { columns, rows, .. } => table_view(columns, rows),
+        RenderedOutput::Table { columns, rows, atom_type } => {
+            // Specialized table widgets by atom_type (future: disk charts, etc.).
+            match atom_type {
+                _ => table_view(columns, rows),
+            }
+        }
+        RenderedOutput::Record { fields, atom_type } => record_view(fields, *atom_type),
         RenderedOutput::Text(t) => text(t.as_str()).into(),
         RenderedOutput::Empty => text("").into(),
-        RenderedOutput::Record(pairs) => {
-            let rec_rows: Vec<Element<GuiMsg>> = pairs
-                .iter()
-                .map(|(k, cell)| {
-                    let v = match cell {
-                        RenderedCell::Text(t) | RenderedCell::Tagged { text: t, .. } => t.clone(),
-                    };
-                    row![text(format!("{k}: ")), text(v)].spacing(4).into()
-                })
-                .collect();
-            column(rec_rows).into()
-        }
         RenderedOutput::Error { message, .. } => text(message.as_str())
             .style(|_theme| text::Style {
                 color: Some(Color::from_rgb8(220, 80, 80)),
             })
             .into(),
     }
+}
+
+/// Render a single record. MemoryInfo gets a usage gauge; everything else is a
+/// key/value list. (BuildResult/RunResult are Text atoms, not records, so they
+/// surface as a status card via the Text branch in the caller if desired.)
+fn record_view<'a>(fields: &'a [(String, RenderedCell)], atom_type: AtomType) -> Element<'a, GuiMsg> {
+    // MemoryInfo: show a usage progress bar if usage_percent is present.
+    if matches!(atom_type, AtomType::MemoryInfo) {
+        if let Some(bar) = memory_usage_bar(fields) {
+            let mut children: Vec<Element<GuiMsg>> = vec![bar];
+            children.push(kv_list(fields));
+            return column(children).spacing(8).into();
+        }
+    }
+    kv_list(fields)
+}
+
+/// A horizontal progress bar for MemoryInfo's usage_percent (0..100).
+fn memory_usage_bar<'a>(fields: &'a [(String, RenderedCell)]) -> Option<Element<'a, GuiMsg>> {
+    let pct = fields.iter().find_map(|(k, c)| {
+        if k == "usage_percent" || k == "usage" {
+            let s = match c {
+                RenderedCell::Text(t) | RenderedCell::Tagged { text: t, .. } => t.clone(),
+            };
+            s.trim_end_matches('%').parse::<f32>().ok()
+        } else {
+            None
+        }
+    })?;
+    let label = format!("memory usage: {:.0}%", pct);
+    // iced progress_bar: value in 0.0..=1.0.
+    let bar: Element<GuiMsg> = progress_bar(0.0..=100.0, pct).into();
+    Some(column![text(label), bar].spacing(4).into())
+}
+
+/// A plain key/value list (the default record rendering).
+fn kv_list<'a>(fields: &'a [(String, RenderedCell)]) -> Element<'a, GuiMsg> {
+    let rows: Vec<Element<GuiMsg>> = fields
+        .iter()
+        .map(|(k, cell)| {
+            let v = match cell {
+                RenderedCell::Text(t) | RenderedCell::Tagged { text: t, .. } => t.clone(),
+            };
+            row![text(format!("{k}: ")).style(|_t| text::Style {
+                color: Some(Color::from_rgb8(150, 150, 150))
+            }), text(v)].spacing(4).into()
+        })
+        .collect();
+    column(rows).into()
 }
 
 /// Render a table as a header row + data rows.

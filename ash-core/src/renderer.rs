@@ -30,8 +30,13 @@ pub enum RenderedOutput {
         rows: Vec<Vec<RenderedCell>>,
         atom_type: AtomType,
     },
-    /// A single record (key → cell). (Forward-compat; M1 does not route here.)
-    Record(Vec<(String, RenderedCell)>),
+    /// A single record (key → cell). Plan 030 M4: now routed for single-Obj
+    /// atoms (stat / date / version / sys mem), carrying atom_type so frontends
+    /// can pick a specialized widget (e.g. a gauge for MemoryInfo).
+    Record {
+        fields: Vec<(String, RenderedCell)>,
+        atom_type: AtomType,
+    },
     /// Plain text.
     Text(String),
     /// Empty output.
@@ -121,6 +126,27 @@ pub fn render_pipeline_to_structured(pipeline: &AtomPipeline) -> Option<Rendered
     if !atom.is_structured() {
         return None;
     }
+
+    // Plan 030 M4: a single object → RenderedOutput::Record (stat/date/version/
+    // sys mem). Carries atom_type so frontends can specialize (e.g. MemoryInfo
+    // gauge).
+    if let auto_val::Value::Obj(obj) = &atom.value {
+        let fields: Vec<(String, RenderedCell)> = obj
+            .iter()
+            .map(|(k, v)| {
+                let text = format_cell_value(v);
+                (k.to_string(), RenderedCell::Tagged { text, tag: CellTag::Plain })
+            })
+            .collect();
+        if !fields.is_empty() {
+            return Some(RenderedOutput::Record {
+                fields,
+                atom_type: atom.atom_type,
+            });
+        }
+        return None;
+    }
+
     let arr = match &atom.value {
         auto_val::Value::Array(a) => a,
         _ => return None,
@@ -373,6 +399,31 @@ mod tests {
     #[test]
     fn render_returns_none_for_unstructured_atom() {
         let pipeline = atom_of(Value::str("plain"), AtomType::Text);
+        assert!(render_pipeline_to_structured(&pipeline).is_none());
+    }
+
+    #[test]
+    fn render_single_obj_becomes_record_with_atom_type() {
+        // Plan 030 M4: a single object (stat / date / sys mem) → Record, and the
+        // atom_type is carried so frontends can specialize (e.g. MemoryInfo gauge).
+        let mut o = Obj::new();
+        o.set("total", Value::Int(8192));
+        o.set("usage_percent", Value::Int(72));
+        let pipeline = atom_of(Value::Obj(o), AtomType::MemoryInfo);
+        let ro = render_pipeline_to_structured(&pipeline).expect("single obj is a record");
+        match ro {
+            RenderedOutput::Record { fields, atom_type } => {
+                assert_eq!(atom_type, AtomType::MemoryInfo);
+                assert_eq!(fields.len(), 2);
+                assert!(fields.iter().any(|(k, _)| k == "usage_percent"));
+            }
+            other => panic!("expected Record, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn render_empty_obj_returns_none() {
+        let pipeline = atom_of(Value::Obj(Obj::new()), AtomType::Record);
         assert!(render_pipeline_to_structured(&pipeline).is_none());
     }
 
