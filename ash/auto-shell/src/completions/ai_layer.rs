@@ -100,12 +100,18 @@ fn in_flight() -> &'static Mutex<HashSet<(usize, String)>> {
 /// concurrently would clobber each other's state. Tests take this lock first
 /// to force serial execution. `pub(crate)` so cross-module integration tests
 /// share the same lock. Only built under `cfg(test)`.
-#[cfg(test)]
-pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
+///
+/// Plan 032 M2: test lock for serializing tests that touch the process-global
+/// AI cache. `pub` (not `pub(crate)`) and not `#[cfg(test)]`-gated because the
+/// `completions_reedline` integration tests now live in the ash-tui crate and
+/// must reach this across the crate boundary. `#[doc(hidden)]` marks it as an
+/// internal test hook — not part of the public API.
+#[doc(hidden)]
+pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Borrow the test lock (mirrors the `in_flight()` access pattern).
-#[cfg(test)]
-pub(crate) fn test_lock() -> &'static Mutex<()> {
+#[doc(hidden)]
+pub fn test_lock() -> &'static Mutex<()> {
     &TEST_LOCK
 }
 
@@ -263,7 +269,12 @@ fn end_in_flight(slot: AiSlot, key: &str) {
 /// result (simulating the background thread having completed) without needing
 /// a live daemon — this is the seam that makes `complete()` → `Suggestion`
 /// AI-merge behavior unit-testable.
-pub(crate) fn store(slot: AiSlot, key: String, completions: Vec<Completion>) {
+///
+/// Plan 037 M2.2: `pub` (not `pub(crate)`) + `#[doc(hidden)]` because the
+/// `completions_reedline` integration tests now live in ash-tui and must reach
+/// this across the crate boundary. Internal test hook — not public API.
+#[doc(hidden)]
+pub fn store(slot: AiSlot, key: String, completions: Vec<Completion>) {
     let idx = slot_index(slot);
     if let Ok(mut g) = AI_PENDING.lock() {
         g[idx] = Some(AiEntry { key, completions });

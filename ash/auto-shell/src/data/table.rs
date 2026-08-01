@@ -321,9 +321,12 @@ mod tests {
             modified: None,
         };
 
+        // Plan 037 M2.2: styling is a no-op stub now (real color comes from
+        // the RenderHook in ash-tui). Verify style() still returns a Style and
+        // paint() is an identity (no ANSI escapes).
         let style = entry.style();
-        // Green for .rs files
-        assert!(format!("{:?}", style).contains("Green"));
+        let painted = style.paint("test.rs");
+        assert_eq!(painted, "test.rs");
     }
 
     #[test]
@@ -347,8 +350,9 @@ mod tests {
             modified: None,
         };
 
+        // Plan 037 M2.2: directory styling is also a no-op stub now.
         let style = entry.style();
-        // Blue bold for directories
-        assert!(format!("{:?}", style).contains("Blue"));
+        let painted = style.paint("src");
+        assert_eq!(painted, "src");
     }
 }
