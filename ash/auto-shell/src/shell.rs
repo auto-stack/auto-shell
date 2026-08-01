@@ -104,6 +104,24 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
 }
 
 /// Shell state and context
+/// Plan 037 M2.1: an injectable renderer for structured output.
+///
+/// `Shell::format_output` calls this hook (if set) to render structured Atom
+/// data (file lists, tables, etc.) as a formatted string. The TUI frontend
+/// (ash-tui) injects a ratatui-based implementation; without a hook, Shell
+/// falls back to plain text. This decouples Shell from the terminal renderer
+/// without changing the `execute → String` API.
+pub trait RenderHook: Send {
+    /// Render a structured `RenderedOutput` to a display string, or `None` to
+    /// let Shell fall back to plain text. `term_width` is the terminal width.
+    fn render_structured(
+        &self,
+        rendered: &ash_core::renderer::RenderedOutput,
+        term_width: u16,
+        icons: crate::config::IconStyle,
+    ) -> Option<String>;
+}
+
 pub struct Shell {
     current_dir: PathBuf,
     vars: ShellVars,
@@ -153,6 +171,10 @@ pub struct Shell {
     /// Plan 034 Bug 2: Positional args passed to a script (`ash script.ash arg1 arg2`).
     /// Stored so `$1`/`$@`/`$#` can be interpolated inside the script.
     script_args: Vec<String>,
+    /// Plan 037 M2.1: injectable structured-output renderer. `None` (default)
+    /// means Shell renders structured data as plain text. The TUI frontend
+    /// injects a ratatui-based hook via `set_render_hook`.
+    render_hook: Option<Box<dyn RenderHook>>,
 }
 
 /// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
@@ -356,6 +378,7 @@ impl Shell {
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
             script_args: Vec::new(), // Plan 034 Bug 2: no script args by default
+            render_hook: None, // Plan 037 M2.1: no structured renderer by default
         };
 
         // Plan 011 (MS3-B): install the shell-host bridge on the AutoVM so
@@ -989,28 +1012,22 @@ impl Shell {
             return pipeline.into_text();
         }
 
-        // Try ratatui table rendering for structured Atom data.
-        // Plan 030 M1: now goes through the shared Renderer-trait path —
-        // `render_pipeline_to_structured` (ash-core, pure logic) produces a
-        // frontend-agnostic RenderedOutput, then `rendered_to_ansi` (TUI) draws
-        // it. Visually identical to the old `render_table_with` (golden-tested).
-        // Plan 030 M0: gated behind frontend-tui (needs crossterm::terminal::size
-        // + the ratatui renderer). Without the frontend, structured data falls
-        // through to plain text.
-        #[cfg(feature = "frontend-tui")]
+        // Try structured rendering for Atom data.
+        // Plan 037 M2.1: now goes through the injectable RenderHook (if set).
+        // The TUI frontend injects a ratatui renderer; without a hook, structured
+        // data falls through to plain text. This replaces the old
+        // #[cfg(feature="frontend-tui")] direct call to frontend::renderer.
         if let AtomPipeline::Atom(ref atom) = pipeline {
             if atom.is_structured() {
-                let term_width = crossterm::terminal::size()
-                    .map(|(w, _)| w)
-                    .unwrap_or(80);
                 if let Some(rendered) = ash_core::renderer::render_pipeline_to_structured(&pipeline)
                 {
-                    if let Some(out) = crate::frontend::renderer::rendered_to_ansi(
-                        &rendered,
-                        term_width,
-                        self.ls_icons,
-                    ) {
-                        return out;
+                    if let Some(hook) = &self.render_hook {
+                        let term_width = 80; // width hint; the hook may override
+                        if let Some(out) =
+                            hook.render_structured(&rendered, term_width, self.ls_icons)
+                        {
+                            return out;
+                        }
                     }
                 }
             }
@@ -1092,6 +1109,13 @@ impl Shell {
     /// these as bash-style text instead of a ratatui table.
     pub fn set_bash_compat(&mut self, on: bool) {
         self.bash_compat = on;
+    }
+
+    /// Plan 037 M2.1: inject a structured-output renderer. The TUI frontend
+    /// calls this to give Shell a ratatui-based `RenderHook`; without it,
+    /// structured data renders as plain text.
+    pub fn set_render_hook(&mut self, hook: Box<dyn RenderHook>) {
+        self.render_hook = Some(hook);
     }
 
     /// Whether the currently-executing command is the final (or only) one in

@@ -45,6 +45,26 @@ impl ash_core::renderer::Renderer for TuiRenderer {
     }
 }
 
+/// Plan 037 M2.1: a [`RenderHook`] implementation that wraps
+/// [`rendered_to_ansi`] + `crossterm::terminal::size()`. The TUI frontend
+/// injects this into Shell so structured data renders as ratatui tables without
+/// Shell depending on the terminal renderer directly.
+pub struct TuiRenderHook;
+
+impl crate::shell::RenderHook for TuiRenderHook {
+    fn render_structured(
+        &self,
+        rendered: &RenderedOutput,
+        _term_width: u16,
+        icons: IconStyle,
+    ) -> Option<String> {
+        let term_width = crossterm::terminal::size()
+            .map(|(w, _)| w)
+            .unwrap_or(80);
+        rendered_to_ansi(rendered, term_width, icons)
+    }
+}
+
 /// Render a [`RenderedOutput`] to an ANSI string at the given terminal width
 /// and icon style. Returns `None` for non-Table variants (the caller falls
 /// back to plain text), reproducing `render_table_with`'s old "not a table"

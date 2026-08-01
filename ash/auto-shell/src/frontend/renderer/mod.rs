@@ -12,3 +12,4 @@ pub mod tui;
 pub use buffer_to_ansi::{buffer_to_ansi, buffer_to_plain};
 pub use table::{render_table, render_table_with};
 pub use tui::{rendered_to_ansi, TuiRenderer};
+pub use tui::TuiRenderHook;

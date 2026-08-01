@@ -33,6 +33,9 @@ impl Repl {
     /// Create a new REPL instance
     pub fn new() -> Result<Self> {
         let mut shell = Shell::new();
+        // Plan 037 M2.1: inject the TUI render hook so structured data renders
+        // as ratatui tables (decoupled from Shell via the RenderHook trait).
+        shell.set_render_hook(Box::new(crate::frontend::renderer::TuiRenderHook));
         // Plan 309 Task 1.2 P4: apply persisted env from ~/.config/ash/env.at.
         shell.load_env_persistence();
 
