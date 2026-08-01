@@ -137,6 +137,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f02882884d3e1bc524fb12c79f107f6ad0e1cfd498c536ffb494301740995dfe"
 
 [[package]]
+name = "ash"
+version = "0.1.0"
+dependencies = [
+ "ash-core",
+ "ash-tui",
+ "auto-shell",
+ "miette",
+]
+
+[[package]]
 name = "ash-core"
 version = "0.1.0"
 dependencies = [
@@ -150,6 +160,28 @@ dependencies = [
  "serde_json",
  "sysinfo",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "ash-tui"
+version = "0.1.0"
+dependencies = [
+ "ash-core",
+ "auto-ai-agent",
+ "auto-ai-client",
+ "auto-lang",
+ "auto-shell",
+ "auto-val",
+ "chrono",
+ "crossterm 0.27.0",
+ "dirs 5.0.1",
+ "indexmap",
+ "miette",
+ "nu-ansi-term",
+ "ratatui-core",
+ "ratatui-widgets",
+ "rayon",
+ "reedline",
 ]
 
 [[package]]

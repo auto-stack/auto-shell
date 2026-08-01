@@ -3,6 +3,11 @@
 # auto-lang WITHOUT ui-iced (auto-shell/ash-core do not opt in). The future
 # ash-gui version will live in a SEPARATE workspace (../ash-gui) so its
 # ui-iced request doesn't unify into this one.
+#
+# Plan 037 M2.2: the workspace now has three members:
+#   - auto-shell : pure Shell logic + commands (zero terminal deps)
+#   - ash-tui    : terminal frontend (reedline/crossterm/ratatui/nu-ansi-term)
+#   - ash        : the CLI binary (composition root — wires shell + tui)
 [workspace]
-members = ["auto-shell"]
+members = ["auto-shell", "ash-tui", "ash"]
 resolver = "2"

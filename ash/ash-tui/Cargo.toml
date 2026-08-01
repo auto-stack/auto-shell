@@ -1,0 +1,36 @@
+[package]
+name = "ash-tui"
+version = "0.1.0"
+edition = "2021"
+description = "ASH terminal frontend (reedline REPL + ratatui rendering) — split from auto-shell (Plan 037 M2.2)"
+authors = ["AutoLang Contributors"]
+license = "MIT"
+
+[dependencies]
+# The pure Shell logic layer (Plan 037 M2.2): ash-tui builds ON TOP of auto-shell,
+# pulling in Shell + commands + completions + ai. These path deps mirror
+# auto-shell's, since both crates live in the same `ash/` workspace dir.
+auto-shell = { path = "../auto-shell" }
+auto-lang = { path = "../../../auto-lang/crates/auto-lang" }
+auto-val = { path = "../../../auto-lang/crates/auto-val" }
+auto-ai-client = { path = "../../../auto-ai/crates/auto-ai-client" }
+auto-ai-agent = { path = "../../../auto-ai/crates/auto-ai-agent" }
+ash-core = { path = "../../ash-core" }
+
+# Terminal & REPL (Plan 037 M2.2: these move from auto-shell's optional deps to
+# ash-tui's mandatory deps — the crate boundary now provides the isolation that
+# the `frontend-tui` feature flag used to give).
+reedline = "0.44.0"
+crossterm = "0.27"
+nu-ansi-term = "0.50"
+ratatui-core = "0.1"
+ratatui-widgets = "0.3"
+
+# Prompt engine deps (module.rs/modules/ use rayon + nu-ansi-term; time.rs uses chrono)
+rayon = "1.12"
+chrono = "0.4"
+
+# Shared with auto-shell — pinned to the same versions for type compatibility.
+indexmap = "2.0"
+dirs = "5.0"
+miette = "7.0"

@@ -1,0 +1,20 @@
+[package]
+name = "ash"
+version = "0.1.0"
+edition = "2021"
+description = "ASH — AutoShell CLI binary (entry point; Plan 037 M2.2 split the binary out of auto-shell)"
+authors = ["AutoLang Contributors"]
+license = "MIT"
+
+[[bin]]
+name = "ash"
+path = "src/main.rs"
+
+[dependencies]
+# Plan 037 M2.2: the binary is the composition root — it wires the pure Shell
+# logic (auto-shell) together with the terminal frontend (ash-tui) and injects
+# the TUI render/pager hooks + terminal-only commands (less/more/color).
+auto-shell = { path = "../auto-shell" }
+ash-tui = { path = "../ash-tui" }
+ash-core = { path = "../../ash-core" }
+miette = "7.0"
