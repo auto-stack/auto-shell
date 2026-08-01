@@ -14,7 +14,7 @@ pub trait PromptModule: Send + Sync {
     fn name(&self) -> &str;
 
     /// Render the module. Returns `None` if the module should not be displayed.
-    fn render(&self, ctx: &super::context::AshContext) -> Option<PromptSegment>;
+    fn render(&self, ctx: &auto_shell::prompt::context::AshContext) -> Option<PromptSegment>;
 }
 
 /// A styled text segment produced by a prompt module.

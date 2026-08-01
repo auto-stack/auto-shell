@@ -13,7 +13,7 @@ use reedline::{
 
 use super::layout::{self, Layout, LayoutMode};
 use super::render;
-use crate::completions::CompletionKind;
+use auto_shell::completions::CompletionKind;
 
 /// AshMenu configuration
 #[derive(Debug, Clone)]

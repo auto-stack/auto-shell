@@ -3,22 +3,19 @@
 //! This library provides the core functionality for the AutoShell REPL,
 //! command execution, and pipeline system.
 //!
-//! ## Architecture
+//! ## Architecture (Plan 037 M2.2)
 //!
-//! - `ash-core` crate — Pure logic, zero terminal dependencies
-//! - `frontend/` — Terminal-dependent code (will become `ash-tui` crate)
-//! - `cmd/`, `completions/`, `data/`, `shell/` — Mixed layer, migrating
+//! - `auto-shell` (this crate) — pure Shell logic + commands, ZERO terminal deps
+//! - `ash-tui` crate — terminal frontend (reedline/crossterm/ratatui/nu-ansi-term)
+//! - `ash-core` crate — pure logic, zero terminal dependencies
+//! - `cmd/`, `completions/`, `data/`, `shell/` — Shell logic layer
 
 // Core layer: re-export ash-core crate as `core` module for backward compatibility
 pub use ash_core as core;
 
-// Frontend layer. Plan 030 M0: the module is always declared, but its
-// terminal-dependent submodules (renderer/repl/term/completions_reedline) are
-// gated behind `frontend-tui` inside frontend/mod.rs. The dep-free submodules
-// (ai/ai_context/ask/suggest) stay available without the feature.
-pub mod frontend;
-
-// Plan 037 M2.0: terminal-dep-free AI modules moved out of frontend/.
+// Plan 037 M2.0: terminal-dep-free AI modules (moved out of frontend/ in M2.0;
+// frontend/ itself was removed in M2.2 when its terminal-dependent contents
+// moved to the ash-tui crate).
 pub mod ai;
 
 // Legacy modules (will migrate into ash-core or frontend over time)
@@ -29,9 +26,7 @@ pub mod config;
 pub mod data;
 pub mod host;
 pub mod job;
-// Plan 030 M0: `menu` is only consumed by the TUI REPL (frontend::repl).
-#[cfg(feature = "frontend-tui")]
-pub mod menu;
+// Plan 037 M2.2: `menu` moved to the ash-tui crate (only the TUI REPL consumes it).
 pub mod plugin;
 pub mod prompt;
 pub mod repl_mode;
@@ -49,13 +44,6 @@ pub use ash_core::bookmarks;
 pub use ash_core::parser;
 pub use ash_core::pipeline;
 
-// Re-export frontend modules at crate root for backward compatibility.
-// Plan 030 M0: gated with the frontend feature.
-#[cfg(feature = "frontend-tui")]
-pub use frontend::repl;
-#[cfg(feature = "frontend-tui")]
-pub use frontend::term;
-
-#[cfg(feature = "frontend-tui")]
-pub use repl::Repl;
+// Plan 037 M2.2: `repl`/`term`/`Repl`/`menu` moved to the ash-tui crate. The
+// Shell logic layer (below) stays here.
 pub use shell::Shell;

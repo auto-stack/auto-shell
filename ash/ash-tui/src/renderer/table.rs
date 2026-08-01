@@ -13,7 +13,7 @@
 
 use auto_val::Value;
 
-use crate::config::IconStyle;
+use auto_shell::config::IconStyle;
 
 /// Render a `Value::Array` (of objects) as a bordered ANSI table string.
 ///

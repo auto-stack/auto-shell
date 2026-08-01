@@ -1,6 +1,6 @@
 //! Git status module — shows staged/unstaged/untracked counts
 
-use crate::prompt::context::AshContext;
+use auto_shell::prompt::context::AshContext;
 use crate::prompt::module::{PromptModule, PromptSegment, SegmentStyle};
 use nu_ansi_term::Color;
 
@@ -9,7 +9,7 @@ pub struct GitStatusModule {
 }
 
 impl GitStatusModule {
-    pub fn new(_config: &super::super::config::AshConfig) -> Self {
+    pub fn new(_config: &auto_shell::prompt::config::AshConfig) -> Self {
         Self {
             style: SegmentStyle {
                 fg: Some(Color::Red),
@@ -63,7 +63,7 @@ impl PromptModule for GitStatusModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prompt::config::AshConfig;
+    use auto_shell::prompt::config::AshConfig;
     use std::path::PathBuf;
 
     #[test]

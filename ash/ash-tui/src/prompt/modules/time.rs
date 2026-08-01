@@ -1,6 +1,6 @@
 //! Time module — shows current time (typically in right prompt)
 
-use crate::prompt::context::AshContext;
+use auto_shell::prompt::context::AshContext;
 use crate::prompt::module::{PromptModule, PromptSegment, SegmentStyle};
 use nu_ansi_term::Color;
 
@@ -10,7 +10,7 @@ pub struct TimeModule {
 }
 
 impl TimeModule {
-    pub fn new(config: &super::super::config::AshConfig) -> Self {
+    pub fn new(config: &auto_shell::prompt::config::AshConfig) -> Self {
         Self {
             style: SegmentStyle {
                 fg: Some(Color::Yellow),
@@ -38,7 +38,7 @@ impl PromptModule for TimeModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prompt::config::AshConfig;
+    use auto_shell::prompt::config::AshConfig;
     use std::path::PathBuf;
 
     #[test]

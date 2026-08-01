@@ -15,10 +15,9 @@ use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use miette::{IntoDiagnostic, Result};
 
-use crate::cmd::parser::ParsedArgs;
-use crate::cmd::{Command, PipelineData, Signature};
-use crate::shell::Shell;
-use crate::cmd::ShellContext;
+use auto_shell::cmd::parser::ParsedArgs;
+use auto_shell::cmd::{Command, PipelineData, Signature};
+use auto_shell::cmd::ShellContext;
 
 // ── RAII terminal guards ────────────────────────────────────────────
 
@@ -451,7 +450,7 @@ impl CodePager {
     fn highlighted(&mut self, idx: usize) -> &str {
         if !self.cache.contains_key(&idx) {
             let raw = self.lines[idx].as_str();
-            let hl = super::code_highlight::highlight_code(raw, &self.ext);
+            let hl = auto_shell::cmd::commands::code_highlight::highlight_code(raw, &self.ext);
             self.cache.insert(idx, hl);
         }
         // Safe: we just ensured the key exists.
@@ -1160,9 +1159,9 @@ fn run_less_atom(
     }
 
     // Non-streaming path: bridge to legacy run().
-    let legacy_in = crate::cmd::pipeline_convert::atom_to_pipeline_data(input);
+    let legacy_in = auto_shell::cmd::pipeline_convert::atom_to_pipeline_data(input);
     let legacy_out = run_less(args, legacy_in, shell)?;
-    Ok(crate::cmd::pipeline_convert::pipeline_data_to_atom(legacy_out))
+    Ok(auto_shell::cmd::pipeline_convert::pipeline_data_to_atom(legacy_out))
 }
 
 /// Shared implementation for both `less` and `more`.

@@ -13,9 +13,9 @@ pub use ash_core::completions::{
     WhenCondition, CompletionSource, ParseMode,
 };
 
-// Frontend-only: reedline integration (Plan 030 M0: gated with frontend-tui)
-#[cfg(feature = "frontend-tui")]
-pub mod reedline;
+// Plan 037 M2.2: the reedline Completer adapter (`ShellCompleter`) moved to
+// the ash-tui crate (`ash_tui::completions_reedline`). The dep-free completion
+// types/specs below stay here.
 
 // Plan 315: three-tier spec loading + runtime probe helpers.
 pub mod spec_tiers;

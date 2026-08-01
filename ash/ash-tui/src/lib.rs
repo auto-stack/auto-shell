@@ -7,3 +7,18 @@
 //! This crate exists so that `auto-shell` has ZERO terminal dependencies —
 //! the crate boundary provides the isolation that the `frontend-tui` feature
 //! flag used to give.
+
+// Terminal-dependent modules moved here from auto-shell in Plan 037 M2.2.
+pub mod commands;
+// `commands_less.rs` is the original `less`/`more` implementation (crossterm),
+// moved verbatim; `commands` re-exports it and adds `color`.
+mod commands_less;
+pub mod completions_reedline;
+pub mod menu;
+pub mod prompt;
+pub mod renderer;
+pub mod repl;
+pub mod term;
+
+// Re-export the entry-point type for the `ash` binary (composition root).
+pub use repl::Repl;

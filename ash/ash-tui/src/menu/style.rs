@@ -2,7 +2,7 @@
 
 use nu_ansi_term::{Color, Style};
 
-use crate::completions::CompletionKind;
+use auto_shell::completions::CompletionKind;
 
 /// Get the display color for a completion kind
 pub fn kind_color(kind: CompletionKind) -> Style {

@@ -270,6 +270,11 @@ pub trait ShellContext {
     fn cd(&mut self, path: &str) -> Result<()>;
     /// Source (execute) a script file.
     fn execute_script_file(&mut self, path: &std::path::Path) -> Result<()>;
+    /// Plan 037 M2.2: the interactive pager hook, if one was injected by the
+    /// frontend (ash-tui). `None` for dep-free/embedded consumers; `show
+    /// --pager` then falls through to streamed highlighting. Commands access
+    /// this via the trait rather than the concrete `Shell`.
+    fn pager_hook(&self) -> Option<&dyn crate::shell::PagerHook>;
 }
 
 /// Trait that all shell commands must implement

@@ -1,6 +1,6 @@
 //! Command duration module — shows last command execution time
 
-use crate::prompt::context::AshContext;
+use auto_shell::prompt::context::AshContext;
 use crate::prompt::module::{PromptModule, PromptSegment, SegmentStyle};
 use nu_ansi_term::Color;
 
@@ -10,7 +10,7 @@ pub struct CmdDurationModule {
 }
 
 impl CmdDurationModule {
-    pub fn new(config: &super::super::config::AshConfig) -> Self {
+    pub fn new(config: &auto_shell::prompt::config::AshConfig) -> Self {
         let min_time = config.module_int("cmd_duration", "min_time", -1);
         Self {
             style: SegmentStyle {
@@ -54,7 +54,7 @@ impl PromptModule for CmdDurationModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prompt::config::AshConfig;
+    use auto_shell::prompt::config::AshConfig;
     use std::path::PathBuf;
 
     fn make_ctx(duration_ms: Option<u64>) -> AshContext {

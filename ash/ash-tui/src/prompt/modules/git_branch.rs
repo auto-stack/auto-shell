@@ -1,6 +1,6 @@
 //! Git branch module — shows current branch name
 
-use crate::prompt::context::AshContext;
+use auto_shell::prompt::context::AshContext;
 use crate::prompt::module::{PromptModule, PromptSegment, SegmentStyle};
 use nu_ansi_term::Color;
 
@@ -10,7 +10,7 @@ pub struct GitBranchModule {
 }
 
 impl GitBranchModule {
-    pub fn new(config: &super::super::config::AshConfig) -> Self {
+    pub fn new(config: &auto_shell::prompt::config::AshConfig) -> Self {
         Self {
             style: SegmentStyle {
                 fg: Some(Color::Green),
@@ -42,7 +42,7 @@ impl PromptModule for GitBranchModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prompt::config::AshConfig;
+    use auto_shell::prompt::config::AshConfig;
     use std::path::PathBuf;
 
     #[test]

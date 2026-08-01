@@ -62,14 +62,9 @@ pub fn is_code_file(ext: &str) -> bool {
 pub fn highlight_code(text: &str, ext: &str) -> String {
     let extension = ext.to_ascii_lowercase();
 
-    // TOML/INI are not in syntect's default syntax set — use a lightweight
-    // regex-based highlighter. Plan 030 M0: that path uses nu-ansi-term
-    // (frontend-tui); without it, TOML/INI fall through to plain syntect.
-    #[cfg(feature = "frontend-tui")]
-    if matches!(extension.as_str(), "toml" | "ini" | "conf" | "cfg") {
-        return highlight_toml_like(text);
-    }
-
+    // TOML/INI are not in syntect's default syntax set. Plan 037 M2.2: the
+    // nu-ansi-term-based TOML highlighter moved to ash-tui; here TOML/INI now
+    // fall through to plain syntect (the documented fallback).
     let ps = syntax_set();
     let ts = theme_set();
 
@@ -133,14 +128,8 @@ pub fn highlight_code_to_writer(
 ) -> std::io::Result<()> {
     let extension = ext.to_ascii_lowercase();
 
-    // TOML/INI go through the lightweight hand-rolled highlighter.
-    // Plan 030 M0: that path uses nu-ansi-term (frontend-tui); without it,
-    // TOML/INI fall through to plain text below.
-    #[cfg(feature = "frontend-tui")]
-    if matches!(extension.as_str(), "toml" | "ini" | "conf" | "cfg") {
-        return highlight_toml_like_to_writer(text, writer);
-    }
-
+    // TOML/INI: Plan 037 M2.2, the nu-ansi-term highlighter moved to ash-tui;
+    // here they fall through to plain text below.
     let ps = syntax_set();
     let ts = theme_set();
 
@@ -173,161 +162,6 @@ pub fn highlight_code_to_writer(
         }
     }
     Ok(())
-}
-
-/// Streaming variant of [`highlight_toml_like`]: highlight each line and
-/// write it to `writer` immediately.
-/// Streaming variant of [`highlight_toml_like`]: highlight each line and
-/// write it to `writer` immediately.
-#[cfg(feature = "frontend-tui")]
-fn highlight_toml_like_to_writer(
-    text: &str,
-    writer: &mut dyn std::io::Write,
-) -> std::io::Result<()> {
-    use nu_ansi_term::{Color, Style};
-
-    let key_style = Style::new().fg(Color::Cyan);
-    let string_style = Style::new().fg(Color::LightYellow);
-    let num_style = Style::new().fg(Color::Purple);
-    let bool_style = Style::new().fg(Color::Red);
-    let comment_style = Style::new().fg(Color::DarkGray).italic();
-    let table_style = Style::new().fg(Color::Blue).bold();
-
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-
-        if trimmed.starts_with('#') {
-            write!(writer, "{}", comment_style.paint(line))?;
-        } else if trimmed.starts_with('[') {
-            write!(writer, "{}", table_style.paint(line))?;
-        } else if let Some(eq_pos) = line.find('=') {
-            let key_part = &line[..eq_pos];
-            let value_part = &line[eq_pos + 1..];
-
-            write!(writer, "{}=", key_style.paint(key_part))?;
-
-            let v = value_part.trim_start();
-            let leading_ws_len = value_part.len() - v.len();
-            let leading_ws = &value_part[..leading_ws_len];
-
-            if v.starts_with('"') || v.starts_with('\'') {
-                write!(writer, "{}{}", leading_ws, string_style.paint(v))?;
-            } else if v == "true" || v == "false" {
-                write!(writer, "{}{}", leading_ws, bool_style.paint(v))?;
-            } else if v.parse::<f64>().is_ok() && !v.is_empty() {
-                write!(writer, "{}{}", leading_ws, num_style.paint(v))?;
-            } else if let Some(hash_pos) = find_comment_pos(v) {
-                let (val, comment) = v.split_at(hash_pos);
-                let val_t = val.trim_end();
-                write!(writer, "{}", leading_ws)?;
-                if val_t.starts_with('"') || val_t.starts_with('\'') {
-                    write!(writer, "{}", string_style.paint(val_t))?;
-                } else if val_t.parse::<f64>().is_ok() {
-                    write!(writer, "{}", num_style.paint(val_t))?;
-                } else {
-                    write!(writer, "{}", val_t)?;
-                }
-                let ws_between = &val[val_t.len()..];
-                write!(writer, "{}{}", ws_between, comment_style.paint(comment))?;
-            } else {
-                write!(writer, "{}", value_part)?;
-            }
-        } else {
-            write!(writer, "{}", line)?;
-        }
-        writeln!(writer)?;
-    }
-    Ok(())
-}
-
-/// Lightweight highlighter for TOML/INI-style config files.
-#[cfg(feature = "frontend-tui")]
-fn highlight_toml_like(text: &str) -> String {
-    use nu_ansi_term::{Color, Style};
-
-    let key_style = Style::new().fg(Color::Cyan);
-    let string_style = Style::new().fg(Color::LightYellow);
-    let num_style = Style::new().fg(Color::Purple);
-    let bool_style = Style::new().fg(Color::Red);
-    let comment_style = Style::new().fg(Color::DarkGray).italic();
-    let table_style = Style::new().fg(Color::Blue).bold();
-
-    let mut output = String::with_capacity(text.len() * 2);
-
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-
-        if trimmed.starts_with('#') {
-            output.push_str(&comment_style.paint(line).to_string());
-        } else if trimmed.starts_with('[') {
-            output.push_str(&table_style.paint(line).to_string());
-        } else if let Some(eq_pos) = line.find('=') {
-            let key_part = &line[..eq_pos];
-            let value_part = &line[eq_pos + 1..];
-
-            output.push_str(&key_style.paint(key_part).to_string());
-            output.push('=');
-
-            let v = value_part.trim_start();
-            let leading_ws_len = value_part.len() - v.len();
-            let leading_ws = &value_part[..leading_ws_len];
-
-            if v.starts_with('"') || v.starts_with('\'') {
-                output.push_str(leading_ws);
-                output.push_str(&string_style.paint(v).to_string());
-            } else if v == "true" || v == "false" {
-                output.push_str(leading_ws);
-                output.push_str(&bool_style.paint(v).to_string());
-            } else if v.parse::<f64>().is_ok() && !v.is_empty() {
-                output.push_str(leading_ws);
-                output.push_str(&num_style.paint(v).to_string());
-            } else if let Some(hash_pos) = find_comment_pos(v) {
-                let (val, comment) = v.split_at(hash_pos);
-                let val_t = val.trim_end();
-                output.push_str(leading_ws);
-                if val_t.starts_with('"') || val_t.starts_with('\'') {
-                    output.push_str(&string_style.paint(val_t).to_string());
-                } else if val_t.parse::<f64>().is_ok() {
-                    output.push_str(&num_style.paint(val_t).to_string());
-                } else {
-                    output.push_str(val_t);
-                }
-                // Preserve whitespace between value and comment
-                let ws_between = &val[val_t.len()..];
-                output.push_str(ws_between);
-                output.push_str(&comment_style.paint(comment).to_string());
-            } else {
-                output.push_str(value_part);
-            }
-        } else {
-            output.push_str(line);
-        }
-        output.push('\n');
-    }
-
-    if !text.ends_with('\n') && output.ends_with('\n') {
-        output.pop();
-    }
-    output
-}
-
-/// Find `#` comment not inside a string.
-fn find_comment_pos(s: &str) -> Option<usize> {
-    let mut in_string = false;
-    let mut quote_char = '"';
-    for (i, c) in s.char_indices() {
-        if in_string {
-            if c == quote_char {
-                in_string = false;
-            }
-        } else if c == '"' || c == '\'' {
-            in_string = true;
-            quote_char = c;
-        } else if c == '#' {
-            return Some(i);
-        }
-    }
-    None
 }
 
 fn find_syntax_by_extension<'a>(
@@ -385,11 +219,14 @@ mod tests {
 
     #[test]
     fn test_highlight_toml() {
+        // Plan 037 M2.2: the nu-ansi-term TOML highlighter moved to ash-tui;
+        // here TOML falls through to plain syntect (no syntax match) → plain
+        // text. Content is preserved verbatim, no ANSI escapes.
         let input = "name = \"ash\"\nversion = \"0.1.0\"\n";
         let result = highlight_code(input, "toml");
         assert!(
-            result.contains("\x1b["),
-            "highlighted output should contain ANSI codes"
+            !result.contains("\x1b["),
+            "TOML should be plain text now (no ANSI codes)"
         );
         assert!(result.contains("name"));
         assert!(result.contains("ash"));
@@ -397,9 +234,10 @@ mod tests {
 
     #[test]
     fn test_highlight_toml_table_and_comment() {
+        // Plan 037 M2.2: plain-text fallback (see test_highlight_toml).
         let input = "[dependencies]\n# a comment\nfoo = 42\nbar = true\n";
         let result = highlight_code(input, "toml");
-        assert!(result.contains("\x1b["), "should have ANSI codes");
+        assert!(!result.contains("\x1b["), "should be plain text");
         assert!(result.contains("dependencies"));
         assert!(result.contains("comment"));
     }

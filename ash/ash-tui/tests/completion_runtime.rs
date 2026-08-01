@@ -8,7 +8,7 @@
 
 use ash_core::completions::spec::{CompletionSpec, FlagSpec};
 use ash_core::completions::CompletionProvider;
-use auto_shell::completions::reedline::{CompletionState, ShellCompleter};
+use ash_tui::completions_reedline::{CompletionState, ShellCompleter};
 use auto_shell::completions::spec_tiers;
 use reedline::Completer;
 

@@ -30,7 +30,7 @@ pub enum LayoutMode {
 /// - All items have no description → `CompactGrid`
 /// - Any item has description → `DescriptiveList`
 pub fn choose_layout(
-    items: &[(String, Option<String>, crate::completions::CompletionKind)],
+    items: &[(String, Option<String>, auto_shell::completions::CompletionKind)],
     terminal_width: u16,
     min_column_width: usize,
     column_padding: usize,
@@ -85,7 +85,7 @@ pub fn choose_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completions::CompletionKind;
+    use auto_shell::completions::CompletionKind;
 
     #[test]
     fn test_compact_grid_layout() {

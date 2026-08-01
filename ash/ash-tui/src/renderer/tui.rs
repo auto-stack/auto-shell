@@ -24,7 +24,7 @@ use ratatui_widgets::borders::BorderType;
 use ratatui_widgets::table::{Cell, Row, Table};
 
 use super::buffer_to_ansi;
-use crate::config::IconStyle;
+use auto_shell::config::IconStyle;
 
 /// A TUI renderer: holds the terminal width and icon style, implements the
 /// shared [`ash_core::renderer::Renderer`] trait.
@@ -51,7 +51,7 @@ impl ash_core::renderer::Renderer for TuiRenderer {
 /// Shell depending on the terminal renderer directly.
 pub struct TuiRenderHook;
 
-impl crate::shell::RenderHook for TuiRenderHook {
+impl auto_shell::shell::RenderHook for TuiRenderHook {
     fn render_structured(
         &self,
         rendered: &RenderedOutput,

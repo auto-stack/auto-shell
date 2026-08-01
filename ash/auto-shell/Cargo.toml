@@ -2,30 +2,14 @@
 name = "auto-shell"
 version = "0.1.0"
 edition = "2021"
-description = "ASH - A modern shell environment using AutoLang as the scripting language"
+description = "ASH - A modern shell environment using AutoLang as the scripting language (pure Shell logic layer; Plan 037 M2.2)"
 authors = ["AutoLang Contributors"]
 license = "MIT"
 
-[[bin]]
-name = "ash"
-path = "src/main.rs"
-# Plan 030 M0: the CLI binary needs the TUI frontend (REPL/reedline). Building
-# without `frontend-tui` produces the library only (for ash-gui to consume).
-required-features = ["frontend-tui"]
-
-# Plan 030 M0: terminal/frontend deps are optional behind the `frontend-tui`
-# feature. This lets a GUI frontend (ash-gui) depend on auto-shell's logic
-# without pulling reedline/crossterm/ratatui/nu-ansi-term. `default` keeps the
-# CLI build identical to before.
-[features]
-default = ["frontend-tui"]
-frontend-tui = [
-    "dep:reedline",
-    "dep:crossterm",
-    "dep:nu-ansi-term",
-    "dep:ratatui-core",
-    "dep:ratatui-widgets",
-]
+# Plan 037 M2.2: this crate is now a pure library (zero terminal deps). The
+# `ash` binary lives in the `ash` bin crate; the terminal frontend lives in
+# `ash-tui`. The `frontend-tui` feature and its optional terminal deps were
+# removed — crate boundaries now provide the isolation it used to give.
 
 [dependencies]
 # AutoLang integration (Plan 330: paths point back to the auto-lang repo)
@@ -47,14 +31,8 @@ serde_json = "1.0"
 # Ash Core (pure logic, zero terminal deps)
 ash-core = { path = "../../ash-core" }
 
-# Terminal and REPL (Plan 030 M0: optional, gated behind `frontend-tui`)
-reedline = { version = "0.44.0", optional = true }
-crossterm = { version = "0.27", optional = true }
-nu-ansi-term = { version = "0.50", optional = true }
-
-# Ratatui rendering (core + widgets without crossterm backend)
-ratatui-core = { version = "0.1", optional = true }
-ratatui-widgets = { version = "0.3", optional = true }
+# Plan 037 M2.2: the terminal deps (reedline/crossterm/nu-ansi-term/ratatui)
+# moved to the ash-tui crate. auto-shell is now terminal-dep-free.
 
 # Data structures
 indexmap = "2.0"

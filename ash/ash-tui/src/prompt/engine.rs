@@ -10,10 +10,10 @@
 use rayon::prelude::*;
 use std::borrow::Cow;
 
-use super::config::AshConfig;
-use super::context::AshContext;
-use super::module::PromptModule;
-use super::modules::{
+use auto_shell::prompt::config::AshConfig;
+use auto_shell::prompt::context::AshContext;
+use crate::prompt::module::PromptModule;
+use crate::prompt::modules::{
     character::CharacterModule, cmd_duration::CmdDurationModule, directory::DirectoryModule,
     git_branch::GitBranchModule, git_status::GitStatusModule, status::StatusModule,
     time::TimeModule,

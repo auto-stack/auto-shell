@@ -6,8 +6,8 @@
 //! - A CompletionProvider for external command specs (git, cargo, etc.)
 //! - Shared state (current_dir) updated by the REPL after each command
 
-use crate::completions::{Completion, CompletionSignature};
-use crate::completions::ai_layer::{self, CtxSnapshot};
+use auto_shell::completions::{Completion, CompletionSignature};
+use auto_shell::completions::ai_layer::{self, CtxSnapshot};
 use ash_core::completions::{
     context_rank, help_parser, CompletionContext, CompletionProvider,
 };
@@ -128,19 +128,19 @@ impl ShellCompleter {
     /// user > generated > built-in). Plan 033: plugin `completions/` dirs load
     /// last, so installed plugins take the highest precedence.
     fn load_tier_specs(provider: &mut CompletionProvider) {
-        if let Some(dir) = crate::completions::spec_tiers::generated_dir() {
-            for spec in crate::completions::spec_tiers::load_dir(&dir) {
+        if let Some(dir) = auto_shell::completions::spec_tiers::generated_dir() {
+            for spec in auto_shell::completions::spec_tiers::load_dir(&dir) {
                 provider.register(spec);
             }
         }
-        if let Some(dir) = crate::completions::spec_tiers::user_dir() {
-            for spec in crate::completions::spec_tiers::load_dir(&dir) {
+        if let Some(dir) = auto_shell::completions::spec_tiers::user_dir() {
+            for spec in auto_shell::completions::spec_tiers::load_dir(&dir) {
                 provider.register(spec);
             }
         }
         // Plan 033: plugin-contributed completion specs (highest precedence).
-        for dir in crate::plugin::loader::enabled_plugin_completion_dirs() {
-            for spec in crate::completions::spec_tiers::load_dir(&dir) {
+        for dir in auto_shell::plugin::loader::enabled_plugin_completion_dirs() {
+            for spec in auto_shell::completions::spec_tiers::load_dir(&dir) {
                 provider.register(spec);
             }
         }
@@ -155,7 +155,7 @@ impl ShellCompleter {
             return;
         }
         // Don't probe shell builtins / registered commands.
-        if crate::cmd::builtin::is_legacy_builtin(cmd)
+        if auto_shell::cmd::builtin::is_legacy_builtin(cmd)
             || self.signatures.iter().any(|s| s.name == cmd)
         {
             return;
@@ -168,7 +168,7 @@ impl ShellCompleter {
             return;
         }
         // 1. Cache tier.
-        if let Some(spec) = crate::completions::spec_tiers::load_cache(cmd) {
+        if let Some(spec) = auto_shell::completions::spec_tiers::load_cache(cmd) {
             self.provider.register(spec);
             return;
         }
@@ -183,7 +183,7 @@ impl ShellCompleter {
         if !help.trim().is_empty() {
             let spec = help_parser::parse_help(cmd, &help);
             // Persist to cache (even if empty — acts as a "don't re-probe" marker).
-            let _ = crate::completions::spec_tiers::write_cache(cmd, &spec);
+            let _ = auto_shell::completions::spec_tiers::write_cache(cmd, &spec);
             self.provider.register(spec);
         }
     }
@@ -265,8 +265,8 @@ impl ShellCompleter {
     }
 }
 
-fn kind_tag(kind: crate::completions::CompletionKind) -> String {
-    use crate::completions::CompletionKind;
+fn kind_tag(kind: auto_shell::completions::CompletionKind) -> String {
+    use auto_shell::completions::CompletionKind;
     match kind {
         CompletionKind::Command => "command",
         CompletionKind::External => "external",
@@ -379,7 +379,7 @@ impl Completer for ShellCompleter {
         }
 
         // Default: use built-in completion system (registry signatures + file/path completion)
-        let mut completions = crate::completions::get_completions_with_context(
+        let mut completions = auto_shell::completions::get_completions_with_context(
             line,
             &self.signatures,
         );
@@ -401,8 +401,8 @@ impl Completer for ShellCompleter {
             && is_command_name_position(line, pos)
             && first_token_is_unknown(line, &self.signatures, &snapshot.aliases)
             && completions.iter().all(|c| {
-                c.kind != crate::completions::CompletionKind::Command
-                    && c.kind != crate::completions::CompletionKind::External
+                c.kind != auto_shell::completions::CompletionKind::Command
+                    && c.kind != auto_shell::completions::CompletionKind::External
             })
         {
             if !phrase_key.is_empty() {
@@ -453,8 +453,8 @@ fn is_command_name_position(line: &str, pos: usize) -> bool {
 /// running, so we don't make users opt in. Disable via `ai.completion: false`
 /// in the config.
 fn ai_completion_enabled() -> bool {
-    let cfg = crate::auto_config::load();
-    crate::auto_config::get_bool(&cfg, "ai", "completion").unwrap_or(true)
+    let cfg = auto_shell::auto_config::load();
+    auto_shell::auto_config::get_bool(&cfg, "ai", "completion").unwrap_or(true)
 }
 
 /// Plan 032 M2: drain any AI candidates the background thread produced for
@@ -518,7 +518,7 @@ mod tests {
     use super::*;
 
     fn test_signatures() -> Vec<CompletionSignature> {
-        use crate::completions::CompletionArgument;
+        use auto_shell::completions::CompletionArgument;
         vec![
             CompletionSignature {
                 name: "ls".into(),
@@ -725,19 +725,19 @@ mod tests {
     #[test]
     fn complete_merges_nl_translation_at_command_name_position() {
         // Touch the process-global AI cache → serialize against other such tests.
-        let _g = crate::completions::ai_layer::test_lock()
+        let _g = auto_shell::completions::ai_layer::test_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         // Inject an NL result for the phrase "列出文件" (as if the background
         // thread from the previous keystroke just finished). At the command-
         // name position, complete() should surface it as a suggestion.
-        crate::completions::ai_layer::store(
-            crate::completions::ai_layer::Slot::NaturalLanguage,
+        auto_shell::completions::ai_layer::store(
+            auto_shell::completions::ai_layer::Slot::NaturalLanguage,
             "列出文件".to_string(),
             vec![Completion::with_kind(
                 "ls",
                 "ls",
-                crate::completions::CompletionKind::AiSuggested,
+                auto_shell::completions::CompletionKind::AiSuggested,
             )],
         );
         let mut completer = test_completer();
@@ -753,7 +753,7 @@ mod tests {
     #[test]
     fn stale_subcommand_result_does_not_leak_into_parameter_position() {
         // Touch the process-global AI cache → serialize against other such tests.
-        let _g = crate::completions::ai_layer::test_lock()
+        let _g = auto_shell::completions::ai_layer::test_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         // Bug #2 regression, end-to-end. Seed the Subcommand slot with a result
@@ -773,13 +773,13 @@ mod tests {
             provider,
             Arc::new(Mutex::new(CompletionState::new(PathBuf::from(".")))),
         );
-        crate::completions::ai_layer::store(
-            crate::completions::ai_layer::Slot::Subcommand,
+        auto_shell::completions::ai_layer::store(
+            auto_shell::completions::ai_layer::Slot::Subcommand,
             "git c".to_string(), // the stale key
             vec![Completion::with_kind(
                 "checkout",
                 "checkout",
-                crate::completions::CompletionKind::AiSuggested,
+                auto_shell::completions::CompletionKind::AiSuggested,
             )],
         );
         // Now at "git checkout main" — the subcommand merge key would be
@@ -801,7 +801,7 @@ mod tests {
     #[test]
     fn complete_merges_subcommand_candidates_when_key_matches() {
         // Touch the process-global AI cache → serialize against other such tests.
-        let _g = crate::completions::ai_layer::test_lock()
+        let _g = auto_shell::completions::ai_layer::test_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         // Positive case: when the Subcommand slot holds a result keyed exactly
@@ -820,13 +820,13 @@ mod tests {
             Arc::new(Mutex::new(CompletionState::new(PathBuf::from(".")))),
         );
         // The subcommand merge key is "git c" (cmd "git", prefix "c"). Seed it.
-        crate::completions::ai_layer::store(
-            crate::completions::ai_layer::Slot::Subcommand,
+        auto_shell::completions::ai_layer::store(
+            auto_shell::completions::ai_layer::Slot::Subcommand,
             "git c".to_string(),
             vec![Completion::with_kind(
                 "cherry-pick",
                 "cherry-pick",
-                crate::completions::CompletionKind::AiSuggested,
+                auto_shell::completions::CompletionKind::AiSuggested,
             )],
         );
         let suggestions = completer.complete("git c", 5);

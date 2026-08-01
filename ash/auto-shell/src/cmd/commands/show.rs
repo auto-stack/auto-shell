@@ -143,18 +143,17 @@ impl Command for ShowCommand {
         // syntax highlighting — only the visible lines are highlighted,
         // so the first screen appears in milliseconds regardless of file
         // size.  Only when stdout is a terminal.
-        // Plan 030 M0: the pager needs crossterm (frontend-tui); without it,
-        // `--pager` on a code file falls through to streamed highlighting.
-        #[cfg(feature = "frontend-tui")]
+        // Plan 037 M2.2: the pager lives in ash-tui and is injected via
+        // `ShellContext::pager_hook`. Without a hook (dep-free/embedded
+        // consumers), `--pager` falls through to streamed highlighting.
         if want_pager {
             if let Format::Code(ref ext) = fmt {
                 if std::io::stdout().is_terminal() {
-                    let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-                    let _raw = super::less::RawModeGuard::enter()?;
-                    let _alt = super::less::AltScreenGuard::enter()?;
-                    let mut pager = super::less::CodePager::new(lines, ext.clone())?;
-                    pager.run()?;
-                    return Ok(PipelineData::empty());
+                    if let Some(pager) = shell.pager_hook() {
+                        let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+                        pager.run_code_pager(lines, ext.clone())?;
+                        return Ok(PipelineData::empty());
+                    }
                 }
             }
         }

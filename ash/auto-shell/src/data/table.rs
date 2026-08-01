@@ -2,15 +2,14 @@
 //!
 //! Provides structured table display with alignment and color support.
 
-// Plan 030 M0: nu-ansi-term is optional (frontend-tui feature). The Table type
-// is consumed by cmd/fs (used by ls/builtin) regardless of frontend, so we keep
-// it compiled but stub out the ANSI styling when the frontend is absent.
-#[cfg(feature = "frontend-tui")]
-use nu_ansi_term::{Color, Style};
-#[cfg(not(feature = "frontend-tui"))]
-mod stub {
-    /// Stand-in for nu_ansi_term::Style when the frontend is absent: a no-op
-    /// that stringifies to its input (no ANSI escapes).
+// Plan 037 M2.2: this crate (auto-shell) is now terminal-dep-free. The `Table`
+// type is consumed by cmd/fs (ls/builtin) regardless of frontend, so the ANSI
+// styling is a permanent no-op stub here (no nu-ansi-term). Colored table
+// rendering at runtime goes through `RenderHook` (ratatui) in ash-tui; this
+// legacy `Table::render` path produces plain text.
+mod style {
+    /// No-op stand-in for nu_ansi_term::Style: stringifies to its input
+    /// (no ANSI escapes).
     #[derive(Debug, Clone, Default)]
     pub struct Style;
     impl Style {
@@ -32,8 +31,7 @@ mod stub {
         pub fn normal(self) -> Style { Style }
     }
 }
-#[cfg(not(feature = "frontend-tui"))]
-use stub::{Color, Style};
+use style::{Color, Style};
 
 /// Alignment for table columns
 #[derive(Debug, Clone, Copy, PartialEq)]

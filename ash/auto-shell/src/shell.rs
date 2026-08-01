@@ -82,27 +82,6 @@ fn is_arithmetic_expression(text: &str) -> bool {
     false
 }
 
-/// HSV to RGB conversion (h: 0-360°, s/v: 0.0-1.0) for the rainbow demo.
-fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
-    let c = v * s;
-    let h6 = (h / 60.0) % 6.0;
-    let x = c * (1.0 - (h6 % 2.0 - 1.0).abs());
-    let m = v - c;
-    let (r1, g1, b1) = match h6 as i32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    (
-        ((r1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
-        ((g1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
-        ((b1 + m) * 255.0).round().clamp(0.0, 255.0) as u8,
-    )
-}
-
 /// Shell state and context
 /// Plan 037 M2.1: an injectable renderer for structured output.
 ///
@@ -120,6 +99,22 @@ pub trait RenderHook: Send {
         term_width: u16,
         icons: crate::config::IconStyle,
     ) -> Option<String>;
+}
+
+/// Plan 037 M2.2: an injectable interactive pager, used by `show --pager`.
+///
+/// `Shell` holds an optional `Box<dyn PagerHook>`; the `show` command calls it
+/// (via `ShellContext::pager_hook`) when `--pager` is requested on a code
+/// file. The TUI frontend (ash-tui) injects a crossterm-based implementation;
+/// without a hook, `--pager` falls through to streamed highlighting. This
+/// decouples `show` from the terminal pager without changing its behavior.
+pub trait PagerHook: Send {
+    /// Run an interactive pager over the given lines of code (`ext` is the
+    /// file extension, used for lazy syntax highlighting). Returns `Ok(())`
+    /// if the pager ran (command should emit nothing further), or `Err` on a
+    /// terminal error. Implementations take over the terminal (raw mode +
+    /// alternate screen) and restore it on exit.
+    fn run_code_pager(&self, lines: Vec<String>, ext: String) -> miette::Result<()>;
 }
 
 pub struct Shell {
@@ -175,6 +170,10 @@ pub struct Shell {
     /// means Shell renders structured data as plain text. The TUI frontend
     /// injects a ratatui-based hook via `set_render_hook`.
     render_hook: Option<Box<dyn RenderHook>>,
+    /// Plan 037 M2.2: injectable interactive pager for `show --pager`. `None`
+    /// (default) means `--pager` falls through to streamed highlighting. The
+    /// TUI frontend injects a crossterm-based hook via `set_pager_hook`.
+    pager_hook: Option<Box<dyn PagerHook>>,
 }
 
 /// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
@@ -241,6 +240,9 @@ impl ShellContext for Shell {
     fn execute_script_file(&mut self, path: &std::path::Path) -> miette::Result<()> {
         Shell::execute_script_file(self, path)
     }
+    fn pager_hook(&self) -> Option<&dyn PagerHook> {
+        self.pager_hook.as_deref()
+    }
 }
 
 impl Shell {
@@ -284,12 +286,8 @@ impl Shell {
             reg.register(Box::new(commands::file::FileCommand));
             reg.register(Box::new(commands::tee::TeeCommand));
             reg.register(Box::new(commands::ln::LnCommand));
-            // Plan 030 M0: `less`/`more` pagers need crossterm (frontend-tui).
-            #[cfg(feature = "frontend-tui")]
-            {
-                reg.register(Box::new(commands::less::LessCommand));
-                reg.register(Box::new(commands::less::MoreCommand));
-            }
+            // Plan 037 M2.2: `less`/`more` pagers moved to ash-tui (crossterm).
+            // They register via `Shell::register_commands` from the `ash` binary.
             // Batch 2: Text processing
             reg.register(Box::new(commands::sort::SortCommand));
             reg.register(Box::new(commands::source::SourceCommand));
@@ -379,6 +377,7 @@ impl Shell {
             is_pipeline_last: true, // standalone commands act as pipeline-final
             script_args: Vec::new(), // Plan 034 Bug 2: no script args by default
             render_hook: None, // Plan 037 M2.1: no structured renderer by default
+            pager_hook: None,  // Plan 037 M2.2: no interactive pager by default
         };
 
         // Plan 011 (MS3-B): install the shell-host bridge on the AutoVM so
@@ -599,9 +598,8 @@ impl Shell {
                 "path" => return self.cmd_path(&parts),
                 "env" | "env.path" => return self.cmd_env(&parts),
                 "completions" => return self.cmd_completions(&parts),
-                // Plan 030 M0: `color` needs the TUI frontend (nu-ansi-term).
-                #[cfg(feature = "frontend-tui")]
-                "color" => return self.cmd_color(&parts),
+                // Plan 037 M2.2: `color` moved to the ash-tui crate and is
+                // registered as a `Command` via `Shell::register_commands`.
                 "def" => return self.cmd_def(trimmed),
                 "hook" => return self.cmd_hook(&parts),
                 "abbr" => return self.cmd_abbr(&parts),
@@ -1116,6 +1114,24 @@ impl Shell {
     /// structured data renders as plain text.
     pub fn set_render_hook(&mut self, hook: Box<dyn RenderHook>) {
         self.render_hook = Some(hook);
+    }
+
+    /// Plan 037 M2.2: register terminal-dependent commands (`less`/`more`/
+    /// `color`) that live in the `ash-tui` crate. The composition root (the
+    /// `ash` binary) calls this after `Shell::new()` so the pure-logic
+    /// `auto-shell` crate stays free of terminal dependencies while still
+    /// allowing those commands to participate in dispatch.
+    pub fn register_commands(&mut self, commands: Vec<Box<dyn crate::cmd::Command>>) {
+        for cmd in commands {
+            self.registry.register(cmd);
+        }
+    }
+
+    /// Plan 037 M2.2: inject an interactive pager. The TUI frontend calls
+    /// this to give Shell a crossterm-based `PagerHook`; without it,
+    /// `show --pager` falls through to streamed highlighting.
+    pub fn set_pager_hook(&mut self, hook: Box<dyn PagerHook>) {
+        self.pager_hook = Some(hook);
     }
 
     /// Whether the currently-executing command is the final (or only) one in
@@ -3785,55 +3801,12 @@ impl Shell {
         }
     }
 
-    // ── Plan 317 Phase 3 — `color` builtin (24-bit demo) ─────────────────
+    // Plan 037 M2.2: the `color` builtin (rainbow/depth) moved to the ash-tui
+    // crate (`ash_tui::commands::ColorCommand`), registered via
+    // `Shell::register_commands`. It depended on nu-ansi-term helpers that
+    // now live in `ash_tui::term::color`.
 
-    /// `color` — print a 24-bit rainbow gradient / report terminal color depth.
-    ///
-    ///   color rainbow   → monospaced rainbow (each char a different hue)
-    ///   color depth     → report the detected color depth + relevant env vars
-    fn cmd_color(&mut self, parts: &[&str]) -> Result<Option<String>> {
-        let sub = parts.get(1).copied().unwrap_or("depth");
-        // Plan 030 M0: the `color` builtin depends on the TUI frontend's
-        // color helpers (nu-ansi-term). Without the frontend it is unavailable.
-        #[cfg(not(feature = "frontend-tui"))]
-        {
-            let _ = sub;
-            miette::bail!("color: this command requires the frontend-tui feature");
-        }
-        #[cfg(feature = "frontend-tui")]
-        match sub {
-            "rainbow" | "rb" => {
-                let text = "Ash 24-bit Truecolor Rainbow!";
-                let chars: Vec<char> = text.chars().collect();
-                let n = chars.len();
-                let mut out = String::new();
-                for (i, ch) in chars.iter().enumerate() {
-                    let hue = 360.0 * (i as f64) / (n as f64);
-                    let (r, g, b) = hsv_to_rgb(hue, 1.0, 1.0);
-                    let color = crate::frontend::term::color::resolve_fg(r, g, b);
-                    out.push_str(&color.paint(&ch.to_string()).to_string());
-                }
-                Ok(Some(out))
-            }
-            "depth" | "info" => {
-                let depth = crate::frontend::term::color::detect_color_depth();
-                let label = match depth {
-                    crate::frontend::term::color::ColorDepth::True24 => "24-bit truecolor",
-                    crate::frontend::term::color::ColorDepth::Index256 => "256-color",
-                    crate::frontend::term::color::ColorDepth::Index16 => "16-color",
-                };
-                let ct = std::env::var("COLORTERM").unwrap_or_else(|_| "(unset)".into());
-                let term = std::env::var("TERM").unwrap_or_else(|_| "(unset)".into());
-                Ok(Some(format!(
-                    "Color depth: {} (COLORTERM={}, TERM={})",
-                    label, ct, term
-                )))
-            }
-            other => miette::bail!("color: unknown subcommand '{}'. Use: rainbow, depth", other),
-        }
-    }
-
-
+    /// `def` — define a shell function.
     ///
     /// Translates to AutoLang `fn` syntax. Supports two forms:
     ///

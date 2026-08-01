@@ -29,8 +29,11 @@ ratatui-widgets = "0.3"
 # Prompt engine deps (module.rs/modules/ use rayon + nu-ansi-term; time.rs uses chrono)
 rayon = "1.12"
 chrono = "0.4"
+# repl.rs builds a tokio Runtime for the AI chat session.
+tokio = { version = "1", features = ["full"] }
 
 # Shared with auto-shell — pinned to the same versions for type compatibility.
 indexmap = "2.0"
 dirs = "5.0"
 miette = "7.0"
+unicode-width = "0.2"

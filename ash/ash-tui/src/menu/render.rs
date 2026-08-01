@@ -10,7 +10,7 @@ use super::style;
 /// `items` is (display, description, kind, is_selected) for each visible item.
 /// Returns the complete menu string with `\r\n` line endings.
 pub fn render_menu(
-    items: &[(String, Option<String>, crate::completions::CompletionKind, bool)],
+    items: &[(String, Option<String>, auto_shell::completions::CompletionKind, bool)],
     mode: &LayoutMode,
     _terminal_width: u16,
     use_ansi_coloring: bool,
@@ -39,7 +39,7 @@ pub fn render_menu(
 
 /// Render compact multi-column grid
 fn render_compact_grid(
-    items: &[(String, Option<String>, crate::completions::CompletionKind, bool)],
+    items: &[(String, Option<String>, auto_shell::completions::CompletionKind, bool)],
     columns: u16,
     col_width: usize,
     use_ansi_coloring: bool,
@@ -81,7 +81,7 @@ fn render_compact_grid(
 
 /// Render descriptive list with name + description
 fn render_descriptive_list(
-    items: &[(String, Option<String>, crate::completions::CompletionKind, bool)],
+    items: &[(String, Option<String>, auto_shell::completions::CompletionKind, bool)],
     name_width: usize,
     use_ansi_coloring: bool,
 ) -> String {
@@ -132,7 +132,7 @@ fn render_descriptive_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completions::CompletionKind;
+    use auto_shell::completions::CompletionKind;
 
     #[test]
     fn test_render_compact_grid_ansi() {

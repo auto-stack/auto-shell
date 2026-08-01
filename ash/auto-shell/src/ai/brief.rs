@@ -1,9 +1,8 @@
 //! Brief one-line summaries of tool args / results.
 //!
-//! Shared by the F4 chat turn handler (frontend/repl.rs) and `ash ask`
-//! (frontend/ask.rs). Pure string formatting — no terminal dependencies — so
-//! it lives outside the gated `repl` module and is available without
-//! `frontend-tui` (Plan 030 M0).
+//! Shared by the F4 chat turn handler (now `ash_tui::repl`) and `ash ask`
+//! (`ai::ask`). Pure string formatting — no terminal dependencies — so it
+//! lives in the terminal-dep-free `auto-shell` crate (Plan 037 M2.0/M2.2).
 
 /// Truncate a string to `max` chars, appending an ellipsis if cut.
 pub fn brief_truncate(s: &str, max: usize) -> String {

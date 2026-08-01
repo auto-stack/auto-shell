@@ -8,13 +8,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::menu::{AshMenu, AshMenuConfig};
-use crate::completions::CompletionSignature;
-use crate::completions::definitions;
-use crate::completions::reedline::{CompletionState, ShellCompleter};
-use crate::frontend::term::hinter::AshHinter;
+use auto_shell::completions::CompletionSignature;
+use auto_shell::completions::definitions;
+use crate::completions_reedline::{CompletionState, ShellCompleter};
+use crate::term::hinter::AshHinter;
 use ash_core::completions::CompletionProvider;
-use crate::{prompt::AshPrompt, shell::Shell};
-use crate::frontend::term::highlight::AshHighlighter;
+use crate::prompt::AshPrompt;
+use auto_shell::shell::Shell;
+use crate::term::highlight::AshHighlighter;
 
 /// Read-Eval-Print Loop for AutoShell
 pub struct Repl {
@@ -24,9 +25,9 @@ pub struct Repl {
     /// Shared completion state — updated after each cd/pushd/etc.
     completion_state: Arc<Mutex<CompletionState>>,
     /// Plan 322: Input mode state (Shell/AutoScript/AI + lock + continuation).
-    mode_state: crate::repl_mode::ModeState,
+    mode_state: auto_shell::repl_mode::ModeState,
     /// Plan 027: Lazy-initialized persistent AI chat session.
-    chat: Option<crate::ai::ChatSession>,
+    chat: Option<auto_shell::ai::ChatSession>,
 }
 
 impl Repl {
@@ -35,12 +36,18 @@ impl Repl {
         let mut shell = Shell::new();
         // Plan 037 M2.1: inject the TUI render hook so structured data renders
         // as ratatui tables (decoupled from Shell via the RenderHook trait).
-        shell.set_render_hook(Box::new(crate::frontend::renderer::TuiRenderHook));
+        shell.set_render_hook(Box::new(crate::renderer::TuiRenderHook));
+        // Plan 037 M2.2: inject the interactive pager (for `show --pager`) and
+        // register the terminal-only commands (less/more/color) that moved out
+        // of auto-shell. Without these, --pager falls through to streamed
+        // highlighting and those commands are unavailable.
+        shell.set_pager_hook(Box::new(crate::commands::TuiPagerHook));
+        shell.register_commands(crate::commands::terminal_commands());
         // Plan 309 Task 1.2 P4: apply persisted env from ~/.config/ash/env.at.
         shell.load_env_persistence();
 
         // Plan 302 Step 4.2: Load ~/.config/ash.toml
-        let shell_config = crate::config::AshShellConfig::load();
+        let shell_config = auto_shell::config::AshShellConfig::load();
 
         // Apply aliases from config
         for (name, value) in &shell_config.aliases {
@@ -58,7 +65,7 @@ impl Repl {
                 let _ = shell.source_file(&rc_path); // silently ignore errors
             } else {
                 // First run: create a default .ashrc with example functions.
-                if let Ok(content) = std::str::from_utf8(crate::DEFAULT_ASHRC.as_bytes()) {
+                if let Ok(content) = std::str::from_utf8(auto_shell::DEFAULT_ASHRC.as_bytes()) {
                     let _ = std::fs::write(&rc_path, content);
                     let _ = shell.source_file(&rc_path);
                 }
@@ -68,7 +75,7 @@ impl Repl {
         // Plan 033: load installed plugins (sources plugin `functions.ash`,
         // records capability warnings). Completion & SmartCommand contributions
         // are picked up lazily by their respective loaders.
-        let plugin_report = crate::plugin::load_all_plugins(&mut shell)?;
+        let plugin_report = auto_shell::plugin::load_all_plugins(&mut shell)?;
         plugin_report.print_to_stderr();
 
         // Set up history file (configurable size)
@@ -246,7 +253,7 @@ impl Repl {
         };
 
         // Create modular prompt (AshPrompt)
-        let prompt = AshPrompt::new(crate::prompt::AshConfig::load());
+        let prompt = AshPrompt::new(auto_shell::prompt::AshConfig::load());
 
         // Plan 302: Fish-style autosuggestion hinter (configurable).
         // Plan 032 M1.2: replaced reedline's CwdAwareHinter with AshHinter,
@@ -383,7 +390,7 @@ impl Repl {
 
         // Plan 029 §2.3/§7.2: inject the live shell context (OS/cwd/last
         // command/aliases) so the model knows the user's environment.
-        let context = crate::ai::context::build_context_block(&self.shell);
+        let context = auto_shell::ai::context::build_context_block(&self.shell);
         let system = format!(
             "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
              {context}\n\
@@ -441,7 +448,7 @@ impl Repl {
     /// `/exit`. Persists the conversation on exit.
     fn run_chat_loop(&mut self) -> Result<()> {
         // Lock AI mode so the prompt shows `▌?`.
-        self.mode_state.locked = Some(crate::repl_mode::InputMode::AI);
+        self.mode_state.locked = Some(auto_shell::repl_mode::InputMode::AI);
         self.update_prompt();
 
         // Lazily load the persistent session and print a banner.
@@ -449,7 +456,7 @@ impl Repl {
         // runs the blocking daemon probe, which must NOT happen inside the
         // async turn (see `frontend::ai::ChatSession` docs).
         if self.chat.is_none() {
-            match crate::ai::ChatSession::load() {
+            match auto_shell::ai::ChatSession::load() {
                 Ok(session) => self.chat = Some(session),
                 Err(e) => {
                     eprintln!(
@@ -490,8 +497,8 @@ impl Repl {
                     }
                     // Re-dispatch the prefix through the normal mode machinery.
                     match prefix {
-                        '\x11' => self.mode_state.toggle_lock(crate::repl_mode::InputMode::Shell),
-                        '\x12' => self.mode_state.toggle_lock(crate::repl_mode::InputMode::AutoScript),
+                        '\x11' => self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::Shell),
+                        '\x12' => self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::AutoScript),
                         '\x13' => {
                             // F3 one-shot NL→command: leave chat unlocked; the
                             // outer run() F3 branch handles the actual flow on
@@ -509,9 +516,9 @@ impl Repl {
             }
 
             // Slash commands.
-            if let Some(cmd) = crate::ai::parse_slash_command(&line) {
+            if let Some(cmd) = auto_shell::ai::parse_slash_command(&line) {
                 match cmd {
-                    crate::ai::SlashCommand::Exit => {
+                    auto_shell::ai::SlashCommand::Exit => {
                         if let Some(session) = self.chat.as_mut() {
                             let _ = session.save();
                         }
@@ -519,7 +526,7 @@ impl Repl {
                         self.update_prompt();
                         break;
                     }
-                    crate::ai::SlashCommand::Clear => {
+                    auto_shell::ai::SlashCommand::Clear => {
                         if let Some(session) = self.chat.as_mut() {
                             session.clear();
                             let _ = session.save();
@@ -581,7 +588,7 @@ impl Repl {
         // Plan 029 §7.2: refresh the agent's context (cwd/last-command/aliases)
         // before each turn — the user may have `cd`'d since the last turn.
         session.update_context(&self.shell);
-        let result = crate::ai::block_on_async(
+        let result = auto_shell::ai::block_on_async(
             session.send_turn_streaming(user, on_event),
         );
         match result {
@@ -617,7 +624,7 @@ impl Repl {
             match self.shell.execute(step) {
                 Ok(output) => {
                     if let Some(s) = output {
-                        crate::shell::print_command_output(&s);
+                        auto_shell::shell::print_command_output(&s);
                     }
                 }
                 Err(e) => {
@@ -678,16 +685,16 @@ impl Repl {
     /// Run the REPL loop
     pub fn run(&mut self) -> Result<()> {
         // One-time Ctrl+C handler init (protects ASH during commands)
-        crate::signal::init();
+        auto_shell::signal::init();
 
         // Initial git cache: sync refresh + start filesystem watcher for cwd
-        crate::prompt::context::on_directory_changed(self.shell.pwd());
+        auto_shell::prompt::context::on_directory_changed(self.shell.pwd());
 
         loop {
             // Plan 029 §7.3: if a suggest-next fetch completed, show it before
             // the next prompt. (Best-effort: if it hasn't finished yet, nothing
             // shows — the fetch never blocks.)
-            if let Some(suggestions) = crate::ai::suggest::take_pending() {
+            if let Some(suggestions) = auto_shell::ai::suggest::take_pending() {
                 if !suggestions.is_empty() {
                     println!("\n  \x1b[2m\u{1f4a1} 接下来可能想:\x1b[0m");
                     for s in &suggestions {
@@ -707,12 +714,12 @@ impl Repl {
                     // \x11=F1 (toggle Shell lock), \x12=F2 (toggle Auto lock),
                     // \x13=F3 (AI mode), \x14=Esc (unlock).
                     if line.starts_with('\x11') {
-                        self.mode_state.toggle_lock(crate::repl_mode::InputMode::Shell);
+                        self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::Shell);
                         self.update_prompt();
                         continue;
                     }
                     if line.starts_with('\x12') {
-                        self.mode_state.toggle_lock(crate::repl_mode::InputMode::AutoScript);
+                        self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::AutoScript);
                         self.update_prompt();
                         continue;
                     }
@@ -751,13 +758,13 @@ impl Repl {
                                 // Plan 029 §5: validate the suggestion before
                                 // running it. Warn about destructive patterns
                                 // and unbalanced quotes/brackets.
-                                let findings = crate::ai::validate_suggestion(&suggestion);
+                                let findings = auto_shell::ai::validate_suggestion(&suggestion);
                                 for finding in &findings {
                                     match finding {
-                                        crate::ai::ValidationFinding::Danger(msg) => {
+                                        auto_shell::ai::ValidationFinding::Danger(msg) => {
                                             println!("  \x1b[1;31m\u{26a0} DANGER: {}\x1b[0m", msg);
                                         }
-                                        crate::ai::ValidationFinding::Warning(msg) => {
+                                        auto_shell::ai::ValidationFinding::Warning(msg) => {
                                             println!("  \x1b[33m\u{26a0} warning: {}\x1b[0m", msg);
                                         }
                                     }
@@ -765,7 +772,7 @@ impl Repl {
 
                                 // Plan 029 §5: if the suggestion is a multi-step
                                 // && chain, offer step-by-step execution.
-                                let steps = crate::ai::split_steps(&suggestion);
+                                let steps = auto_shell::ai::split_steps(&suggestion);
                                 let multi = steps.len() > 1;
                                 if multi {
                                     println!(
@@ -785,7 +792,7 @@ impl Repl {
                                         match self.shell.execute(&suggestion) {
                                             Ok(output) => {
                                                 if let Some(s) = output {
-                                                    crate::shell::print_command_output(&s);
+                                                    auto_shell::shell::print_command_output(&s);
                                                 }
                                             }
                                             Err(e) => eprintln!("Error: {}", e),
@@ -804,7 +811,7 @@ impl Repl {
                                                 match self.shell.execute(edited) {
                                                     Ok(output) => {
                                                         if let Some(s) = output {
-                                                            crate::shell::print_command_output(&s);
+                                                            auto_shell::shell::print_command_output(&s);
                                                         }
                                                     }
                                                     Err(e) => eprintln!("Error: {}", e),
@@ -857,7 +864,7 @@ impl Repl {
                     // Detects unclosed { } ( ) [ ] " ' or trailing backslash,
                     // then reads continuation lines with a `·` prompt.
                     loop {
-                        if crate::repl_mode::needs_continuation(&line) {
+                        if auto_shell::repl_mode::needs_continuation(&line) {
                             // For trailing backslash: strip it and join with space.
                             let trimmed = line.trim_end();
                             if trimmed.ends_with('\\') && !trimmed.ends_with("\\\\") {
@@ -930,7 +937,7 @@ impl Repl {
                             eprintln!("Error: {}", e);
                         }
                         // Refresh git info after interactive command
-                        crate::prompt::context::refresh_git_info_async(
+                        auto_shell::prompt::context::refresh_git_info_async(
                             self.shell.pwd(),
                         );
                         self.sync_completion_state();
@@ -940,9 +947,9 @@ impl Repl {
                     // Plan 322 #3: Update last_auto before execution (for AI mode restore).
                     if self.mode_state.locked.is_none() {
                         self.mode_state.last_auto = if self.shell.is_auto_expression_pub(&line) {
-                            crate::repl_mode::InputMode::AutoScript
+                            auto_shell::repl_mode::InputMode::AutoScript
                         } else {
-                            crate::repl_mode::InputMode::Shell
+                            auto_shell::repl_mode::InputMode::Shell
                         };
                     }
 
@@ -957,12 +964,12 @@ impl Repl {
                                 // Use print_command_output to avoid a spurious
                                 // trailing blank line when output already ends
                                 // in '\n' (e.g. echo). Same fix as R4/script path.
-                                crate::shell::print_command_output(&s);
+                                auto_shell::shell::print_command_output(&s);
                             }
                             // After command execution, async-refresh git cache
                             // (most changes are caught by filesystem watcher,
                             //  but this covers edge cases like external git commands)
-                            crate::prompt::context::refresh_git_info_async(
+                            auto_shell::prompt::context::refresh_git_info_async(
                                 self.shell.pwd(),
                             );
                         }
@@ -977,8 +984,8 @@ impl Repl {
                     // Plan 029 §7.3: async-suggest next command (opt-in). Fire
                     // a background fetch; the result shows before the next prompt
                     // if it arrived in time. Never blocks the shell.
-                    if crate::ai::suggest::is_enabled() {
-                        crate::ai::suggest::suggest_next_async(
+                    if auto_shell::ai::suggest::is_enabled() {
+                        auto_shell::ai::suggest::suggest_next_async(
                             self.shell.pwd().to_string_lossy().to_string(),
                             line.clone(),
                             output_snippet,
@@ -1077,7 +1084,7 @@ pub fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
 // terminal-dep-free `super::brief` module so `ash ask` (frontend/ask.rs) can use
 // them without the frontend-tui feature. This file re-exports them for its own
 // StreamEvent rendering below.
-use crate::ai::brief::{brief_args, brief_result};
+use auto_shell::ai::brief::{brief_args, brief_result};
 
 #[cfg(test)]
 mod read_recent_history_tests {
