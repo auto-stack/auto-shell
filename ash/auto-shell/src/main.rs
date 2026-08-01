@@ -66,7 +66,7 @@ fn main() -> Result<()> {
             // an AutoLang script via the cloud model + eval_auto tool.
             "ask" => {
                 let ask_args: Vec<String> = args[i + 1..].to_vec();
-                return auto_shell::frontend::ask::run(&ask_args);
+                return auto_shell::ai::ask::run(&ask_args);
             }
             "--json" => {
                 // Already handled by the global pre-scan; skip here.

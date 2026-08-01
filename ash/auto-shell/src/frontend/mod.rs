@@ -21,12 +21,6 @@ pub mod term;
 #[cfg(feature = "frontend-tui")]
 pub mod completions_reedline;
 
-// Terminal-dep-FREE submodules. These live under `frontend/` historically but
-// have no reedline/crossterm/ratatui/nu-ansi-term usage, so they stay available
-// without the frontend feature (smart_command::nlu uses `ai::block_on_async`,
-// main.rs uses `ask::run`). (Plan 030 M0: candidates to move out of frontend/.)
-pub mod ai;
-pub mod ai_context;
-pub mod ask;
-pub mod brief;
-pub mod suggest;
+// Plan 037 M2.0: the terminal-dep-FREE modules (ai/ai_context/ask/brief/suggest)
+// moved out of frontend/ to the crate-root `ai/` module, so they don't get
+// pulled into ash-tui and so smart_command/main don't gain a dep on the TUI.

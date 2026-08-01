@@ -414,7 +414,7 @@ impl ChatSession {
     /// §2.3/§7.2). Call this before each turn so the model knows the current
     /// cwd / last command / aliases — they change between turns.
     pub fn update_context(&mut self, shell: &crate::shell::Shell) {
-        let ctx = crate::frontend::ai_context::build_context_block(shell);
+        let ctx = crate::ai::context::build_context_block(shell);
         self.agent.set_context(ctx);
     }
 
@@ -436,6 +436,13 @@ impl ChatSession {
         std::fs::rename(&tmp, &self.history_path)
     }
 }
+
+// Plan 037 M2.0: these were under frontend/ but are terminal-dep-free. Moved
+// to the crate-root `ai/` module so they don't get pulled into ash-tui.
+pub mod ask;
+pub mod brief;
+pub mod context;
+pub mod suggest;
 
 #[cfg(test)]
 mod tests {

@@ -18,6 +18,9 @@ pub use ash_core as core;
 // (ai/ai_context/ask/suggest) stay available without the feature.
 pub mod frontend;
 
+// Plan 037 M2.0: terminal-dep-free AI modules moved out of frontend/.
+pub mod ai;
+
 // Legacy modules (will migrate into ash-core or frontend over time)
 pub mod auto_config;
 pub mod cmd;

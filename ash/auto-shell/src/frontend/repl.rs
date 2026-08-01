@@ -26,7 +26,7 @@ pub struct Repl {
     /// Plan 322: Input mode state (Shell/AutoScript/AI + lock + continuation).
     mode_state: crate::repl_mode::ModeState,
     /// Plan 027: Lazy-initialized persistent AI chat session.
-    chat: Option<crate::frontend::ai::ChatSession>,
+    chat: Option<crate::ai::ChatSession>,
 }
 
 impl Repl {
@@ -380,7 +380,7 @@ impl Repl {
 
         // Plan 029 §2.3/§7.2: inject the live shell context (OS/cwd/last
         // command/aliases) so the model knows the user's environment.
-        let context = crate::frontend::ai_context::build_context_block(&self.shell);
+        let context = crate::ai::context::build_context_block(&self.shell);
         let system = format!(
             "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
              {context}\n\
@@ -446,7 +446,7 @@ impl Repl {
         // runs the blocking daemon probe, which must NOT happen inside the
         // async turn (see `frontend::ai::ChatSession` docs).
         if self.chat.is_none() {
-            match crate::frontend::ai::ChatSession::load() {
+            match crate::ai::ChatSession::load() {
                 Ok(session) => self.chat = Some(session),
                 Err(e) => {
                     eprintln!(
@@ -506,9 +506,9 @@ impl Repl {
             }
 
             // Slash commands.
-            if let Some(cmd) = crate::frontend::ai::parse_slash_command(&line) {
+            if let Some(cmd) = crate::ai::parse_slash_command(&line) {
                 match cmd {
-                    crate::frontend::ai::SlashCommand::Exit => {
+                    crate::ai::SlashCommand::Exit => {
                         if let Some(session) = self.chat.as_mut() {
                             let _ = session.save();
                         }
@@ -516,7 +516,7 @@ impl Repl {
                         self.update_prompt();
                         break;
                     }
-                    crate::frontend::ai::SlashCommand::Clear => {
+                    crate::ai::SlashCommand::Clear => {
                         if let Some(session) = self.chat.as_mut() {
                             session.clear();
                             let _ = session.save();
@@ -578,7 +578,7 @@ impl Repl {
         // Plan 029 §7.2: refresh the agent's context (cwd/last-command/aliases)
         // before each turn — the user may have `cd`'d since the last turn.
         session.update_context(&self.shell);
-        let result = crate::frontend::ai::block_on_async(
+        let result = crate::ai::block_on_async(
             session.send_turn_streaming(user, on_event),
         );
         match result {
@@ -684,7 +684,7 @@ impl Repl {
             // Plan 029 §7.3: if a suggest-next fetch completed, show it before
             // the next prompt. (Best-effort: if it hasn't finished yet, nothing
             // shows — the fetch never blocks.)
-            if let Some(suggestions) = crate::frontend::suggest::take_pending() {
+            if let Some(suggestions) = crate::ai::suggest::take_pending() {
                 if !suggestions.is_empty() {
                     println!("\n  \x1b[2m\u{1f4a1} 接下来可能想:\x1b[0m");
                     for s in &suggestions {
@@ -748,13 +748,13 @@ impl Repl {
                                 // Plan 029 §5: validate the suggestion before
                                 // running it. Warn about destructive patterns
                                 // and unbalanced quotes/brackets.
-                                let findings = crate::frontend::ai::validate_suggestion(&suggestion);
+                                let findings = crate::ai::validate_suggestion(&suggestion);
                                 for finding in &findings {
                                     match finding {
-                                        crate::frontend::ai::ValidationFinding::Danger(msg) => {
+                                        crate::ai::ValidationFinding::Danger(msg) => {
                                             println!("  \x1b[1;31m\u{26a0} DANGER: {}\x1b[0m", msg);
                                         }
-                                        crate::frontend::ai::ValidationFinding::Warning(msg) => {
+                                        crate::ai::ValidationFinding::Warning(msg) => {
                                             println!("  \x1b[33m\u{26a0} warning: {}\x1b[0m", msg);
                                         }
                                     }
@@ -762,7 +762,7 @@ impl Repl {
 
                                 // Plan 029 §5: if the suggestion is a multi-step
                                 // && chain, offer step-by-step execution.
-                                let steps = crate::frontend::ai::split_steps(&suggestion);
+                                let steps = crate::ai::split_steps(&suggestion);
                                 let multi = steps.len() > 1;
                                 if multi {
                                     println!(
@@ -974,8 +974,8 @@ impl Repl {
                     // Plan 029 §7.3: async-suggest next command (opt-in). Fire
                     // a background fetch; the result shows before the next prompt
                     // if it arrived in time. Never blocks the shell.
-                    if crate::frontend::suggest::is_enabled() {
-                        crate::frontend::suggest::suggest_next_async(
+                    if crate::ai::suggest::is_enabled() {
+                        crate::ai::suggest::suggest_next_async(
                             self.shell.pwd().to_string_lossy().to_string(),
                             line.clone(),
                             output_snippet,
@@ -1074,7 +1074,7 @@ pub fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
 // terminal-dep-free `super::brief` module so `ash ask` (frontend/ask.rs) can use
 // them without the frontend-tui feature. This file re-exports them for its own
 // StreamEvent rendering below.
-use super::brief::{brief_args, brief_result};
+use crate::ai::brief::{brief_args, brief_result};
 
 #[cfg(test)]
 mod read_recent_history_tests {

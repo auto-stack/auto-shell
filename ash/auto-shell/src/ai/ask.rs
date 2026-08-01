@@ -93,7 +93,7 @@ pub fn run(args: &[String]) -> Result<()> {
 
     // Inject the live shell context (cwd / last command / aliases) so the
     // model knows the environment.
-    let context = crate::frontend::ai_context::build_context_block(&Shell::new());
+    let context = crate::ai::context::build_context_block(&Shell::new());
     agent.set_context(context);
 
     // Register tools: eval_auto (run AutoLang) + ash commands (system() backs).
@@ -118,10 +118,10 @@ pub fn run(args: &[String]) -> Result<()> {
             let _ = std::io::stdout().flush();
         }
         StreamEvent::ToolStart { tool, args } => {
-            println!("\n  \x1b[2m\u{2699} {tool} {}\x1b[0m", crate::frontend::brief::brief_args(&args));
+            println!("\n  \x1b[2m\u{2699} {tool} {}\x1b[0m", crate::ai::brief::brief_args(&args));
         }
         StreamEvent::Tool { tool, result, .. } => {
-            println!("\n  \x1b[2m\u{2190} {tool}: {}\x1b[0m", crate::frontend::brief::brief_result(&result));
+            println!("\n  \x1b[2m\u{2190} {tool}: {}\x1b[0m", crate::ai::brief::brief_result(&result));
         }
         StreamEvent::Warning { text } => println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m"),
         StreamEvent::Done { .. } => {}
@@ -130,7 +130,7 @@ pub fn run(args: &[String]) -> Result<()> {
     });
 
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let agent_result = crate::frontend::ai::block_on_async(async {
+    let agent_result = crate::ai::block_on_async(async {
         agent.run_stream(&task, on_event, cancel).await
     })
     .map_err(|e| miette::miette!("ask failed: {}", e))?;

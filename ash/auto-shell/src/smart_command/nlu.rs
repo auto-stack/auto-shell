@@ -106,7 +106,7 @@ pub fn parse_nlu_output(output: &str) -> Result<NluResult, String> {
 /// Agent turn, and parses the structured output.
 ///
 /// `client` must already be constructed (synchronously) — see
-/// [`crate::frontend::ai::block_on_async`] for why AiClient can't be built
+/// [`crate::ai::block_on_async`] for why AiClient can't be built
 /// inside an async context.
 pub fn route(
     user_msg: &str,
@@ -122,7 +122,7 @@ pub fn route(
     let mut agent = Agent::new(role, client);
 
     // Drive the async Agent::run on a one-shot tokio runtime (the CLI is sync).
-    let result = crate::frontend::ai::block_on_async(async move { agent.run(user_msg).await })
+    let result = crate::ai::block_on_async(async move { agent.run(user_msg).await })
         .map_err(|e| format!("NLU agent run failed: {}", e))?;
 
     let parsed = parse_nlu_output(&result.output)?;
