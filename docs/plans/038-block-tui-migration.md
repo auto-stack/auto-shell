@@ -161,18 +161,24 @@ ash-tui/src/
 
 ### 2.3 数据流
 
+> **2026-08-03 M1 调研修正**:`EditMode::parse_event` 返回**单个 `ReedlineEvent`**(非 `Vec`),且**按值消费** `ReedlineRawEvent`(签名 `fn parse_event(&mut self, event: ReedlineRawEvent) -> ReedlineEvent`,`edit_mode/base.rs:12`)。批量事件通过 `ReedlineEvent::Multiple(Vec<ReedlineEvent>)` 表达,dispatch 须**递归展开**(F1-F4/Esc/Alt 都是 `Multiple([Edit(insert prefix), Submit])`)。
+
 ```
 crossterm Event
     │
     ▼
-ReedlineRawEvent::try_from(event)       ← 复用 reedline 的 Event 包装
-    │
+ReedlineRawEvent::try_from(event)       ← 复用 reedline 的 Event 包装(by value,拒绝 Release)
+    │                                      → Err(()) 表示丢弃(如 KeyRelease)
     ▼
-EditMode::parse_event(raw_event)        ← 复用 reedline 的 Emacs/Vi keybinding
-    │
+edit_mode.parse_event(raw)              ← 复用 reedline 的 Emacs/Vi keybinding(&mut self, 按值消费 raw)
+    │                                      返回单个 ReedlineEvent
     ▼ ReedlineEvent
-self.dispatch(event)                    ← 自建：分发到 editor / history / completion / submit
-    │
+self.dispatch(event)                    ← 自建：递归展开 Multiple,分发到 editor / submit
+    │   ├─ Edit([EditCommand]) → editor.dispatch_edit_command(逐个)   ← M1 主入口
+    │   ├─ Multiple([..])      → 递归 dispatch
+    │   ├─ Submit / Enter      → 提交当前行
+    │   ├─ CtrlD / CtrlC       → 退出 / abort
+    │   └─ Menu / History*     → M2 才处理
     ▼
 ratatui Terminal::draw(frame)           ← 自建：渲染编辑器 + 菜单 + hints
     │

@@ -278,7 +278,7 @@ fn main() -> Result<()> {
     // Security policy is not yet wired into block_tui (M0 is a bare skeleton);
     // the reedline REPL below remains the full-featured default.
     if block_tui {
-        println!("(block-tui M0 skeleton — press Ctrl+D/Ctrl+C/q to exit)");
+        println!("(block-tui M1 — type 'exit' or Ctrl+D to leave)");
         return ash_tui::block_tui::BlockTui::run().map_err(|e| {
             miette::miette!("block-tui: terminal error: {}", e)
         });

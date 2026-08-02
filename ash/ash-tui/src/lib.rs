@@ -14,6 +14,8 @@ pub mod block_header;
 /// to the reedline-driven [`Repl`]). Owned by the `--block-tui` CLI flag.
 pub mod block_tui;
 pub mod commands;
+/// Plan 038 M1: the bottom-line input editor for the block TUI.
+pub mod editor;
 // `commands_less.rs` is the original `less`/`more` implementation (crossterm),
 // moved verbatim; `commands` re-exports it and adds `color`.
 mod commands_less;

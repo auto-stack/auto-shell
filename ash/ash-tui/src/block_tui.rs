@@ -1,20 +1,20 @@
-//! Block TUI — ratatui inline-viewport REPL skeleton (Plan 038 M0).
+//! Block TUI — ratatui inline-viewport REPL (Plan 038 M0 + M1).
 //!
-//! This is the **experimental** ratatui-owned terminal path, the counterpart to
-//! the reedline-driven [`crate::Repl`]. Plan 038 explores replacing reedline's
+//! The **experimental** ratatui-owned terminal path, counterpart to the
+//! reedline-driven [`crate::Repl`]. Plan 038 explores replacing reedline's
 //! hold on the terminal with a ratatui `Viewport::Inline`, so that finished
 //! commands can be pushed into the host scrollback as blocks while a fixed
 //! bottom editor stays visible (something reedline 0.44.0 cannot do).
 //!
-//! ## M0 scope
-//! M0 is deliberately minimal — it only proves the skeleton:
-//!   - a ratatui `Viewport::Inline(3)` anchored at the bottom,
-//!   - a crossterm event loop (no editing yet; it just echoes pressed keys),
-//!   - `Terminal::insert_before` pushing a one-line "block" into the scrollback
-//!     on each keypress.
+//! ## Milestone status
+//! - **M0**: skeleton — `Viewport::Inline(3)` + event loop + `insert_before`.
+//! - **M1** (current): the bottom editor is live. Keys route through a reedline
+//!   `EditMode` (Emacs/Vi keybinding parser) into the [`Editor`], which mutates
+//!   a reedline `LineBuffer`. Enter submits the line → it's pushed into the
+//!   scrollback as a one-line "block". C-a/C-e/M-b/M-f/Backspace/basic vi work.
 //!
-//! Everything beyond this (editor, history, completion, block rendering,
-//! subprocess handoff, orchestration) lands in M1-M4. See
+//! Everything beyond this (history, completion, hints, real block rendering,
+//! subprocess handoff, orchestration) lands in M2-M4. See
 //! `docs/plans/038-block-tui-migration.md`.
 //!
 //! ## Terminal ownership
@@ -31,23 +31,28 @@ use std::io::{self, stdout};
 // types unified — Plan 038 §1.6 found that reedline's own crossterm 0.29
 // re-export and ash-tui's previous 0.27 pin were *different types*.
 use ratatui_crossterm::crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
 use ratatui_core::layout::Rect;
+use ratatui_core::style::{Color, Modifier, Style};
 use ratatui_core::terminal::{Terminal, TerminalOptions, Viewport};
 use ratatui_core::text::{Line, Span};
-use ratatui_core::style::{Color, Style};
-use ratatui_crossterm::CrosstermBackend;
+use reedline::{
+    default_emacs_keybindings, default_vi_insert_keybindings,
+    default_vi_normal_keybindings, Emacs, ReedlineRawEvent, Vi,
+};
 
-/// The fixed height of the inline viewport (in rows). M0 uses 3: one border
-/// row, one input row, one status row. Later milestones grow this to fit the
+use crate::editor::{Editor, EditorOutcome};
+
+/// The fixed height of the inline viewport (rows). M1 uses 3: one input row
+/// (prompt + buffer), one status row, one margin. M2 will grow this to fit the
 /// completion menu / hints.
 const VIEWPORT_HEIGHT: u16 = 3;
 
-/// The block-TUI experimental REPL. Construct with [`BlockTui::new`], run with
-/// [`BlockTui::run`]. Returns when the user exits (Ctrl+D / Ctrl+C / `q`).
+/// The block-TUI experimental REPL. Construct with [`BlockTui::run`]. Returns
+/// when the user exits (Ctrl+D on empty / `exit` / Ctrl+C from the outer loop).
 pub struct BlockTui;
 
 impl BlockTui {
@@ -65,102 +70,116 @@ impl BlockTui {
             original_hook(info);
         }));
 
-        // RAII guard: no matter how we leave this function (early return,
-        // error, panic), the terminal is restored. `drop` is the only method.
-        // Setup happens here (not in the panic hook); the hook is a
-        // best-effort belt-and-suspenders for the case where a panic unwinds
-        // *before* this guard's drop runs.
+        // RAII guard: setup on creation, restore on drop. Guarantees terminal
+        // restoration even when `run` returns early or propagates an error.
         let _guard = TerminalGuard::new()?;
 
         let mut terminal = Terminal::with_options(
-            CrosstermBackend::new(stdout()),
+            ratatui_crossterm::CrosstermBackend::new(stdout()),
             TerminalOptions {
                 viewport: Viewport::Inline(VIEWPORT_HEIGHT),
             },
         )?;
 
-        let mut key_count: u64 = 0;
+        // M1: pick Emacs or Vi from $ASH_EDIT_MODE (mirrors the reedline REPL's
+        // selection in repl.rs). Vi gives ESC/i/a/o + w/b/e motions in normal
+        // mode; the EditMode parser emits the EditCommands our dispatch handles.
+        let edit_mode = build_edit_mode();
+        let mut editor = Editor::new(edit_mode);
+
         loop {
-            // Draw the fixed-bottom viewport: a label line + the last key seen.
+            // ── Draw the fixed-bottom viewport ──────────────────────
+            // Row 0: prompt indicator + the editor's current buffer.
+            // Row 1: a status line (M1 hint text; M2 will show hints/menu).
+            // The cursor is positioned within this same draw call via
+            // `frame.set_cursor_position`, so ratatui applies it after the
+            // buffer diff — no separate cursor write needed.
+            let ip = editor.insertion_point();
+            let buf_text = editor.text().to_string();
             terminal.draw(|frame| {
                 let area: Rect = frame.area();
-                let label = Line::from(vec![
+                let input_line = Line::from(vec![
+                    Span::styled("❯ ", Style::default().fg(Color::Green)),
+                    Span::raw(&buf_text),
+                ]);
+                let status = Line::from(vec![
                     Span::styled(
-                        "block-tui M0 ",
+                        "block-tui M1 ",
                         Style::default().fg(Color::Cyan),
                     ),
-                    Span::raw("— press keys (pushed to scrollback); "),
                     Span::styled(
-                        "Ctrl+D / Ctrl+C / q",
-                        Style::default().fg(Color::Yellow),
+                        "Enter=submit  Ctrl+D=exit  (emacs: C-a/e/k/w  M-b/f)",
+                        Style::default().fg(Color::DarkGray),
                     ),
-                    Span::raw(" to exit"),
                 ]);
-                let status = Line::from(format!("  keys seen: {key_count}"));
-                frame.render_widget(label, Rect::new(area.x, area.y, area.width, 1));
+                frame.render_widget(input_line, Rect::new(area.x, area.y, area.width, 1));
                 frame.render_widget(status, Rect::new(area.x, area.y + 1, area.width, 1));
+
+                // Place the visible caret over the insertion point. Column =
+                // viewport x + prompt width (2 for "❯ ") + display width of
+                // the text left of the insertion point.
+                let prefix = buf_text.get(..ip).unwrap_or("");
+                let col_offset = unicode_width::UnicodeWidthStr::width(prefix) as u16;
+                frame.set_cursor_position((area.x + 2 + col_offset, area.y));
             })?;
 
-            // Block on the next crossterm event. M0 only reacts to keys; M1
-            // will route them through EditMode::parse_event.
-            let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? else {
-                continue;
+            // ── Read + dispatch one event ───────────────────────────
+            let event = event::read()?;
+            let outcome = match ReedlineRawEvent::try_from(event) {
+                Ok(raw) => editor.handle_raw(raw),
+                // KeyRelease and a few other event kinds are rejected by
+                // reedline's TryFrom — they're a no-op for us.
+                Err(()) => continue,
             };
 
-            // Exit conditions.
-            if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
-                break;
+            match outcome {
+                EditorOutcome::Continue => continue,
+                EditorOutcome::Exit => break,
+                EditorOutcome::Submitted => {
+                    let line = editor.take_line();
+                    // M1: recognize `exit`/`quit` to leave the loop. Real
+                    // command dispatch + block rendering is M3.
+                    let trimmed = line.trim();
+                    if trimmed == "exit" || trimmed == "quit" || trimmed == "q" {
+                        break;
+                    }
+                    // Push a one-line "block" into the host scrollback above
+                    // the viewport. M3 replaces this with the real command
+                    // header + rendered output.
+                    let display = if line.is_empty() {
+                        "(empty)".to_string()
+                    } else {
+                        line.clone()
+                    };
+                    terminal.insert_before(1, |buf| {
+                        let rendered = Line::from(vec![
+                            Span::styled("❯ ", Style::default().fg(Color::Green)),
+                            Span::styled(display, Style::default().add_modifier(Modifier::BOLD)),
+                        ]);
+                        buf.set_line(buf.area.x, buf.area.y, &rendered, buf.area.width);
+                    })?;
+                }
             }
-            if code == KeyCode::Char('d') && modifiers.contains(KeyModifiers::CONTROL) {
-                break;
-            }
-            if code == KeyCode::Char('q') {
-                break;
-            }
-
-            key_count += 1;
-            // Push a one-line "block" into the host scrollback above the
-            // viewport. This is the Plan 038 §2.1 primitive — M3 will replace
-            // this test line with the real command header + rendered output.
-            terminal.insert_before(1, |buf| {
-                let line = Line::from(vec![
-                    Span::styled("❯ ", Style::default().fg(Color::Green)),
-                    Span::raw(format!("key #{key_count}: ")),
-                    Span::styled(
-                        key_label(code, modifiers),
-                        Style::default().fg(Color::Blue),
-                    ),
-                ]);
-                // set_line renders a `Line` into the buffer at (x, y), which is
-                // exactly what we need for a single-row insert. (Line does
-                // implement Widget, but set_line avoids needing the Widget
-                // trait import and is the idiomatic buffer-level call here.)
-                buf.set_line(buf.area.x, buf.area.y, &line, buf.area.width);
-            })?;
         }
 
         Ok(())
     }
 }
 
-/// Render a friendly label for a keypress (for the M0 echo line).
-fn key_label(code: KeyCode, modifiers: KeyModifiers) -> String {
-    let mods = if modifiers.contains(KeyModifiers::CONTROL) {
-        "Ctrl+"
-    } else if modifiers.contains(KeyModifiers::ALT) {
-        "Alt+"
+/// Build the reedline `EditMode` (keybinding parser) from `$ASH_EDIT_MODE`.
+///
+/// Mirrors the selection in `repl.rs::Repl::new` (Plan 302 Step 3.2) but
+/// without the ash-tui-specific common keybindings (F1-F4/Esc/Tab-completion)
+/// — those are M2/M4 orchestration that doesn't exist in the block TUI yet.
+/// Returns Emacs by default; `"vi"` selects Vi (insert mode by default).
+fn build_edit_mode() -> Box<dyn reedline::EditMode> {
+    let use_vi = std::env::var("ASH_EDIT_MODE").map(|v| v == "vi").unwrap_or(false);
+    if use_vi {
+        let insert_kb = default_vi_insert_keybindings();
+        let normal_kb = default_vi_normal_keybindings();
+        Box::new(Vi::new(insert_kb, normal_kb))
     } else {
-        ""
-    };
-    match code {
-        KeyCode::Char(c) => format!("{mods}{c:?}"),
-        KeyCode::Enter => format!("{mods}Enter"),
-        KeyCode::Backspace => format!("{mods}Backspace"),
-        KeyCode::Left => format!("{mods}Left"),
-        KeyCode::Right => format!("{mods}Right"),
-        KeyCode::Up => format!("{mods}Up"),
-        KeyCode::Down => format!("{mods}Down"),
-        other => format!("{mods}{other:?}"),
+        Box::new(Emacs::new(default_emacs_keybindings()))
     }
 }
 
@@ -168,11 +187,10 @@ fn key_label(code: KeyCode, modifiers: KeyModifiers) -> String {
 
 /// Enter raw mode + the alternate screen. Paired with [`restore_terminal`].
 ///
-/// Note: M0 uses the alternate screen for isolation during the experiment so
-/// that a crash cannot corrupt the host scrollback. Later milestones (M3) will
-/// drop the alt screen — the whole point of `Viewport::Inline` is to push
-/// blocks into the *host* scrollback, which the alt screen hides. For M0's
-/// "does inline work at all?" question, isolation is safer.
+/// Note: M0/M1 use the alternate screen for isolation during the experiment so
+/// that a crash cannot corrupt the host scrollback. M3 will drop the alt
+/// screen — the whole point of `Viewport::Inline` is to push blocks into the
+/// *host* scrollback, which the alt screen hides.
 fn setup_terminal() -> io::Result<()> {
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
@@ -200,28 +218,5 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         restore_terminal();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn key_label_plain_char() {
-        let l = key_label(KeyCode::Char('a'), KeyModifiers::NONE);
-        assert_eq!(l, "'a'");
-    }
-
-    #[test]
-    fn key_label_ctrl_enter() {
-        let l = key_label(KeyCode::Enter, KeyModifiers::CONTROL);
-        assert_eq!(l, "Ctrl+Enter");
-    }
-
-    #[test]
-    fn key_label_alt_up() {
-        let l = key_label(KeyCode::Up, KeyModifiers::ALT);
-        assert_eq!(l, "Alt+Up");
     }
 }
