@@ -21,10 +21,20 @@ ash-core = { path = "../../ash-core" }
 # ash-tui's mandatory deps — the crate boundary now provides the isolation that
 # the `frontend-tui` feature flag used to give).
 reedline = "0.44.0"
-crossterm = "0.27"
+# Plan 038 M0: unified to 0.29 (was 0.27). reedline 0.44.0 hard-requires
+# crossterm 0.29.0 and re-exports its KeyCode/KeyModifiers (lib.rs:300); the old
+# 0.27 pin produced a dual-version (0.27+0.29) lock with incompatible types.
+crossterm = "0.29"
 nu-ansi-term = "0.50"
+# Plan 038 M0: enable scrolling-regions (flicker-free insert_before) + add the
+# crossterm backend + the textarea widget for the block-TUI editor.
+# scrolling-regions lives on ratatui-crossterm (it forwards to ratatui-core
+# AND provides its own scroll_region_up/down Backend impls); enabling it only
+# on ratatui-core makes the trait add required methods the backend doesn't impl.
 ratatui-core = "0.1"
 ratatui-widgets = "0.3"
+ratatui-crossterm = { version = "0.1", features = ["scrolling-regions"] }
+ratatui-textarea = "0.9"
 
 # Prompt engine deps (module.rs/modules/ use rayon + nu-ansi-term; time.rs uses chrono)
 rayon = "1.12"

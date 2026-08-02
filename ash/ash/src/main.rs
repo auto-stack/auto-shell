@@ -53,6 +53,10 @@ fn main() -> Result<()> {
     // Plan 036 P1: --bash-compat renders structured commands (ls/grep/wc/ps)
     // as bash-style plain text instead of a ratatui table (for parity tests).
     let bash_compat = args.iter().any(|a| a == "--bash-compat");
+    // Plan 038 M0: --block-tui switches the interactive REPL to the
+    // experimental ratatui inline-viewport path (block_tui). Only affects the
+    // interactive REPL — `-c`/`-s`/script paths are unchanged.
+    let block_tui = args.iter().any(|a| a == "--block-tui");
 
     // Plan 008 (MS2-A): parse security flags anywhere on the command line.
     // They augment the policy loaded from config (`[security]` section).
@@ -86,6 +90,11 @@ fn main() -> Result<()> {
                 continue;
             }
             "--bash-compat" => {
+                // Already handled by the global pre-scan; skip here.
+                i += 1;
+                continue;
+            }
+            "--block-tui" => {
                 // Already handled by the global pre-scan; skip here.
                 i += 1;
                 continue;
@@ -183,6 +192,7 @@ fn main() -> Result<()> {
                 println!("  ash <script.at> --json  Script output as NDJSON");
                 println!("  --bash-compat     Render structured commands (ls/grep/wc/ps) as");
                 println!("                    bash-style plain text instead of a table");
+                println!("  --block-tui       Experimental: ratatui inline-viewport REPL (Plan 038)");
                 println!();
                 println!("  SECURITY (Plan 008):");
                 println!("  --allow <cmd>     Only allow listed commands (default-deny)");
@@ -262,6 +272,17 @@ fn main() -> Result<()> {
     println!("AutoShell v0.1.0");
     println!("Type 'exit' or press Ctrl+D to exit");
     println!();
+
+    // Plan 038 M0: experimental block TUI. The interactive REPL is the only
+    // path affected — it switches to the ratatui inline-viewport skeleton.
+    // Security policy is not yet wired into block_tui (M0 is a bare skeleton);
+    // the reedline REPL below remains the full-featured default.
+    if block_tui {
+        println!("(block-tui M0 skeleton — press Ctrl+D/Ctrl+C/q to exit)");
+        return ash_tui::block_tui::BlockTui::run().map_err(|e| {
+            miette::miette!("block-tui: terminal error: {}", e)
+        });
+    }
 
     let mut repl = ash_tui::Repl::new()?;
     // Plan 008: apply CLI security policy to the REPL shell too.
