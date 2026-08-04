@@ -22,7 +22,7 @@ use crate::pipeline::{AtomPipeline, AtomType};
 ///
 /// A TUI renderer turns this into an ANSI string; a GUI renderer turns it into
 /// a widget tree. Both consume the *same* value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum RenderedOutput {
     /// A structured table (file list / process list / generic rows-and-columns).
     Table {
@@ -50,7 +50,7 @@ pub enum RenderedOutput {
 
 /// One cell of a rendered table. `Tagged` carries a semantic [`CellTag`] so a
 /// frontend can style/interact with it (e.g. make a filename clickable).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum RenderedCell {
     /// A plain text cell with no special semantics.
     Text(String),
@@ -62,7 +62,7 @@ pub enum RenderedCell {
 /// Semantic tag for a [`RenderedCell`]. Frontend-agnostic — it carries *what*
 /// the cell is, not *what color* to draw it. The mapping tag → color/widget is
 /// each frontend's job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum CellTag {
     /// A file/directory name. The kind carries enough to reproduce the existing
     /// per-extension coloring without embedding colors here.
@@ -77,7 +77,7 @@ pub enum CellTag {
 
 /// Sub-kind of a [`CellTag::FileName`], mirroring the existing per-extension
 /// coloring in `cell_style` (auto-shell's table renderer).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum FileNameKind {
     /// A directory name.
     Dir,
@@ -92,7 +92,7 @@ pub enum FileNameKind {
 }
 
 /// What kind of error a [`RenderedOutput::Error`] represents. (Forward-compat.)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum RenderErrorKind {
     NotFound,
     PermissionDenied,

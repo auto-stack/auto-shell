@@ -1,0 +1,31 @@
+[package]
+name = "ash-gui-vue"
+version = "0.1.0"
+description = "ash-gui — Vue/Tauri frontend for ash (Plan 030, Vue rewrite)"
+authors = ["AutoLang Contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "ash_gui_vue_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.10.3", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+# Worker-thread async runtime: drives the mpsc receiver + the boot snapshot lock.
+tokio = { version = "1", features = ["sync", "rt", "time", "rt-multi-thread"] }
+
+# Shell engine + builtin commands (mirror of ash-gui-bin's deps, minus iced).
+ash-core = { path = "../../../ash-core" }
+auto-shell = { path = "../../../ash/auto-shell", default-features = false }
+
+# This crate is its OWN workspace (like ash-gui-bin) so its dependency graph
+# (tauri) does not unify into the shell's workspace.
+[workspace]

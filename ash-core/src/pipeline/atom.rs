@@ -11,7 +11,7 @@ use crate::cmd::value_helpers::format_value_for_display;
 ///
 /// Each variant describes what the data *means*, enabling commands to
 /// make intelligent decisions without runtime inspection of Value fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum AtomType {
     // ── File system ──────────────────────────────────────
     /// Single file/directory entry with metadata
