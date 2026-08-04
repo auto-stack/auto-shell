@@ -86,15 +86,68 @@ impl Editor {
     /// Feed one raw crossterm event through the keybinding parser + dispatch.
     /// Returns the outcome for the outer loop.
     ///
-    /// `raw_event` ownership is transferred into `parse_event` (reedline
-    /// consumes it by value). Returns `Continue` for events that don't map to
-    /// a recognized key (mouse/focus/unknown) — the editor is unchanged.
-    pub fn handle_raw(
-        &mut self,
-        raw_event: reedline::ReedlineRawEvent,
-    ) -> EditorOutcome {
-        let event = self.edit_mode.parse_event(raw_event);
-        self.dispatch_reedline_event(event)
+    /// Arrow keys are intercepted BEFORE the EditMode parser: reedline's
+    /// default Emacs/Vi keybindings don't bind them, so they'd return
+    /// `ReedlineEvent::None` (no movement). We map Left/Right/Up/Down directly
+    /// to `MoveLeft`/`MoveRight`/`MoveToLineStart`/`MoveToLineEnd` (Up/Down in
+    /// a single-line editor move to line ends — multi-line is M4).
+    pub fn handle_event(&mut self, event: crossterm::event::Event) -> EditorOutcome {
+        // Arrow-key fallback: works in both Emacs and Vi modes regardless of
+        // keybinding table contents.
+        if let crossterm::event::Event::Key(ke) = &event {
+            use crossterm::event::{KeyCode, KeyEventKind};
+            // Windows terminals emit Press + Release for each keypress; only
+            // act on Press/Repeat so we don't double-move.
+            if !matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                return EditorOutcome::Continue;
+            }
+            let no_mods = ke.modifiers == crossterm::event::KeyModifiers::NONE;
+            if no_mods {
+                match ke.code {
+                    KeyCode::Left => {
+                        dispatch::dispatch_edit_command(
+                            self,
+                            reedline::EditCommand::MoveLeft { select: false },
+                        );
+                        return EditorOutcome::Continue;
+                    }
+                    KeyCode::Right => {
+                        dispatch::dispatch_edit_command(
+                            self,
+                            reedline::EditCommand::MoveRight { select: false },
+                        );
+                        return EditorOutcome::Continue;
+                    }
+                    // Home/End are also commonly unbound in reedline defaults.
+                    KeyCode::Home => {
+                        dispatch::dispatch_edit_command(
+                            self,
+                            reedline::EditCommand::MoveToLineStart { select: false },
+                        );
+                        return EditorOutcome::Continue;
+                    }
+                    KeyCode::End => {
+                        dispatch::dispatch_edit_command(
+                            self,
+                            reedline::EditCommand::MoveToLineEnd { select: false },
+                        );
+                        return EditorOutcome::Continue;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Non-arrow keys: route through the reedline EditMode parser.
+        match reedline::ReedlineRawEvent::try_from(event) {
+            Ok(raw) => {
+                let ev = self.edit_mode.parse_event(raw);
+                self.dispatch_reedline_event(ev)
+            }
+            // KeyRelease and a few other event kinds are rejected by reedline's
+            // TryFrom — they're a no-op for us.
+            Err(()) => EditorOutcome::Continue,
+        }
     }
 
     /// Recursively dispatch a `ReedlineEvent`. `Multiple` is unwrapped so that
@@ -175,6 +228,38 @@ impl Editor {
                 // M3/M4 territory (clearing the ratatui viewport). No-op for M1.
                 EditorOutcome::Continue
             }
+            // Arrow keys surfaced as ReedlineEvents (Vi may emit these; Emacs
+            // returns None for unbound arrows, handled earlier in handle_event).
+            // Map them to the same cursor moves as the direct-key fallback.
+            ReedlineEvent::Left => {
+                dispatch::dispatch_edit_command(
+                    self,
+                    reedline::EditCommand::MoveLeft { select: false },
+                );
+                EditorOutcome::Continue
+            }
+            ReedlineEvent::Right => {
+                dispatch::dispatch_edit_command(
+                    self,
+                    reedline::EditCommand::MoveRight { select: false },
+                );
+                EditorOutcome::Continue
+            }
+            ReedlineEvent::Up => {
+                // Single-line editor: Up goes to line start (history is M2).
+                dispatch::dispatch_edit_command(
+                    self,
+                    reedline::EditCommand::MoveToLineStart { select: false },
+                );
+                EditorOutcome::Continue
+            }
+            ReedlineEvent::Down => {
+                dispatch::dispatch_edit_command(
+                    self,
+                    reedline::EditCommand::MoveToLineEnd { select: false },
+                );
+                EditorOutcome::Continue
+            }
             // Everything below is M2+ (menu/history/hints/host). No-op in M1.
             ReedlineEvent::Menu(_)
             | ReedlineEvent::MenuNext
@@ -190,10 +275,6 @@ impl Editor {
             | ReedlineEvent::PreviousHistory
             | ReedlineEvent::NextHistory
             | ReedlineEvent::SearchHistory
-            | ReedlineEvent::Up
-            | ReedlineEvent::Down
-            | ReedlineEvent::Left
-            | ReedlineEvent::Right
             | ReedlineEvent::OpenEditor
             | ReedlineEvent::ExecuteHostCommand(_)
             | ReedlineEvent::ViChangeMode(_) => EditorOutcome::Continue,
@@ -210,15 +291,40 @@ mod tests {
         Editor::new(Box::new(Emacs::new(default_emacs_keybindings())))
     }
 
-    /// Helper: feed a crossterm char-press into the editor.
+    /// Helper: feed a crossterm char-press into the editor (Press kind).
     fn type_char(editor: &mut Editor, c: char) {
-        use reedline::ReedlineRawEvent;
-        let ev = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        editor.handle_event(key_press(
             crossterm::event::KeyCode::Char(c),
             crossterm::event::KeyModifiers::NONE,
         ));
-        let raw = ReedlineRawEvent::try_from(ev).unwrap();
-        editor.handle_raw(raw);
+    }
+
+    /// Build a KeyEvent with explicit `KeyEventKind::Press` (the kind Windows
+    /// Terminal emits for the key-down half; crossterm's `KeyEvent::new`
+    /// defaults to Press, but being explicit documents the assumption).
+    fn key_press(
+        code: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> crossterm::event::Event {
+        crossterm::event::Event::Key(crossterm::event::KeyEvent::new_with_kind_and_state(
+            code,
+            modifiers,
+            crossterm::event::KeyEventKind::Press,
+            crossterm::event::KeyEventState::NONE,
+        ))
+    }
+
+    /// Build a Release-kind key event (the key-up half on Windows terminals).
+    fn key_release(
+        code: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) -> crossterm::event::Event {
+        crossterm::event::Event::Key(crossterm::event::KeyEvent::new_with_kind_and_state(
+            code,
+            modifiers,
+            crossterm::event::KeyEventKind::Release,
+            crossterm::event::KeyEventState::NONE,
+        ))
     }
 
     #[test]
@@ -248,13 +354,10 @@ mod tests {
         for c in "abc".chars() {
             type_char(&mut e, c);
         }
-        // C-a
-        let ev = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        e.handle_event(key_press(
             crossterm::event::KeyCode::Char('a'),
             crossterm::event::KeyModifiers::CONTROL,
         ));
-        let raw = reedline::ReedlineRawEvent::try_from(ev).unwrap();
-        e.handle_raw(raw);
         assert_eq!(e.insertion_point(), 0);
     }
 
@@ -265,17 +368,15 @@ mod tests {
             type_char(&mut e, c);
         }
         // Move to start first, then C-e back to end.
-        let start = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        e.handle_event(key_press(
             crossterm::event::KeyCode::Char('a'),
             crossterm::event::KeyModifiers::CONTROL,
         ));
-        e.handle_raw(reedline::ReedlineRawEvent::try_from(start).unwrap());
         assert_eq!(e.insertion_point(), 0);
-        let end = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        e.handle_event(key_press(
             crossterm::event::KeyCode::Char('e'),
             crossterm::event::KeyModifiers::CONTROL,
         ));
-        e.handle_raw(reedline::ReedlineRawEvent::try_from(end).unwrap());
         assert_eq!(e.insertion_point(), 3);
     }
 
@@ -285,11 +386,10 @@ mod tests {
         for c in "abc".chars() {
             type_char(&mut e, c);
         }
-        let bs = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        e.handle_event(key_press(
             crossterm::event::KeyCode::Backspace,
             crossterm::event::KeyModifiers::NONE,
         ));
-        e.handle_raw(reedline::ReedlineRawEvent::try_from(bs).unwrap());
         assert_eq!(e.text(), "ab");
     }
 
@@ -299,22 +399,20 @@ mod tests {
         for c in "ls".chars() {
             type_char(&mut e, c);
         }
-        let enter = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        let outcome = e.handle_event(key_press(
             crossterm::event::KeyCode::Enter,
             crossterm::event::KeyModifiers::NONE,
         ));
-        let outcome = e.handle_raw(reedline::ReedlineRawEvent::try_from(enter).unwrap());
         assert_eq!(outcome, EditorOutcome::Submitted);
     }
 
     #[test]
     fn ctrl_d_on_empty_exits() {
         let mut e = emacs_editor();
-        let ctrl_d = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        let outcome = e.handle_event(key_press(
             crossterm::event::KeyCode::Char('d'),
             crossterm::event::KeyModifiers::CONTROL,
         ));
-        let outcome = e.handle_raw(reedline::ReedlineRawEvent::try_from(ctrl_d).unwrap());
         assert_eq!(outcome, EditorOutcome::Exit);
     }
 
@@ -325,16 +423,88 @@ mod tests {
             type_char(&mut e, c);
         }
         // Move cursor to start so there's a char to the right.
-        let ctrl_a = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        e.handle_event(key_press(
             crossterm::event::KeyCode::Char('a'),
             crossterm::event::KeyModifiers::CONTROL,
         ));
-        e.handle_raw(reedline::ReedlineRawEvent::try_from(ctrl_a).unwrap());
-        let ctrl_d = crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        e.handle_event(key_press(
             crossterm::event::KeyCode::Char('d'),
             crossterm::event::KeyModifiers::CONTROL,
         ));
-        e.handle_raw(reedline::ReedlineRawEvent::try_from(ctrl_d).unwrap());
         assert_eq!(e.text(), "b");
+    }
+
+    #[test]
+    fn left_arrow_moves_cursor_left() {
+        let mut e = emacs_editor();
+        for c in "abc".chars() {
+            type_char(&mut e, c);
+        }
+        assert_eq!(e.insertion_point(), 3);
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.insertion_point(), 2);
+    }
+
+    #[test]
+    fn right_arrow_moves_cursor_right() {
+        let mut e = emacs_editor();
+        for c in "abc".chars() {
+            type_char(&mut e, c);
+        }
+        // Move to start, then right once.
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
+        assert_eq!(e.insertion_point(), 0);
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.insertion_point(), 1);
+    }
+
+    #[test]
+    fn home_end_arrows_work() {
+        let mut e = emacs_editor();
+        for c in "abc".chars() {
+            type_char(&mut e, c);
+        }
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Home,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.insertion_point(), 0);
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::End,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.insertion_point(), 3);
+    }
+
+    #[test]
+    fn key_release_is_ignored_for_arrows() {
+        // Windows terminals emit Press + Release for each keypress; Release
+        // must not trigger a second move.
+        let mut e = emacs_editor();
+        for c in "ab".chars() {
+            type_char(&mut e, c);
+        }
+        assert_eq!(e.insertion_point(), 2);
+        // Press left once → cursor at 1.
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.insertion_point(), 1);
+        // Release left → must NOT move again (would go to 0).
+        e.handle_event(key_release(
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.insertion_point(), 1);
     }
 }

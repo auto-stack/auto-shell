@@ -41,7 +41,7 @@ use ratatui_core::terminal::{Terminal, TerminalOptions, Viewport};
 use ratatui_core::text::{Line, Span};
 use reedline::{
     default_emacs_keybindings, default_vi_insert_keybindings,
-    default_vi_normal_keybindings, Emacs, ReedlineRawEvent, Vi,
+    default_vi_normal_keybindings, Emacs, Vi,
 };
 
 use crate::editor::{Editor, EditorOutcome};
@@ -124,13 +124,11 @@ impl BlockTui {
             })?;
 
             // ── Read + dispatch one event ───────────────────────────
+            // Editor::handle_event takes the raw crossterm Event directly so
+            // it can intercept arrow keys (which reedline's default keybindings
+            // leave unbound → would be a no-op).
             let event = event::read()?;
-            let outcome = match ReedlineRawEvent::try_from(event) {
-                Ok(raw) => editor.handle_raw(raw),
-                // KeyRelease and a few other event kinds are rejected by
-                // reedline's TryFrom — they're a no-op for us.
-                Err(()) => continue,
-            };
+            let outcome = editor.handle_event(event);
 
             match outcome {
                 EditorOutcome::Continue => continue,
@@ -166,21 +164,46 @@ impl BlockTui {
     }
 }
 
-/// Build the reedline `EditMode` (keybinding parser) from `$ASH_EDIT_MODE`.
+/// Build the reedline `EditMode` (keybinding parser).
 ///
-/// Mirrors the selection in `repl.rs::Repl::new` (Plan 302 Step 3.2) but
-/// without the ash-tui-specific common keybindings (F1-F4/Esc/Tab-completion)
-/// — those are M2/M4 orchestration that doesn't exist in the block TUI yet.
-/// Returns Emacs by default; `"vi"` selects Vi (insert mode by default).
+/// Mirrors the selection in `repl.rs::Repl::new` (Plan 302 Step 3.2) with the
+/// same three-layer fallback so the block TUI matches the reedline REPL:
+///   1. `$ASH_EDIT_MODE` env var (`"vi"` selects Vi)
+///   2. `~/.config/ash.toml` `[shell] edit_mode = "vi"`
+///   3. `~/.ashrc` line `set editing-mode vi`
+///
+/// This matters on Windows/PowerShell where `ASH_EDIT_MODE=vi cargo run`
+/// (bash-style inline env) doesn't work — users set it via ash.toml or
+/// .ashrc instead. Returns Emacs by default.
 fn build_edit_mode() -> Box<dyn reedline::EditMode> {
-    let use_vi = std::env::var("ASH_EDIT_MODE").map(|v| v == "vi").unwrap_or(false);
-    if use_vi {
+    if detect_vi_mode() {
         let insert_kb = default_vi_insert_keybindings();
         let normal_kb = default_vi_normal_keybindings();
         Box::new(Vi::new(insert_kb, normal_kb))
     } else {
         Box::new(Emacs::new(default_emacs_keybindings()))
     }
+}
+
+/// Three-layer Vi-mode detection (env > ash.toml > ~/.ashrc).
+fn detect_vi_mode() -> bool {
+    // 1. Environment variable.
+    if std::env::var("ASH_EDIT_MODE").map(|v| v == "vi").unwrap_or(false) {
+        return true;
+    }
+    // 2. ash.toml.
+    let shell_config = auto_shell::config::AshShellConfig::load();
+    if shell_config.is_vi_mode() {
+        return true;
+    }
+    // 3. ~/.ashrc `set editing-mode vi`.
+    if let Some(home) = dirs::home_dir() {
+        let rc = home.join(".ashrc");
+        if let Ok(content) = std::fs::read_to_string(&rc) {
+            return content.lines().any(|line| line.trim() == "set editing-mode vi");
+        }
+    }
+    false
 }
 
 // ── Terminal setup/teardown ─────────────────────────────────────────────
