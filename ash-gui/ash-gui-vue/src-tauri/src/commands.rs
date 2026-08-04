@@ -36,14 +36,18 @@ pub fn cancel_command(shell: State<'_, ShellHandle>) {
 /// — `shell.execute("smart run X")` couldn't parse it. This routes the spec
 /// body through the Shell worker so it runs on the worker's *live* Shell
 /// (preserving session cwd/env/functions), with `$1`/`$2`/… injected.
+///
+/// `block_id` attributes the body's streamed output (via the worker's
+/// OutputHook) to the frontend's Running block.
 #[tauri::command]
 pub async fn run_smart_command(
+    block_id: usize,
     name: String,
     args: Vec<String>,
     shell: State<'_, ShellHandle>,
 ) -> Result<String, String> {
     // The reply comes via the oneshot channel (not a command-result event).
-    let result = shell.run_smart(name, args).await?;
+    let result = shell.run_smart(block_id, name, args).await?;
     match result.error {
         Some(e) => Err(e),
         None => Ok(result.output),

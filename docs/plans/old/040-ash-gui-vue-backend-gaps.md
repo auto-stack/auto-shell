@@ -152,15 +152,19 @@ M1 独立可验证,强烈建议先做。M2-M6 各自独立。
 `load_env_persistence`)。`~/.ashrc` 首次缺失时播种默认内容(与 REPL 一致)。
 
 ### M3 — SmartCommand 执行
-- `CommandReq::RunSmart { name, args, reply }`:把执行路由到 worker 线程,跑在
-  worker 的**活跃** Shell 上(保留 cwd/env/函数),而非临时 Shell。
-- `ShellHandle::run_smart(name, args)` 用 `oneshot` channel 收回复。
-- Tauri command `run_smart_command(name, args)` 调用上述接口。
+- `CommandReq::RunSmart { block_id, name, args, reply }`:把执行路由到 worker
+  线程,跑在 worker 的**活跃** Shell 上(保留 cwd/env/函数),而非临时 Shell。
+- `ShellHandle::run_smart(block_id, name, args)` 用 `oneshot` channel 收回复。
+- Tauri command `run_smart_command(block_id, name, args)` 调用上述接口。
 - 前端 `ToolSidebar` 对 SmartCommand 发 `run-smart(name)`(不再注入坏的
   `smart run X` 文本——`smart` 是 CLI 子命令,不是 Shell 命令)。
 - `App.vue` 把 `smart_commands` 传给侧栏(原先传空数组)。
-- **已知局限**:body 的实时输出打到 worker 线程的 stdout(GUI 不可见),前端
-  只看到成功/失败状态与最终返回值。长时 SmartCommand 的流式化留待后续。
+- **实时输出流式化(已解决)**:`auto-shell` 新增 `OutputHook` trait(镜像
+  `RenderHook`/`PagerHook` 注入模式)。`execute_script_content` 对每个 `> cmd`
+  行调用 `print_or_emit`(有 hook → emit,无 hook → 落回 `print_command_output`,
+  CLI/TUI 行为不变)。worker 注入 `StreamingOutputHook`,把 body 每条命令的输出
+  转发成 `command-output` 事件(带 `block_id`),前端追加到 Running block 的
+  `streamedText`。长时 SmartCommand 现在逐行可见。
 
 ### M4 — 流式输出
 - `run_command` 现在是 `async`。对**简单外部命令**(无重定向/管道 `|`/链式
@@ -182,7 +186,15 @@ M1 独立可验证,强烈建议先做。M2-M6 各自独立。
 - `CommandReq` 不再有 `Cancel` 变体(改用直接置位的 flag)。
 - 前端每个 Running block 显示 ■ 停止按钮 → `cancelCommand()`(乐观标记为
   Cancelled,worker 的 `command-result` 随后用真实状态覆盖)。
-- **限制**:仅在流式路径生效;`shell.execute()` 内阻塞的命令自然跑完。
+- **真正 kill 子进程(已解决)**:`ExternalStream` 新增 `pid` 字段
+  (`Arc<Mutex<Option<u32>>>`,捕获于句柄 move 进 wait 线程之前)+ `kill()` /
+  `kill_handle()` / `kill_from_handle()` 方法。`drain_stream` 在检测到取消时
+  调用 `kill_from_handle` 终止子进程(Unix `kill -9` / Windows `taskkill /T
+  /F`),不再让命令变成孤儿。跨平台 kill 封装在 `ash-core` 的私有
+  `kill_process`,避免引入 libc 依赖。
+- **剩余限制**:取消仅在流式路径(简单外部命令)真正 kill;`shell.execute()`
+  内阻塞的命令(注册命令/builtin/Auto/管道)无法中断——但这些多数是计算密集
+  型或很快返回,真正"卡住"的长外部命令已被流式路径覆盖。
 
 ### M6 — 历史持久化
 - Tauri command `history()` 读共享文件 `~/.auto-shell-history`(与 CLI/TUI 同

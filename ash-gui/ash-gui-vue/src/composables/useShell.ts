@@ -83,16 +83,20 @@ export function useShell() {
     })
     const started = performance.now()
     try {
-      const out = await invoke<string>('run_smart_command', { name, args })
+      // Pass blockId so the worker's OutputHook attributes streamed body output
+      // (command-output events) to this block while it runs.
+      const out = await invoke<string>('run_smart_command', { blockId: id, name, args })
       const block = blocks.find((b) => b.id === id)
       if (!block) return
       block.status = { kind: 'Success' }
       block.durationMs = Math.round(performance.now() - started)
+      block.streamedText = '' // final result replaces the stream
       block.output = out ? { Text: out } : 'Empty'
     } catch (e) {
       const block = blocks.find((b) => b.id === id)
       if (!block) return
       block.status = { kind: 'Failed', message: String(e) }
+      block.streamedText = ''
       block.durationMs = Math.round(performance.now() - started)
     }
   }

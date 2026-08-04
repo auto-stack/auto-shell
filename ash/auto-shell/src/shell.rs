@@ -117,6 +117,21 @@ pub trait PagerHook: Send {
     fn run_code_pager(&self, lines: Vec<String>, ext: String) -> miette::Result<()>;
 }
 
+/// Plan 040 M3: an injectable sink for command output emitted while running a
+/// script (SmartCommand bodies, sourced files). By default Shell prints each
+/// command's output to stdout via [`print_command_output`]; a frontend that
+/// embeds Shell (e.g. the ash-gui-vue worker) injects an `OutputHook` to
+/// *capture* that output instead — so a SmartCommand body's per-line output
+/// reaches the GUI rather than the worker thread's invisible stdout.
+///
+/// Mirrors the `RenderHook`/`PagerHook` injection pattern: decouples Shell
+/// from the frontend without changing the `execute → String` API.
+pub trait OutputHook: Send {
+    /// Handle one command's finished output (already stringified). Called in
+    /// place of `print_command_output` from `execute_script_content`.
+    fn emit(&self, output: &str);
+}
+
 pub struct Shell {
     current_dir: PathBuf,
     vars: ShellVars,
@@ -174,6 +189,10 @@ pub struct Shell {
     /// (default) means `--pager` falls through to streamed highlighting. The
     /// TUI frontend injects a crossterm-based hook via `set_pager_hook`.
     pager_hook: Option<Box<dyn PagerHook>>,
+    /// Plan 040 M3: injectable sink for script command output (SmartCommand
+    /// bodies). `None` (default) prints to stdout via `print_command_output`;
+    /// a frontend (ash-gui-vue worker) injects a hook to capture it instead.
+    output_hook: Option<Box<dyn OutputHook>>,
 }
 
 /// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
@@ -378,6 +397,7 @@ impl Shell {
             script_args: Vec::new(), // Plan 034 Bug 2: no script args by default
             render_hook: None, // Plan 037 M2.1: no structured renderer by default
             pager_hook: None,  // Plan 037 M2.2: no interactive pager by default
+            output_hook: None, // Plan 040 M3: no script-output sink by default
         };
 
         // Plan 011 (MS3-B): install the shell-host bridge on the AutoVM so
@@ -1132,6 +1152,24 @@ impl Shell {
     /// `show --pager` falls through to streamed highlighting.
     pub fn set_pager_hook(&mut self, hook: Box<dyn PagerHook>) {
         self.pager_hook = Some(hook);
+    }
+
+    /// Plan 040 M3: inject a sink for script command output. The GUI worker
+    /// calls this so a SmartCommand body's per-command output reaches the
+    /// frontend (as `command-output` events) instead of the worker's stdout.
+    pub fn set_output_hook(&mut self, hook: Box<dyn OutputHook>) {
+        self.output_hook = Some(hook);
+    }
+
+    /// Plan 040 M3: route command output to the injected `OutputHook` if set,
+    /// otherwise print to stdout via [`print_command_output`]. Used by the
+    /// script execution path (`execute_script_content`) for each `> cmd` line.
+    fn print_or_emit(&self, output: &str) {
+        if let Some(hook) = &self.output_hook {
+            hook.emit(output);
+        } else {
+            print_command_output(output);
+        }
     }
 
     /// Whether the currently-executing command is the final (or only) one in
@@ -2641,7 +2679,7 @@ impl Shell {
                 let cmd = self.interpolate_auto_vars(cmd);
 
                 match self.execute(&cmd) {
-                    Ok(Some(output)) => print_command_output(&output),
+                    Ok(Some(output)) => self.print_or_emit(&output),
                     Ok(None) => {}
                     Err(e) => eprintln!("Error: {}", e),
                 }

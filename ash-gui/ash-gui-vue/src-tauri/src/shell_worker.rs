@@ -42,7 +42,9 @@ pub enum CommandReq {
     Run { block_id: usize, cmd: String },
     /// Plan 040 M3: run a SmartCommand by name+args against the worker's Shell
     /// (preserves session cwd/env/functions). The reply comes back on `reply`.
+    /// `block_id` attributes streamed body output to the frontend's block.
     RunSmart {
+        block_id: usize,
         name: String,
         args: Vec<String>,
         reply: tokio::sync::oneshot::Sender<SmartResult>,
@@ -78,14 +80,17 @@ impl ShellHandle {
 
     /// Plan 040 M3: run a SmartCommand by name on the worker's Shell (preserves
     /// session cwd/env/functions). Blocks until the worker finishes and replies.
+    /// `block_id` attributes streamed body output to the frontend's block.
     pub async fn run_smart(
         &self,
+        block_id: usize,
         name: String,
         args: Vec<String>,
     ) -> Result<SmartResult, String> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.tx
             .send(CommandReq::RunSmart {
+                block_id,
                 name,
                 args,
                 reply: reply_tx,
@@ -165,6 +170,15 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                 };
                 shell.set_render_hook(Box::new(hook));
 
+                // Plan 040 M3: inject the OutputHook so a SmartCommand body's
+                // per-command output streams to the frontend. The block slot is
+                // retargeted per SmartCommand (None between them).
+                let smart_block: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+                shell.set_output_hook(Box::new(StreamingOutputHook {
+                    block: smart_block.clone(),
+                    app: app_for_thread.clone(),
+                }));
+
                 // Produce the boot snapshot once, for `command_list`.
                 let snapshot = harvest_boot(&shell, &app_for_thread);
                 *boot_for_thread.lock().await = Some(snapshot);
@@ -206,9 +220,14 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                             // CLI history file so GUI + CLI stay in sync.
                             let _ = append_history(&cmd);
                         }
-                        CommandReq::RunSmart { name, args, reply } => {
+                        CommandReq::RunSmart { block_id, name, args, reply } => {
                             // Plan 040 M3: run the SmartCommand body against the
                             // worker's live Shell (preserves cwd/env/functions).
+                            // Retarget the OutputHook to this block so the body's
+                            // per-command output streams as `command-output` chunks.
+                            if let Ok(mut slot) = smart_block.lock() {
+                                *slot = Some(block_id);
+                            }
                             let specs = auto_shell::smart_command::loader::load_all();
                             let result = match specs.iter().find(|s| s.name == name) {
                                 Some(spec) => {
@@ -230,6 +249,10 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                                     error: Some(format!("SmartCommand '{name}' not found")),
                                 },
                             };
+                            // Clear the slot so later normal commands don't leak.
+                            if let Ok(mut slot) = smart_block.lock() {
+                                *slot = None;
+                            }
                             let _ = reply.send(result);
                         }
                     }
@@ -372,6 +395,34 @@ impl auto_shell::shell::RenderHook for CaptureHook {
             *slot = Some(rendered.clone());
         }
         None
+    }
+}
+
+/// Plan 040 M3: an [`auto_shell::shell::OutputHook`] that forwards a
+/// SmartCommand body's per-command output to the frontend as `command-output`
+/// chunks (same event the streaming path uses). The current `block_id` is held
+/// in a shared slot so the worker can retarget the hook per SmartCommand.
+struct StreamingOutputHook {
+    /// The block_id to attribute output to; `None` means "not running a
+    /// SmartCommand" (output is dropped — the normal `execute()` path already
+    /// returns text via the worker loop).
+    block: Arc<Mutex<Option<usize>>>,
+    app: AppHandle,
+}
+
+impl auto_shell::shell::OutputHook for StreamingOutputHook {
+    fn emit(&self, output: &str) {
+        if let Ok(slot) = self.block.lock() {
+            if let Some(block_id) = *slot {
+                let _ = self.app.emit(
+                    "command-output",
+                    CommandOutput {
+                        block_id,
+                        chunk: output.to_string(),
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -579,8 +630,11 @@ async fn run_streaming_external(
     // the async loop responsive and lets channel `Cancel` messages land).
     let cancel_clone = cancel.clone();
     let app_clone = app.clone();
+    // Plan 040 M5: capture a kill handle before the stream is consumed by
+    // lines(), so we can terminate the child on cancel (not just stop reading).
+    let kill = stream.kill_handle();
     let rendered = tokio::task::spawn_blocking(move || {
-        drain_stream(stream, block_id, &cancel_clone, &app_clone)
+        drain_stream(stream, block_id, &cancel_clone, &kill, &app_clone)
     })
     .await
     .map_err(|e| format!("streaming task failed: {e}"))?;
@@ -594,16 +648,20 @@ async fn run_streaming_external(
 /// Drain an [`ExternalStream`] line-by-line, emitting a `command-output` chunk
 /// per line. Returns the accumulated text as a [`RenderedOutput::Text`] (or
 /// `Empty` if there was no output). Honours the cancel flag (M5): stops reading
-/// and returns what it has so far.
+/// and **kills the child process** via `kill` so it doesn't keep running as an
+/// orphan after we stop reading its stdout.
 fn drain_stream(
     stream: ash_core::pipeline::ExternalStream,
     block_id: usize,
     cancel: &Arc<AtomicBool>,
+    kill: &Arc<Mutex<Option<u32>>>,
     app: &AppHandle,
 ) -> RenderedOutput {
     let mut buf = String::new();
+    let mut cancelled = false;
     for line in stream.lines() {
         if cancel.load(Ordering::SeqCst) {
+            cancelled = true;
             break;
         }
         match line {
@@ -620,6 +678,12 @@ fn drain_stream(
             }
             Err(_) => break, // broken pipe → stop
         }
+    }
+    // Plan 040 M5: if cancelled, kill the child process so it doesn't outlive
+    // the read loop as an orphan. Best-effort: one-shot (clears the PID), and
+    // the process may have already exited.
+    if cancelled {
+        ash_core::pipeline::ExternalStream::kill_from_handle(kill);
     }
     if buf.is_empty() {
         RenderedOutput::Empty

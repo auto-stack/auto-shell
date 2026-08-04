@@ -11,9 +11,16 @@ use std::sync::{Arc, Mutex};
 ///
 /// Supports line-by-line iteration via `lines()` or full collection
 /// via `read_all()`.
+///
+/// Plan 040 M5: the child's OS PID is captured up front so [`kill`] can
+/// terminate the process externally (e.g. on user cancel), even though the
+/// `Child` handle itself lives on the background exit-status thread.
 pub struct ExternalStream {
     reader: BufReader<ChildStdout>,
     exit_status: Arc<Mutex<Option<ExitStatus>>>,
+    /// The child's OS PID, captured before the handle moved to the wait
+    /// thread. `None` once the process has been killed or already exited.
+    pid: Arc<Mutex<Option<u32>>>,
 }
 
 impl ExternalStream {
@@ -47,6 +54,11 @@ impl ExternalStream {
         let exit_status: Arc<Mutex<Option<ExitStatus>>> = Arc::new(Mutex::new(None));
         let status_handle = exit_status.clone();
 
+        // Plan 040 M5: capture the PID before moving the handle into the wait
+        // thread, so kill() can reach the process by PID later. Stored as an
+        // Option so kill() can clear it (one-shot).
+        let pid = Arc::new(Mutex::new(Some(child.id())));
+
         // Take stdout before moving child into background thread
         let stdout = child.stdout.take().expect("stdout was piped");
 
@@ -61,6 +73,45 @@ impl ExternalStream {
         Self {
             reader: BufReader::new(stdout),
             exit_status,
+            pid,
+        }
+    }
+
+    /// Plan 040 M5: terminate the underlying child process. Best-effort:
+    /// sends a kill to the OS PID. Safe to call after the process has already
+    /// exited (the OS returns "no such process", which we ignore). Clears the
+    /// stored PID so a second call is a no-op.
+    ///
+    /// This lets a frontend cancel a long external command for real, rather
+    /// than just stopping to read its stdout (which orphans the process).
+    pub fn kill(&self) {
+        let pid = {
+            let mut slot = self.pid.lock().unwrap();
+            slot.take() // kill is one-shot
+        };
+        if let Some(pid) = pid {
+            kill_process(pid);
+        }
+    }
+
+    /// Plan 040 M5: a clonable handle to the kill slot, so a consumer that
+    /// moves the stream into `lines()` (consuming it) can still kill the
+    /// process by PID from the cloned handle. One-shot: `kill()` clears it.
+    pub fn kill_handle(&self) -> Arc<Mutex<Option<u32>>> {
+        self.pid.clone()
+    }
+
+    /// Plan 040 M5: kill the process referenced by a handle returned from
+    /// [`kill_handle`]. Lets a consumer that already moved the stream into
+    /// `lines()` still terminate the child. One-shot: clears the PID. No-op if
+    /// the process already exited (or was already killed).
+    pub fn kill_from_handle(handle: &Arc<Mutex<Option<u32>>>) {
+        let pid = {
+            let mut slot = handle.lock().unwrap();
+            slot.take()
+        };
+        if let Some(pid) = pid {
+            kill_process(pid);
         }
     }
 
@@ -119,6 +170,28 @@ impl ExternalStream {
     pub fn is_finished(&self) -> bool {
         self.exit_status.lock().unwrap().is_some()
     }
+}
+
+/// Plan 040 M5: terminate a process by PID, cross-platform.
+///
+/// - Unix: `kill -9 <pid>` via the system `kill` utility (avoids a libc dep).
+/// - Windows: `taskkill /PID <pid> /T /F` (force-kill the process tree, so
+///   spawned grandchildren die too — important for e.g. a cancelled build).
+///
+/// Failures are ignored: the process may have already exited (ESRCH / "no such
+/// process"), in which case there's nothing to kill.
+fn kill_process(pid: u32) {
+    let result = if cfg!(unix) {
+        std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status()
+    } else {
+        std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+    };
+    // Ignore the result — a missing process is the expected "already done".
+    let _ = result;
 }
 
 #[cfg(test)]
