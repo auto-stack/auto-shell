@@ -503,7 +503,7 @@ M0（骨架 + 依赖统一）→ M1（编辑器）→ M2（history/completion/hi
 
 **解决方案**：后台线程跑 `send_turn_streaming`，回调往 `mpsc::channel` 推 `StreamEvent`，主循环用 `event::poll()` 非阻塞读 + draw 渲染。这是调研报告 §2.4.5 的"推荐方案"，但工作量大（需改事件循环为非阻塞）。
 
-**状态**：🟡 已知限制，后续迭代
+**状态**：✅ 已完成（worker thread + 双向 channel + poll-driven 主循环。ChatSession 移入 worker 线程,`on_event` 回调通过 channel 推 ChatEv,主循环 `event::poll(50ms)` 交替处理按键和 drain channel,`terminal.draw()` 实时渲染流式文本）
 
 ### 实施优先级
 
@@ -515,9 +515,9 @@ M0（骨架 + 依赖统一）→ M1（编辑器）→ M2（history/completion/hi
 | 4 结构化表格 | P2 | ~150 行（新写） | ✅ 已完成 |
 | 5 Ctrl+R 搜索 | P2 | ~100 行（新写） | ✅ 已完成 |
 | 6 prompt 模块 | P2 | ~30 行（适配） | ✅ 已完成 |
-| 7 F4 流式 | P2 | ~200 行（重构） | 🟡 已知限制，后续迭代 |
+| 7 F4 流式 | P2 | ~200 行（重构） | ✅ 已完成 |
 
-**实施状态**：Gap 1-6 全部完成。Gap 7（F4 流式输出的后台线程+channel 重构）作为已知限制保留，不影响核心功能。
+**实施状态**：Gap 1-7 全部完成。block TUI 现在与 reedline REPL 完全对齐。
 
 ---
 

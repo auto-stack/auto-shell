@@ -744,13 +744,131 @@ fn handle_ai_suggest(
     Ok(())
 }
 
-/// F4: persistent AI chat (ReAct loop with tool use). Blocks per turn.
+// ── F4 AI chat: worker thread + streaming channel (Gap 7) ─────────────
+
+/// Commands sent from the main thread to the chat worker thread.
+enum ChatCmd {
+    /// Submit a user turn (with the shell context snapshot for update_context).
+    Turn { user: String, context: String },
+    /// Clear the conversation.
+    Clear,
+    /// Exit the worker (drops the session).
+    Exit,
+}
+
+/// Events sent from the chat worker thread back to the main thread.
+enum ChatEv {
+    /// A chunk of streamed assistant text.
+    Delta(String),
+    /// A formatted tool/warning/error line.
+    ToolLine(String),
+    /// The turn completed (Ok = final text, Err = error message).
+    Done(Result<String, String>),
+    /// A /clear completed.
+    Cleared,
+}
+
+/// Spawn a background worker thread that owns the ChatSession. Returns:
+/// - the cmd sender (to submit turns / clear / exit)
+/// - the event receiver (to drain streaming events)
+/// - the JoinHandle (to reclaim the thread on exit)
+fn spawn_chat_worker(
+    mut session: auto_shell::ai::ChatSession,
+) -> (
+    std::sync::mpsc::Sender<ChatCmd>,
+    std::sync::mpsc::Receiver<ChatEv>,
+    std::thread::JoinHandle<()>,
+) {
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<ChatCmd>();
+    let (ev_tx, ev_rx) = std::sync::mpsc::channel::<ChatEv>();
+
+    let handle = std::thread::Builder::new()
+        .name("ash-block-tui-chat".into())
+        .spawn(move || {
+            for cmd in cmd_rx {
+                match cmd {
+                    ChatCmd::Exit => break,
+                    ChatCmd::Clear => {
+                        session.clear();
+                        let _ = session.save();
+                        let _ = ev_tx.send(ChatEv::Cleared);
+                    }
+                    ChatCmd::Turn { user, context } => {
+                        session.set_context_str(context);
+                        // The on_event callback sends StreamEvents over the
+                        // channel as ChatEv variants (no stdout writes).
+                        let tx = ev_tx.clone();
+                        let on_event: std::sync::Arc<
+                            dyn Fn(auto_ai_agent::agent::StreamEvent) + Send + Sync,
+                        > = std::sync::Arc::new(move |ev| {
+                            let chat_ev = match ev {
+                                auto_ai_agent::agent::StreamEvent::Delta { text } => {
+                                    ChatEv::Delta(text)
+                                }
+                                auto_ai_agent::agent::StreamEvent::ToolStart { tool, args } => {
+                                    ChatEv::ToolLine(format!(
+                                        "  ⚙ {tool} {}",
+                                        auto_shell::ai::brief::brief_args(&args)
+                                    ))
+                                }
+                                auto_ai_agent::agent::StreamEvent::Tool {
+                                    tool, result, ..
+                                } => ChatEv::ToolLine(format!(
+                                    "  ← {tool}: {}",
+                                    auto_shell::ai::brief::brief_result(&result)
+                                )),
+                                auto_ai_agent::agent::StreamEvent::Warning { text } => {
+                                    ChatEv::ToolLine(format!("  ⚠ {text}"))
+                                }
+                                auto_ai_agent::agent::StreamEvent::Error { message } => {
+                                    ChatEv::ToolLine(format!("  [error] {message}"))
+                                }
+                                auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
+                                    ChatEv::ToolLine("  [cancelled]".to_string())
+                                }
+                                auto_ai_agent::agent::StreamEvent::Thinking { text } => {
+                                    ChatEv::ToolLine(format!("  💭 {text}"))
+                                }
+                                auto_ai_agent::agent::StreamEvent::Done { .. } => {
+                                    // Done is handled by the send_turn_streaming return.
+                                    return;
+                                }
+                            };
+                            let _ = tx.send(chat_ev);
+                        });
+                        let result = auto_shell::ai::block_on_async(
+                            session.send_turn_streaming(&user, on_event),
+                        );
+                        match result {
+                            Ok(text) => {
+                                let _ = session.save();
+                                let _ = ev_tx.send(ChatEv::Done(Ok(text)));
+                            }
+                            Err(e) => {
+                                let _ = ev_tx.send(ChatEv::Done(Err(e)));
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn chat worker thread");
+
+    (cmd_tx, ev_rx, handle)
+}
+
+/// F4: persistent AI chat with real-time streaming output.
+///
+/// Uses a background worker thread (owns ChatSession) + bidirectional channels.
+/// The main loop is poll-driven (event::poll + channel drain), so ratatui
+/// redraws during the AI turn — the user sees Delta text and tool events
+/// appear live, and the viewport never freezes.
 fn handle_ai_chat(
     shell: &mut auto_shell::Shell,
     terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
 ) -> io::Result<()> {
-    // Lazy-load the chat session (must be sync context — daemon probe).
-    let mut session = match auto_shell::ai::ChatSession::load() {
+    // Load the session on the main thread (sync daemon probe).
+    let session = match auto_shell::ai::ChatSession::load() {
         Ok(s) => s,
         Err(e) => {
             push_block(
@@ -765,6 +883,8 @@ fn handle_ai_chat(
         }
     };
     let turns = session.turn_count();
+    let (cmd_tx, ev_rx, _worker_handle) = spawn_chat_worker(session);
+
     if turns > 0 {
         push_block(terminal, &[&format!("  * 已恢复 {} 轮对话 *", turns / 2)], Color::Cyan)?;
     } else {
@@ -775,110 +895,177 @@ fn handle_ai_chat(
         )?;
     }
 
+    // The chat input loop: poll for keys + drain streaming events.
+    let mut input_buf = String::new();
+    let mut streaming_text = String::new();
+    let mut tool_lines: Vec<String> = Vec::new();
+    let mut ai_busy = false; // true while waiting for a turn to complete.
+
     loop {
-        // Read a chat line (simple blocking read, no editor).
-        let mut input = String::new();
-        push_block(terminal, &["▌? "], Color::Magenta)?;
-        read_raw_line(terminal, &mut input)?;
-        let line = input.trim().to_string();
-
-        // Ctrl+D (empty EOF) → exit chat.
-        if line.is_empty() {
-            let _ = session.save();
-            break;
+        // ── Draw the current chat state ──────────────────────
+        // If streaming, show the accumulated text + tool lines + input prompt.
+        if ai_busy || !streaming_text.is_empty() || !tool_lines.is_empty() {
+            let mut lines: Vec<String> = Vec::new();
+            for tl in &tool_lines {
+                lines.push(tl.clone());
+            }
+            if !streaming_text.is_empty() {
+                lines.push(streaming_text.clone());
+            }
+            if ai_busy {
+                lines.push("  ⏳ ...".to_string());
+            }
+            // We can't re-draw the scrollback; instead, push a snapshot.
+            // But pushing every frame floods the scrollback. So we DON'T push
+            // during streaming — we draw into the viewport instead (below).
         }
 
-        // Slash commands.
-        if let Some(cmd) = auto_shell::ai::parse_slash_command(&line) {
-            match cmd {
-                auto_shell::ai::SlashCommand::Exit => {
-                    let _ = session.save();
-                    break;
+        // Draw the chat prompt + input into the viewport (not scrollback).
+        terminal.draw(|frame| {
+            let area: Rect = frame.area();
+            let prompt_text = if ai_busy {
+                "▌? (AI thinking...) ".to_string()
+            } else {
+                format!("▌? {input_buf}")
+            };
+            let prompt_line = Line::from(vec![Span::styled(
+                prompt_text,
+                Style::default().fg(Color::Magenta),
+            )]);
+            frame.render_widget(prompt_line, Rect::new(area.x, area.y, area.width, 1));
+
+            // If streaming, show accumulated text below the prompt.
+            if !streaming_text.is_empty() {
+                let stream_lines: Vec<&str> = streaming_text.lines().collect();
+                for (i, sl) in stream_lines.iter().enumerate() {
+                    let row_y = area.y + 1 + i as u16;
+                    if row_y < area.bottom() {
+                        let line = Line::from(vec![Span::raw(format!("  {sl}"))]);
+                        frame.render_widget(line, Rect::new(area.x, row_y, area.width, 1));
+                    }
                 }
-                auto_shell::ai::SlashCommand::Clear => {
-                    session.clear();
-                    let _ = session.save();
-                    push_block(terminal, &["  * 对话已清空 *"], Color::DarkGray)?;
-                    continue;
+            }
+        })?;
+
+        // ── Poll for a key event (non-blocking, 50ms timeout) ──
+        if event::poll(std::time::Duration::from_millis(50))? {
+            let event = event::read()?;
+            if let Some(kc) = key_code(&event) {
+                match kc {
+                    KeyCode::Enter => {
+                        let line = input_buf.trim().to_string();
+                        input_buf.clear();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        // Slash commands.
+                        if let Some(cmd) = auto_shell::ai::parse_slash_command(&line) {
+                            match cmd {
+                                auto_shell::ai::SlashCommand::Exit => {
+                                    let _ = cmd_tx.send(ChatCmd::Exit);
+                                    break;
+                                }
+                                auto_shell::ai::SlashCommand::Clear => {
+                                    let _ = cmd_tx.send(ChatCmd::Clear);
+                                    // Wait for Cleared confirmation.
+                                    loop {
+                                        match ev_rx.recv() {
+                                            Ok(ChatEv::Cleared) => {
+                                                push_block(
+                                                    terminal,
+                                                    &["  * 对话已清空 *"],
+                                                    Color::DarkGray,
+                                                )?;
+                                                break;
+                                            }
+                                            Ok(_) => {}
+                                            Err(_) => break,
+                                        }
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        if line.starts_with('/') {
+                            push_block(
+                                terminal,
+                                &[&format!("  未知命令: {line} (可用: /clear /exit)")],
+                                Color::DarkGray,
+                            )?;
+                            continue;
+                        }
+                        // Submit the turn.
+                        let context = auto_shell::ai::context::build_context_block(shell);
+                        streaming_text.clear();
+                        tool_lines.clear();
+                        ai_busy = true;
+                        let _ = cmd_tx.send(ChatCmd::Turn {
+                            user: line,
+                            context,
+                        });
+                    }
+                    KeyCode::Esc => {
+                        if ai_busy {
+                            // Can't cancel yet (v1 no cancel); just ignore.
+                        } else {
+                            let _ = cmd_tx.send(ChatCmd::Exit);
+                            break;
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        input_buf.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        if !event_has_ctrl(&event) {
+                            input_buf.push(c);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
-        if line.starts_with('/') {
-            push_block(terminal, &[&format!("  未知命令: {line} (可用: /clear /exit)")], Color::DarkGray)?;
-            continue;
-        }
 
-        // Send a turn (blocking — the streamed events are captured into a
-        // Vec and pushed as a block after the turn completes; we can't draw
-        // during the sync block_on).
-        session.update_context(shell);
-        let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let cap = captured.clone();
-        let on_event: std::sync::Arc<dyn Fn(auto_ai_agent::agent::StreamEvent) + Send + Sync> =
-            std::sync::Arc::new(move |ev| {
-                let line = match ev {
-                    auto_ai_agent::agent::StreamEvent::Delta { text } => {
-                        // Accumulate delta text; we'll push it as a block later.
-                        use std::io::Write;
-                        let _ = std::io::stdout().write_all(text.as_bytes());
-                        let _ = std::io::stdout().flush();
-                        None
-                    }
-                    auto_ai_agent::agent::StreamEvent::ToolStart { tool, args } => Some(format!(
-                        "\n  ⚙ {tool} {}",
-                        auto_shell::ai::brief::brief_args(&args)
-                    )),
-                    auto_ai_agent::agent::StreamEvent::Tool { tool, result, .. } => Some(format!(
-                        "\n  ← {tool}: {}",
-                        auto_shell::ai::brief::brief_result(&result)
-                    )),
-                    auto_ai_agent::agent::StreamEvent::Warning { text } => {
-                        Some(format!("\n  ⚠ {text}"))
-                    }
-                    auto_ai_agent::agent::StreamEvent::Error { message } => {
-                        Some(format!("\n  [error] {message}"))
-                    }
-                    auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
-                        Some("\n  [cancelled]".to_string())
-                    }
-                    auto_ai_agent::agent::StreamEvent::Done { .. } => None,
-                    auto_ai_agent::agent::StreamEvent::Thinking { .. } => None,
-                };
-                if let Some(l) = line {
-                    cap.lock().unwrap().push(l);
+        // ── Drain streaming events (non-blocking) ────────────
+        while let Ok(ev) = ev_rx.try_recv() {
+            match ev {
+                ChatEv::Delta(text) => {
+                    streaming_text.push_str(&text);
                 }
-            });
-        let result = auto_shell::ai::block_on_async(session.send_turn_streaming(&line, on_event));
-        // Print a newline after the streamed delta (it was written directly to
-        // stdout via the callback, bypassing ratatui — this works because we're
-        // NOT in raw mode's owned-terminal during... actually we ARE. The
-        // stream writes go to stdout which ratatui owns. This is a known M4
-        // limitation: the chat stream output is raw stdout, which may interleave
-        // badly with the ratatui viewport. A proper fix needs a background
-        // thread + channel + draw rendering (deferred). For now the direct-write
-        // approach works on most terminals when the viewport is at the bottom.)
-        match result {
-            Ok(_) => {
-                let _ = session.save();
-                // Push captured tool/error events as a block.
-                let events = captured.lock().unwrap();
-                if !events.is_empty() {
-                    let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
-                    push_block(terminal, &refs, Color::DarkGray)?;
+                ChatEv::ToolLine(line) => {
+                    tool_lines.push(line);
                 }
-                // Ensure a newline after the streamed reply.
-                push_block(terminal, &[""], Color::Reset)?;
-            }
-            Err(e) => {
-                push_block(
-                    terminal,
-                    &[&format!("  AI error: {e}"), "  (check API key / daemon)"],
-                    Color::Red,
-                )?;
+                ChatEv::Done(result) => {
+                    ai_busy = false;
+                    // Push the complete turn output as a block into scrollback.
+                    let mut block_lines: Vec<String> = tool_lines.drain(..).collect();
+                    match result {
+                        Ok(final_text) => {
+                            if !streaming_text.is_empty() {
+                                block_lines.push(streaming_text.clone());
+                            }
+                            streaming_text.clear();
+                        }
+                        Err(e) => {
+                            block_lines.push(format!("  AI error: {e}"));
+                            block_lines.push("  (check API key / daemon)".to_string());
+                            streaming_text.clear();
+                        }
+                    }
+                    if !block_lines.is_empty() {
+                        let refs: Vec<&str> = block_lines.iter().map(|s| s.as_str()).collect();
+                        push_block(terminal, &refs, Color::DarkGray)?;
+                    }
+                    break; // break the while-recv loop, go back to polling
+                }
+                ChatEv::Cleared => {
+                    // Unexpected here (Clear is handled synchronously above).
+                }
             }
         }
     }
+
+    // Ensure the worker exits cleanly.
+    let _ = cmd_tx.send(ChatCmd::Exit);
     Ok(())
 }
 

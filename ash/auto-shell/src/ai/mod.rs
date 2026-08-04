@@ -418,6 +418,14 @@ impl ChatSession {
         self.agent.set_context(ctx);
     }
 
+    /// Set the agent context from a pre-built string (for the block TUI's
+    /// worker-thread F4 chat, where the Shell lives on the main thread).
+    /// Equivalent to `update_context` but takes the already-built context
+    /// block so the worker doesn't need a Shell reference.
+    pub fn set_context_str(&mut self, ctx: String) {
+        self.agent.set_context(ctx);
+    }
+
     /// Serialize the text turns (user + assistant, tool messages filtered) to
     /// the history file atomically (write temp, then rename). A crash mid-write
     /// won't corrupt the file.
