@@ -31,7 +31,7 @@ use std::io::{self, stdout};
 // types unified — Plan 038 §1.6 found that reedline's own crossterm 0.29
 // re-export and ash-tui's previous 0.27 pin were *different types*.
 use ratatui_crossterm::crossterm::{
-    event,
+    event::{self, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui_core::layout::Rect;
@@ -268,6 +268,21 @@ impl BlockTui {
                 continue;
             }
 
+            // M4-6: F3 / Alt+3 — AI NL→command (translate natural language to
+            // an ash command, then offer execute/edit/cancel). Synchronous flow
+            // (blocks the event loop while the AI thinks, same as reedline REPL).
+            if is_ai_suggest_key(&event) {
+                handle_ai_suggest(&mut editor, &mut shell, &mut terminal)?;
+                continue;
+            }
+
+            // M4-7: F4 / Alt+4 — persistent AI chat (ReAct loop with tool use).
+            // Also synchronous (the chat blocks the event loop per turn).
+            if is_ai_chat_key(&event) {
+                handle_ai_chat(&mut shell, &mut terminal)?;
+                continue;
+            }
+
             // M2: history navigation intercept. When the completion menu is
             // closed and the user hits ↑/↓, walk the history store (Editor
             // itself only knows line-start/end for ↑/↓ since it doesn't own
@@ -453,6 +468,445 @@ impl BlockTui {
 
         Ok(())
     }
+}
+
+/// Ask the AI to translate a natural-language question into a single ash
+/// command. Ported from `repl.rs::Repl::ask_ai` (line 388) as a free function
+/// (the original was `&self`, using `self.shell`; here we pass `&Shell`).
+///
+/// Returns the suggested command string, or an error message. Uses `tier:mid`
+/// (the daemon resolves it to a concrete model). Must be called in a sync
+/// context (it builds a blocking tokio runtime internally).
+fn ask_ai(shell: &auto_shell::Shell, question: &str) -> Result<String, String> {
+    use auto_ai_client::{AiClient, CompletionRequest};
+
+    let context = auto_shell::ai::context::build_context_block(shell);
+    let system = format!(
+        "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
+         {context}\n\
+         The user will describe what they want to do in natural language.\n\
+         Translate it into a SINGLE ash shell command (or pipeline).\n\
+         Rules:\n\
+         - Respond with ONLY the command, no explanation, no markdown.\n\
+         - Use standard Unix commands (ls, grep, find, etc.).\n\
+         - For Ash-specific features, use: ls | .size > 10.mb | sort .name\n\
+         - If multiple steps are needed, use && to chain them.\n\
+         - If you're unsure, give your best single-command guess."
+    );
+
+    let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
+    let model = "tier:mid".to_string();
+    let req = CompletionRequest::single(&model, question)
+        .with_system(&system)
+        .with_max_tokens(256)
+        .with_temperature(0.3);
+
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {}", e))?;
+    let response = rt.block_on(async { client.complete(&req).await });
+
+    match response {
+        Ok(resp) if resp.is_ok() => {
+            let cmd = resp.content.trim().to_string();
+            let cmd = cmd
+                .trim_start_matches("```bash\n")
+                .trim_start_matches("```sh\n")
+                .trim_start_matches("```\n")
+                .trim_end_matches("\n```")
+                .trim()
+                .to_string();
+            Ok(cmd)
+        }
+        Ok(resp) => Err(format!("AI returned error: {:?}", resp.error)),
+        Err(e) => Err(format!("{e}")),
+    }
+}
+
+/// Is the event F3 or Alt+3 (AI NL→command)?
+fn is_ai_suggest_key(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
+    use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    if let Event::Key(ke) = event {
+        matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && (ke.code == KeyCode::F(3)
+                || (ke.code == KeyCode::Char('3') && ke.modifiers.contains(KeyModifiers::ALT)))
+    } else {
+        false
+    }
+}
+
+/// Is the event F4 or Alt+4 (AI chat)?
+fn is_ai_chat_key(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
+    use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    if let Event::Key(ke) = event {
+        matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && (ke.code == KeyCode::F(4)
+                || (ke.code == KeyCode::Char('4') && ke.modifiers.contains(KeyModifiers::ALT)))
+    } else {
+        false
+    }
+}
+
+/// F3: translate the current input (or a prompted question) into an ash
+/// command via the AI, then offer execute / step-by-step / edit / cancel.
+///
+/// Synchronous — blocks the event loop while the AI thinks. The viewport is
+/// not redrawn during the AI call (the terminal shows the last frame). The
+/// result + decision prompt are pushed as blocks into the scrollback.
+fn handle_ai_suggest(
+    editor: &mut Editor,
+    shell: &mut auto_shell::Shell,
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+) -> io::Result<()> {
+    // The question: use the current editor text, or prompt for one.
+    let question = {
+        let text = editor.text().trim().to_string();
+        if text.is_empty() {
+            // Read a question line directly (no editor — simple blocking read).
+            push_block(terminal, &["AI: type your question, then Enter:", ""], Color::Cyan)?;
+            let mut buf = String::new();
+            read_raw_line(terminal, &mut buf)?;
+            if buf.trim().is_empty() {
+                return Ok(()); // cancelled
+            }
+            buf.trim().to_string()
+        } else {
+            editor.take_line();
+            text
+        }
+    };
+
+    // Ask the AI (blocking).
+    push_block(terminal, &["  ⏳ asking AI..."], Color::DarkGray)?;
+    let suggestion = match ask_ai(shell, &question) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            push_block(
+                terminal,
+                &[&format!("  AI error: {e}"), "  (set ZHIPU_API_KEY / start aaid daemon)"],
+                Color::Red,
+            )?;
+            return Ok(());
+        }
+    };
+
+    // Validate (danger/warning detection).
+    let findings = auto_shell::ai::validate_suggestion(&suggestion);
+    let steps = auto_shell::ai::split_steps(&suggestion);
+    let multi = steps.len() > 1;
+
+    let mut lines: Vec<String> = vec![format!("  AI: {suggestion}")];
+    for f in &findings {
+        match f {
+            auto_shell::ai::ValidationFinding::Danger(msg) => {
+                lines.push(format!("  ⚠ DANGER: {msg}"));
+            }
+            auto_shell::ai::ValidationFinding::Warning(msg) => {
+                lines.push(format!("  ⚠ warning: {msg}"));
+            }
+        }
+    }
+    if multi {
+        lines.push(format!(
+            "  [Enter] 全部执行  [s] 分步执行({}步)  [e] 编辑  [Esc/其他] 取消",
+            steps.len()
+        ));
+    } else {
+        lines.push("  [Enter] 执行  [e] 编辑  [Esc/其他] 取消".to_string());
+    }
+    let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+    push_block(terminal, &refs, Color::Cyan)?;
+
+    // Read the decision key.
+    let event = event::read()?;
+    if is_enter(&event) {
+        execute_and_render(shell, terminal, &suggestion)?;
+    } else if let Some(KeyCode::Char(c)) = key_code(&event) {
+        match c {
+            's' if multi => {
+                for (i, step) in steps.iter().enumerate() {
+                    push_block(
+                        terminal,
+                        &[&format!("  [{}/{}] {}", i + 1, steps.len(), step)],
+                        Color::DarkGray,
+                    )?;
+                    let ev = event::read()?;
+                    if !is_enter(&ev) {
+                        push_block(
+                            terminal,
+                            &[&format!("  已中止 (剩余 {} 步)", steps.len() - i - 1)],
+                            Color::DarkGray,
+                        )?;
+                        return Ok(());
+                    }
+                    execute_and_render(shell, terminal, step)?;
+                    if shell.last_exit_code() != 0 {
+                        return Ok(()); // abort on failure (&& semantics)
+                    }
+                }
+            }
+            'e' => {
+                push_block(
+                    terminal,
+                    &[&format!("  编辑命令 (当前: {suggestion})")],
+                    Color::DarkGray,
+                )?;
+                let mut edited = String::new();
+                read_raw_line(terminal, &mut edited)?;
+                if !edited.trim().is_empty() {
+                    execute_and_render(shell, terminal, edited.trim())?;
+                }
+            }
+            _ => {} // cancel
+        }
+    }
+    Ok(())
+}
+
+/// F4: persistent AI chat (ReAct loop with tool use). Blocks per turn.
+fn handle_ai_chat(
+    shell: &mut auto_shell::Shell,
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+) -> io::Result<()> {
+    // Lazy-load the chat session (must be sync context — daemon probe).
+    let mut session = match auto_shell::ai::ChatSession::load() {
+        Ok(s) => s,
+        Err(e) => {
+            push_block(
+                terminal,
+                &[
+                    &format!("  AI error: {e}"),
+                    "  (set ZHIPU_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY or start aaid daemon)",
+                ],
+                Color::Red,
+            )?;
+            return Ok(());
+        }
+    };
+    let turns = session.turn_count();
+    if turns > 0 {
+        push_block(terminal, &[&format!("  * 已恢复 {} 轮对话 *", turns / 2)], Color::Cyan)?;
+    } else {
+        push_block(
+            terminal,
+            &["  * 开始新对话 *  (/clear 清空  /exit 退出  Esc/F4 离开)"],
+            Color::Cyan,
+        )?;
+    }
+
+    loop {
+        // Read a chat line (simple blocking read, no editor).
+        let mut input = String::new();
+        push_block(terminal, &["▌? "], Color::Magenta)?;
+        read_raw_line(terminal, &mut input)?;
+        let line = input.trim().to_string();
+
+        // Ctrl+D (empty EOF) → exit chat.
+        if line.is_empty() {
+            let _ = session.save();
+            break;
+        }
+
+        // Slash commands.
+        if let Some(cmd) = auto_shell::ai::parse_slash_command(&line) {
+            match cmd {
+                auto_shell::ai::SlashCommand::Exit => {
+                    let _ = session.save();
+                    break;
+                }
+                auto_shell::ai::SlashCommand::Clear => {
+                    session.clear();
+                    let _ = session.save();
+                    push_block(terminal, &["  * 对话已清空 *"], Color::DarkGray)?;
+                    continue;
+                }
+            }
+        }
+        if line.starts_with('/') {
+            push_block(terminal, &[&format!("  未知命令: {line} (可用: /clear /exit)")], Color::DarkGray)?;
+            continue;
+        }
+
+        // Send a turn (blocking — the streamed events are captured into a
+        // Vec and pushed as a block after the turn completes; we can't draw
+        // during the sync block_on).
+        session.update_context(shell);
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let cap = captured.clone();
+        let on_event: std::sync::Arc<dyn Fn(auto_ai_agent::agent::StreamEvent) + Send + Sync> =
+            std::sync::Arc::new(move |ev| {
+                let line = match ev {
+                    auto_ai_agent::agent::StreamEvent::Delta { text } => {
+                        // Accumulate delta text; we'll push it as a block later.
+                        use std::io::Write;
+                        let _ = std::io::stdout().write_all(text.as_bytes());
+                        let _ = std::io::stdout().flush();
+                        None
+                    }
+                    auto_ai_agent::agent::StreamEvent::ToolStart { tool, args } => Some(format!(
+                        "\n  ⚙ {tool} {}",
+                        auto_shell::ai::brief::brief_args(&args)
+                    )),
+                    auto_ai_agent::agent::StreamEvent::Tool { tool, result, .. } => Some(format!(
+                        "\n  ← {tool}: {}",
+                        auto_shell::ai::brief::brief_result(&result)
+                    )),
+                    auto_ai_agent::agent::StreamEvent::Warning { text } => {
+                        Some(format!("\n  ⚠ {text}"))
+                    }
+                    auto_ai_agent::agent::StreamEvent::Error { message } => {
+                        Some(format!("\n  [error] {message}"))
+                    }
+                    auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
+                        Some("\n  [cancelled]".to_string())
+                    }
+                    auto_ai_agent::agent::StreamEvent::Done { .. } => None,
+                };
+                if let Some(l) = line {
+                    cap.lock().unwrap().push(l);
+                }
+            });
+        let result = auto_shell::ai::block_on_async(session.send_turn_streaming(&line, on_event));
+        // Print a newline after the streamed delta (it was written directly to
+        // stdout via the callback, bypassing ratatui — this works because we're
+        // NOT in raw mode's owned-terminal during... actually we ARE. The
+        // stream writes go to stdout which ratatui owns. This is a known M4
+        // limitation: the chat stream output is raw stdout, which may interleave
+        // badly with the ratatui viewport. A proper fix needs a background
+        // thread + channel + draw rendering (deferred). For now the direct-write
+        // approach works on most terminals when the viewport is at the bottom.)
+        match result {
+            Ok(_) => {
+                let _ = session.save();
+                // Push captured tool/error events as a block.
+                let events = captured.lock().unwrap();
+                if !events.is_empty() {
+                    let refs: Vec<&str> = events.iter().map(|s| s.as_str()).collect();
+                    push_block(terminal, &refs, Color::DarkGray)?;
+                }
+                // Ensure a newline after the streamed reply.
+                push_block(terminal, &[""], Color::Reset)?;
+            }
+            Err(e) => {
+                push_block(
+                    terminal,
+                    &[&format!("  AI error: {e}"), "  (check API key / daemon)"],
+                    Color::Red,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Push a multi-line block of text into the scrollback above the viewport.
+fn push_block(
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+    lines: &[&str],
+    color: Color,
+) -> io::Result<()> {
+    let owned: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+    let n = owned.len() as u16;
+    terminal.insert_before(n, move |buf| {
+        for (i, text) in owned.iter().enumerate() {
+            let line = Line::from(vec![Span::styled(text.clone(), Style::default().fg(color))]);
+            let y = buf.area.y + i as u16;
+            if y < buf.area.bottom() {
+                buf.set_line(buf.area.x, y, &line, buf.area.width);
+            }
+        }
+    })
+}
+
+/// Read a line of input in raw mode, character by character, until Enter.
+/// Writes each char to stdout as it's typed (simple echo). Used by F3/F4
+/// for quick prompt reads that don't need the full editor.
+fn read_raw_line(
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+    buf: &mut String,
+) -> io::Result<()> {
+    use std::io::Write;
+    loop {
+        let event = event::read()?;
+        if let Some(code) = key_code(&event) {
+            match code {
+                KeyCode::Enter => {
+                    let mut out = std::io::stdout();
+                    let _ = writeln!(out);
+                    let _ = out.flush();
+                    break;
+                }
+                KeyCode::Backspace => {
+                    if buf.pop().is_some() {
+                        let mut out = std::io::stdout();
+                        let _ = out.write_all(b"\x08 \x08");
+                        let _ = out.flush();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    buf.push(c);
+                    let mut out = std::io::stdout();
+                    let _ = write!(out, "{c}");
+                    let _ = out.flush();
+                }
+                KeyCode::Esc => {
+                    buf.clear();
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extract the KeyCode from a crossterm event (if it's a key press/repeat).
+fn key_code(event: &ratatui_crossterm::crossterm::event::Event) -> Option<KeyCode> {
+    use ratatui_crossterm::crossterm::event::{Event, KeyEventKind};
+    if let Event::Key(ke) = event {
+        if matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return Some(ke.code);
+        }
+    }
+    None
+}
+
+/// Is the event an Enter keypress?
+fn is_enter(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
+    key_code(event) == Some(KeyCode::Enter)
+}
+
+/// Execute a command and render it as a block (the M3 path, extracted as a
+/// helper so F3's decision flow can reuse it without duplicating logic).
+fn execute_and_render(
+    shell: &mut auto_shell::Shell,
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+    command: &str,
+) -> io::Result<()> {
+    let start = std::time::Instant::now();
+    let result = shell.execute(command);
+    let elapsed = start.elapsed();
+    let exit_code = match &result {
+        Ok(_) => shell.last_exit_code(),
+        Err(_) => {
+            let c = shell.last_exit_code();
+            if c != 0 { c } else { 1 }
+        }
+    };
+    let (body_text, is_error): (Option<String>, bool) = match result {
+        Ok(Some(s)) => (Some(s), false),
+        Ok(None) => (None, false),
+        Err(e) => (Some(format!("Error: {e}")), true),
+    };
+    let body_lines: Vec<String> = body_text
+        .as_ref()
+        .map(|s| strip_ansi(s).lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default();
+    let height = 1u16 + body_lines.len() as u16;
+    let header_cmd = command.to_string();
+    terminal.insert_before(height, move |buf| {
+        render_block(buf, &header_cmd, exit_code, elapsed, &body_lines, is_error);
+    })?;
+    Ok(())
 }
 
 /// Is the event Ctrl+E (open in $EDITOR)?
