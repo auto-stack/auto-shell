@@ -1,7 +1,7 @@
 # Plan 040: ash-gui-vue 后端差距 — 让 GUI 跑满 ash 的命令能力
 
 > **日期**: 2026-08-04
-> **状态**: ✅ 完成(M1-M6 已实施)
+> **状态**: ✅ **完成（归档 2026-08-04）** — M1-M6 全部交付。`cargo check -p ash-gui-vue` + `vue-tsc --noEmit` 通过；ash-core 5/5、auto-shell 698/698（含 49 个 smart_command）测试通过。`execute()` 内命令不可取消为有意识接受的权衡（见 §4.1 / `DEBTS.md`）。
 > **来源**: Plan 039(ash-gui-vue M1-M4)完成后的差距分析——对比 TUI/CLI ash 与 Vue GUI 的能力
 > **范围**: `ash-gui/ash-gui-vue/src-tauri/`(后端)+ 必要的 `ash-core`/`auto-shell` 改动
 > **前置**: Plan 039 已提交;auto-lang 编译稳定后可联调验证
