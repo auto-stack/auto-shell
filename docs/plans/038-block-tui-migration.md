@@ -479,7 +479,7 @@ M0（骨架 + 依赖统一）→ M1（编辑器）→ M2（history/completion/hi
 
 **解决方案**：写一个 `RenderedOutput → ratatui widget` 的转换器（把 `renderer/tui.rs:166-177` 的 widget 构造段抽成 `pub fn render_table_to_buffer(buf, rendered, ...)`），在 `render_block` 的 body 段直接画 widget 而非 strip ANSI。参考 ash-gui 的 `renderer.rs::rendered_to_iced`（同样的 RenderedOutput → widget 转换）。
 
-**状态**：🟡 已知限制，后续迭代
+**状态**：✅ 已完成（`render_table_to_buffer` + `try_render_structured` + `render_structured_block`）
 
 ### Gap 5（P2）：Ctrl+R 反向搜索未实现
 
@@ -487,7 +487,7 @@ M0（骨架 + 依赖统一）→ M1（编辑器）→ M2（history/completion/hi
 
 **解决方案**：自建一个 inline 搜索状态（类似 reedline 的 history_menu，但用 `FileBackedHistory::search(SearchQuery::all_that_contain_rev)` + ratatui 浮动菜单渲染）。或复用 completion_menu 的渲染框架 + history 数据源。
 
-**状态**：🟡 已知限制，后续迭代
+**状态**：✅ 已完成（`handle_history_search`：Ctrl+R 进入 inline 搜索子循环，实时过滤历史，Enter 选中首项）
 
 ### Gap 6（P2）：prompt 模块系统（directory/git/status）
 
@@ -495,7 +495,7 @@ M0（骨架 + 依赖统一）→ M1（编辑器）→ M2（history/completion/hi
 
 **解决方案**：暴露 `prompt/engine.rs` 的 `render_all()`（当前私有），在 `prompt_spans()` 里调用它，把返回的 `(left, right, indicator)` 三段渲染成 ratatui spans。模块系统（`prompt/modules/*`）零改动保留。
 
-**状态**：🟡 已知限制，后续迭代
+**状态**：✅ 已完成（`render_all()` 改为 `pub`，`prompt_spans` 接收 `&AshPrompt` 并 prepend 左侧 env 信息）
 
 ### Gap 7（P2）：F4 流式输出直写 stdout
 
@@ -509,15 +509,15 @@ M0（骨架 + 依赖统一）→ M1（编辑器）→ M2（history/completion/hi
 
 | Gap | 优先级 | 工作量 | 阻塞日常使用? |
 |---|---|---|---|
-| 1 Shell 初始化 | **P0** | ~40 行（搬运） | ✅ 是 |
-| 2 history 展开 | **P1** | ~20 行（搬运） | 部分 |
-| 3 abbrev 展开 | **P1** | ~10 行（搬运） | 部分 |
-| 4 结构化表格 | P2 | ~150 行（新写） | 否 |
-| 5 Ctrl+R 搜索 | P2 | ~100 行（新写） | 否 |
-| 6 prompt 模块 | P2 | ~30 行（适配） | 否 |
-| 7 F4 流式 | P2 | ~200 行（重构） | 否 |
+| 1 Shell 初始化 | **P0** | ~40 行（搬运） | ✅ 已完成 |
+| 2 history 展开 | **P1** | ~20 行（搬运） | ✅ 已完成 |
+| 3 abbrev 展开 | **P1** | ~10 行（搬运） | ✅ 已完成 |
+| 4 结构化表格 | P2 | ~150 行（新写） | ✅ 已完成 |
+| 5 Ctrl+R 搜索 | P2 | ~100 行（新写） | ✅ 已完成 |
+| 6 prompt 模块 | P2 | ~30 行（适配） | ✅ 已完成 |
+| 7 F4 流式 | P2 | ~200 行（重构） | 🟡 已知限制，后续迭代 |
 
-**本轮实施范围**：Gap 1-3（P0+P1，共 ~70 行搬运，让 block TUI 真正可用）。Gap 4-7 标记为已知限制，后续迭代。
+**实施状态**：Gap 1-6 全部完成。Gap 7（F4 流式输出的后台线程+channel 重构）作为已知限制保留，不影响核心功能。
 
 ---
 

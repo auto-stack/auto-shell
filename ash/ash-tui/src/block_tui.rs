@@ -94,12 +94,21 @@ impl BlockTui {
         let mut mode_state = auto_shell::repl_mode::ModeState::default();
         // M4: accumulates multi-line continuation input across submits.
         let mut pending_input = String::new();
+        // M4 Gap 6: the modular prompt (directory + git branch + status),
+        // same as the reedline REPL's AshPrompt. render_all() gives us the
+        // left string (env info) to prepend before the mode symbol.
+        let prompt = crate::prompt::AshPrompt::new(
+            auto_shell::prompt::AshConfig::load(),
+        );
 
         // M2/M3: build the execution Shell + history/completion/hint sources.
         // The Shell is the REAL execution shell (render hook + terminal
         // commands injected) — M3 uses it to run commands.
         let (mut shell, mut history_store, completer, hinter, completion_state, cwd) =
             build_shell_and_sources();
+        // Initialize the git cache for prompt modules (directory/git_branch/
+        // git_status). Mirrors repl.rs:739 (on_directory_changed on run start).
+        auto_shell::prompt::context::on_directory_changed(shell.pwd());
         // HistoryNav is owned HERE (not in Editor) because it needs the
         // FileBackedHistory on each ↑/↓, and that store lives in this scope.
         let mut history_nav = crate::editor::history::HistoryNav::new();
@@ -143,7 +152,7 @@ impl BlockTui {
                 // Input line: prompt symbol + typed text + dim hint suffix.
                 // The prompt symbol comes from mode_state (M4): `▌` prefix if
                 // locked (blue), then the mode symbol (>/#/?/·).
-                let (prompt_spans, prompt_width) = prompt_spans(&mode_state);
+                let (prompt_spans, prompt_width) = prompt_spans(&mode_state, &prompt);
                 let mut input_spans = prompt_spans;
                 input_spans.push(Span::raw(&buf_text));
                 if !hint_text.is_empty() {
@@ -266,6 +275,14 @@ impl BlockTui {
                         })?;
                     }
                 }
+                continue;
+            }
+
+            // M4 Gap 5: Ctrl+R — reverse history search (inline, like bash).
+            // Enters a sub-loop: types a query, shows matching history entries
+            // pushed into scrollback, Enter selects one.
+            if is_ctrl_r(&event) {
+                handle_history_search(&mut terminal, &history_store, &mut editor)?;
                 continue;
             }
 
@@ -471,72 +488,63 @@ impl BlockTui {
                         continue;
                     }
 
-                    // ── Execute + time (mirrors repl.rs execute_with_header) ──
+                    // ── Execute + render (mirrors repl.rs execute_with_header) ──
                     let start = std::time::Instant::now();
-                    let result = shell.execute(&trimmed);
-                    let elapsed = start.elapsed();
-                    let exit_code = match &result {
-                        Ok(_) => shell.last_exit_code(),
-                        Err(_) => {
-                            let c = shell.last_exit_code();
-                            if c != 0 { c } else { 1 }
+
+                    // Gap 4: try structured rendering first (ls/ps/find → table
+                    // widget). Non-atom commands fall through to text.
+                    if let Some(rendered) = try_render_structured(&mut shell, &trimmed) {
+                        let elapsed = start.elapsed();
+                        let exit_code = shell.last_exit_code();
+                        render_structured_block(
+                            &mut terminal, &trimmed, exit_code, elapsed, &rendered,
+                        )?;
+                    } else {
+                        let result = shell.execute(&trimmed);
+                        let elapsed = start.elapsed();
+                        let exit_code = match &result {
+                            Ok(_) => shell.last_exit_code(),
+                            Err(_) => {
+                                let c = shell.last_exit_code();
+                                if c != 0 { c } else { 1 }
+                            }
+                        };
+                        let (body_text, is_error): (Option<String>, bool) = match result {
+                            Ok(Some(s)) => (Some(s), false),
+                            Ok(None) => (None, false),
+                            Err(e) => (Some(format!("Error: {e}")), true),
+                        };
+                        let output_snippet: String = body_text
+                            .as_deref()
+                            .map(|s| s.chars().take(200).collect())
+                            .unwrap_or_default();
+                        let body_lines: Vec<String> = body_text
+                            .map(|s| strip_ansi(&s).lines().map(|l| l.to_string()).collect())
+                            .unwrap_or_default();
+                        let height = 1u16 + body_lines.len() as u16;
+                        let header_cmd = trimmed.clone();
+                        terminal.insert_before(height, move |buf| {
+                            render_block(buf, &header_cmd, exit_code, elapsed, &body_lines, is_error);
+                        })?;
+                        // suggest-next (only for the text path; structured
+                        // commands have their output already displayed).
+                        if auto_shell::ai::suggest::is_enabled() {
+                            auto_shell::ai::suggest::suggest_next_async(
+                                shell.pwd().to_string_lossy().to_string(),
+                                trimmed.clone(),
+                                output_snippet,
+                            );
                         }
-                    };
-
-                    // ── Build the block body ──
-                    // Shell::execute returns Option<String>:
-                    //   Some(s) — the command's text output. For structured
-                    //     commands (ls/ps) this is ALREADY ANSI-styled via the
-                    //     TuiRenderHook. ratatui can't parse ANSI, so we strip
-                    //     escapes for the M3 body (tables render as plain text
-                    //     for now; a ratatui-native table widget is a follow-up).
-                    //   None — no output.
-                    let (body_text, is_error): (Option<String>, bool) = match result {
-                        Ok(Some(s)) => (Some(s), false),
-                        Ok(None) => (None, false),
-                        Err(e) => (Some(format!("Error: {e}")), true),
-                    };
-
-                    // Capture a snippet for suggest-next BEFORE body_text is
-                    // consumed by the map below (first 200 chars, like repl.rs).
-                    let output_snippet: String = body_text
-                        .as_deref()
-                        .map(|s| s.chars().take(200).collect())
-                        .unwrap_or_default();
-
-                    // Split body into lines (strip ANSI so it doesn't render as
-                    // literal escape gibberish in the ratatui buffer).
-                    let body_lines: Vec<String> = body_text
-                        .map(|s| strip_ansi(&s).lines().map(|l| l.to_string()).collect())
-                        .unwrap_or_default();
-
-                    // ── insert_before: header (1 row) + body (N rows) ──
-                    let height = 1u16 + body_lines.len() as u16;
-                    let header_cmd = trimmed.clone();
-                    terminal.insert_before(height, move |buf| {
-                        render_block(buf, &header_cmd, exit_code, elapsed, &body_lines, is_error);
-                    })?;
-
-                    // M4: async-suggest next command (opt-in, never blocks).
-                    // Fires a background fetch; the result shows before the next
-                    // prompt if it arrived in time.
-                    if auto_shell::ai::suggest::is_enabled() {
-                        auto_shell::ai::suggest::suggest_next_async(
-                            shell.pwd().to_string_lossy().to_string(),
-                            trimmed.clone(),
-                            output_snippet,
-                        );
                     }
 
-                    // M4 Gap 1: sync completion state (cwd may have changed
-                    // after cd/pushd; last-command/exit-code/aliases update
-                    // context-aware ranking). Mirrors repl.rs:1004-1005.
+                    // Sync completion state after execution.
                     if let Ok(mut state) = completion_state.lock() {
                         state.current_dir = shell.pwd().to_path_buf();
                         state.last_command = shell.last_command_line().map(String::from);
                         state.last_exit_code = Some(shell.last_exit_code());
                         state.aliases = shell.aliases().clone();
                     }
+                    continue;
                 }
             }
         }
@@ -835,6 +843,7 @@ fn handle_ai_chat(
                         Some("\n  [cancelled]".to_string())
                     }
                     auto_ai_agent::agent::StreamEvent::Done { .. } => None,
+                    auto_ai_agent::agent::StreamEvent::Thinking { .. } => None,
                 };
                 if let Some(l) = line {
                     cap.lock().unwrap().push(l);
@@ -950,6 +959,121 @@ fn is_enter(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
     key_code(event) == Some(KeyCode::Enter)
 }
 
+/// Try to execute a command via the structured atom path and get a
+/// `RenderedOutput`. Returns `None` for non-atom commands (echo, external,
+/// aliases) — the caller falls back to `shell.execute`.
+///
+/// Ported from ash-gui's `render_structured` (ash-gui-bin/src/main.rs:350).
+fn try_render_structured(
+    shell: &mut auto_shell::Shell,
+    input: &str,
+) -> Option<ash_core::renderer::RenderedOutput> {
+    use ash_core::pipeline::AtomPipeline;
+    use ash_core::renderer::render_pipeline_to_structured;
+    let parts = ash_core::parser::parse_args(input);
+    if parts.is_empty() {
+        return None;
+    }
+    let cmd_name = &parts[0];
+    let cmd = shell.registry().get(cmd_name)?;
+    let signature = cmd.signature();
+    let args = &parts[1..];
+    let parsed = auto_shell::cmd::parser::parse_args(&signature, args).ok()?;
+    if parsed.help_requested {
+        return Some(ash_core::renderer::RenderedOutput::Text(signature.format_help()));
+    }
+    let pipeline: AtomPipeline = cmd
+        .run_atom(&parsed, AtomPipeline::empty(), shell)
+        .ok()?;
+    render_pipeline_to_structured(&pipeline)
+        .or(Some(ash_core::renderer::RenderedOutput::Text(pipeline.into_text())))
+}
+
+/// Render a structured `RenderedOutput` as a block into the scrollback.
+/// Tables get the full ratatui widget (borders, zebra striping, colored cells);
+/// Text/Record/Error get line-based rendering. Gap 4.
+fn render_structured_block(
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+    command: &str,
+    exit_code: i32,
+    elapsed: std::time::Duration,
+    rendered: &ash_core::renderer::RenderedOutput,
+) -> io::Result<()> {
+    use ash_core::renderer::RenderedOutput;
+    use auto_shell::config::IconStyle;
+
+    let term_width = ratatui_crossterm::crossterm::terminal::size()
+        .map(|(w, _)| w)
+        .unwrap_or(80);
+    let icons = IconStyle::Plain;
+
+    // For Table: render the widget directly via render_table_to_buffer.
+    if let RenderedOutput::Table { columns, rows, .. } = rendered {
+        // Compute table height: border top + header + border + data rows + border.
+        let table_height = 3u16 + rows.len() as u16;
+        let total_height = 1u16 + table_height; // command header + table
+
+        let header_cmd = command.to_string();
+        let rendered_clone = rendered.clone();
+        terminal.insert_before(total_height, move |buf| {
+            // Row 0: command header.
+            render_block(buf, &header_cmd, exit_code, elapsed, &[], false);
+            // Rows 1+: table widget, rendered into a temp buffer then blitted.
+            let mut temp = ratatui_core::buffer::Buffer::empty(
+                ratatui_core::layout::Rect::new(0, 0, buf.area.width, table_height),
+            );
+            let _ = crate::renderer::render_table_to_buffer(
+                &mut temp,
+                &rendered_clone,
+                buf.area.width,
+                icons,
+            );
+            // Blit temp → buf starting at row 1 (below the header).
+            for y in 0..table_height {
+                for x in 0..buf.area.width {
+                    let dst_y = buf.area.y + 1 + y;
+                    if dst_y < buf.area.bottom() {
+                        let src = temp.get(x, y).clone();
+                        *buf.get_mut(buf.area.x + x, dst_y) = src;
+                    }
+                }
+            }
+        })?;
+        return Ok(());
+    }
+
+    // Non-table: text rendering (same as the plain execute path).
+    let body_text = match rendered {
+        RenderedOutput::Text(t) => Some(t.clone()),
+        RenderedOutput::Error { message, .. } => Some(message.clone()),
+        RenderedOutput::Empty => None,
+        RenderedOutput::Record { fields, .. } => {
+            let lines: Vec<String> = fields
+                .iter()
+                .map(|(k, c)| {
+                    let v = match c {
+                        ash_core::renderer::RenderedCell::Text(t)
+                        | ash_core::renderer::RenderedCell::Tagged { text: t, .. } => t.clone(),
+                    };
+                    format!("{k}: {v}")
+                })
+                .collect();
+            Some(lines.join("\n"))
+        }
+        RenderedOutput::Table { .. } => unreachable!(),
+    };
+    let body_lines: Vec<String> = body_text
+        .map(|s| s.lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default();
+    let is_error = matches!(rendered, RenderedOutput::Error { .. });
+    let height = 1u16 + body_lines.len() as u16;
+    let header_cmd = command.to_string();
+    terminal.insert_before(height, move |buf| {
+        render_block(buf, &header_cmd, exit_code, elapsed, &body_lines, is_error);
+    })?;
+    Ok(())
+}
+
 /// Execute a command and render it as a block (the M3 path, extracted as a
 /// helper so F3's decision flow can reuse it without duplicating logic).
 fn execute_and_render(
@@ -958,6 +1082,20 @@ fn execute_and_render(
     command: &str,
 ) -> io::Result<()> {
     let start = std::time::Instant::now();
+
+    // Gap 4: try the structured path first (like ash-gui's render_structured).
+    // If the command goes through the atom pipeline (ls/ps/find/...), we get
+    // a RenderedOutput that we can render as a ratatui table widget directly —
+    // no ANSI round-trip. Non-atom commands (echo, external, aliases) return
+    // None and fall through to shell.execute → text.
+    if let Some(rendered) = try_render_structured(shell, command) {
+        let elapsed = start.elapsed();
+        let exit_code = shell.last_exit_code();
+        render_structured_block(terminal, command, exit_code, elapsed, &rendered)?;
+        return Ok(());
+    }
+
+    // Fallback: plain shell.execute → text body (strip ANSI for display).
     let result = shell.execute(command);
     let elapsed = start.elapsed();
     let exit_code = match &result {
@@ -1016,6 +1154,97 @@ fn expand_history_refs(
         Ok(Some(expanded))
     } else {
         Ok(None)
+    }
+}
+
+/// Is the event Ctrl+R (reverse history search)?
+fn is_ctrl_r(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
+    use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    if let Event::Key(ke) = event {
+        matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && ke.modifiers.contains(KeyModifiers::CONTROL)
+            && ke.code == KeyCode::Char('r')
+    } else {
+        false
+    }
+}
+
+/// Ctrl+R: interactive reverse history search. Types a query → shows matching
+/// history entries (newest-first) pushed into scrollback → Enter selects one
+/// (puts it in the editor buffer) / Esc cancels.
+fn handle_history_search(
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+    history: &reedline::FileBackedHistory,
+    editor: &mut Editor,
+) -> io::Result<()> {
+    use reedline::{History, SearchDirection, SearchQuery};
+    let mut query = String::new();
+    // Load all history once (newest-first).
+    let all_history: Vec<String> = history
+        .search(SearchQuery::everything(SearchDirection::Backward, None))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|it| it.command_line)
+        .collect();
+
+    loop {
+        // Filter by query (case-insensitive substring).
+        let matches: Vec<&String> = if query.is_empty() {
+            all_history.iter().take(10).collect()
+        } else {
+            let q = query.to_lowercase();
+            all_history
+                .iter()
+                .filter(|h| h.to_lowercase().contains(&q))
+                .take(10)
+                .collect()
+        };
+        // Render: query prompt + matching entries.
+        let mut lines: Vec<String> = vec![format!("reverse-i-search: {query}")];
+        if matches.is_empty() {
+            lines.push("  (no matches)".to_string());
+        } else {
+            for (i, m) in matches.iter().enumerate() {
+                let marker = if i == 0 { "▶" } else { " " };
+                lines.push(format!("  {marker} {m}"));
+            }
+            lines.push("  [Enter] 选中首项  [Esc] 取消".to_string());
+        }
+        let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        push_block(terminal, &refs, Color::Cyan)?;
+
+        // Read next key.
+        let event = event::read()?;
+        match key_code(&event) {
+            Some(KeyCode::Enter) => {
+                if let Some(first) = matches.first() {
+                    editor.replace_buffer(first.to_string());
+                }
+                break;
+            }
+            Some(KeyCode::Esc) => break,
+            Some(KeyCode::Backspace) => {
+                query.pop();
+            }
+            Some(KeyCode::Char(c)) => {
+                // Ignore Ctrl combos (Ctrl+C etc).
+                if !event_has_ctrl(&event) {
+                    query.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Does the event have the CONTROL modifier?
+fn event_has_ctrl(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
+    use ratatui_crossterm::crossterm::event::{Event, KeyModifiers};
+    if let Event::Key(ke) = event {
+        ke.modifiers.contains(KeyModifiers::CONTROL)
+    } else {
+        false
     }
 }
 
@@ -1083,10 +1312,26 @@ fn handle_mode_key(
 /// - In continuation: a dim `·`.
 /// - Otherwise: just the mode symbol (`>` Shell green, `#` AutoScript cyan,
 ///   `?` AI magenta), each followed by a space.
-fn prompt_spans(mode_state: &auto_shell::repl_mode::ModeState) -> (Vec<Span<'static>>, u16) {
+fn prompt_spans(
+    mode_state: &auto_shell::repl_mode::ModeState,
+    prompt: &crate::prompt::AshPrompt,
+) -> (Vec<Span<'static>>, u16) {
     use unicode_width::UnicodeWidthStr;
+    // Gap 6: render the full modular prompt (directory + git + status).
+    // render_all() returns (left, right, indicator) — left has the env info
+    // (ANSI-styled via nu_ansi_term, which we strip for ratatui).
+    let (left_ansi, _right, _indicator) = prompt.render_all();
+    let left = strip_ansi(&left_ansi);
+
     let symbol = mode_state.prompt();
     let mut spans: Vec<Span<'static>> = Vec::new();
+    // Prepend the env info (directory/git) if present.
+    if !left.is_empty() {
+        spans.push(Span::styled(
+            format!("{left} "),
+            Style::default().fg(Color::Blue),
+        ));
+    }
     // The prompt() string may start with `▌` (locked) — split it for coloring.
     let (prefix, main) = if let Some(rest) = symbol.strip_prefix('▌') {
         spans.push(Span::styled("▌".to_string(), Style::default().fg(Color::Blue)));
@@ -1104,7 +1349,12 @@ fn prompt_spans(mode_state: &auto_shell::repl_mode::ModeState) -> (Vec<Span<'sta
         }
     };
     spans.push(Span::styled(format!("{main} "), Style::default().fg(color)));
-    let total = UnicodeWidthStr::width(prefix) as u16 + UnicodeWidthStr::width(main) as u16 + 1;
+    let left_w = UnicodeWidthStr::width(left.as_str()) as u16;
+    let total = left_w
+        + if !left.is_empty() { 1 } else { 0 } // space after left
+        + UnicodeWidthStr::width(prefix) as u16
+        + UnicodeWidthStr::width(main) as u16
+        + 1; // trailing space
     (spans, total)
 }
 

@@ -576,6 +576,7 @@ impl Repl {
                     println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m");
                 }
                 auto_ai_agent::agent::StreamEvent::Done { .. } => {} // keep chat output clean
+                auto_ai_agent::agent::StreamEvent::Thinking { .. } => {}
                 auto_ai_agent::agent::StreamEvent::Error { message } => {
                     println!("\n  [error] {message}");
                 }

@@ -65,15 +65,16 @@ impl auto_shell::shell::RenderHook for TuiRenderHook {
     }
 }
 
-/// Render a [`RenderedOutput`] to an ANSI string at the given terminal width
-/// and icon style. Returns `None` for non-Table variants (the caller falls
-/// back to plain text), reproducing `render_table_with`'s old "not a table"
-/// contract.
-pub fn rendered_to_ansi(
+/// Build the ratatui `Table` widget from a `RenderedOutput::Table`, returning
+/// it + the computed area height. Shared by `rendered_to_ansi` (→ Buffer →
+/// ANSI) and `render_table_lines` (→ Buffer → Line-based for block TUI).
+///
+/// Returns `None` for non-Table variants (the caller falls back to plain text).
+fn build_table_widget(
     rendered: &RenderedOutput,
     term_width: u16,
     icons: IconStyle,
-) -> Option<String> {
+) -> Option<(Table<'_>, Rect)> {
     let (columns, rows) = match rendered {
         RenderedOutput::Table { columns, rows, .. } => (columns, rows),
         _ => return None,
@@ -82,15 +83,9 @@ pub fn rendered_to_ansi(
         return None;
     }
 
-    // Work on owned copies so we can inject the synthetic icon column without
-    // mutating the caller's RenderedOutput.
-    // `orig_columns` indexes into `cells` (the RenderedOutput's column order);
-    // `display_columns` is what we render (may have an injected "icon" first).
     let orig_columns: Vec<String> = columns.clone();
     let mut display_columns: Vec<String> = columns.clone();
 
-    // File listings (have both `name` and `type`): prepend an icon column so
-    // directories and files are visually distinct. Skipped when icons are Off.
     let is_file_listing = orig_columns.iter().any(|c| c == "name")
         && orig_columns.iter().any(|c| c == "type");
     if is_file_listing && icons != IconStyle::Off {
@@ -99,7 +94,6 @@ pub fn rendered_to_ansi(
 
     let col_widths = calculate_column_widths(&display_columns, &orig_columns, rows, term_width, icons);
 
-    // Header row.
     let header = Row::new(display_columns.iter().map(|col| {
         let display_name = column_display_name(col);
         Cell::from(Text::styled(
@@ -108,14 +102,10 @@ pub fn rendered_to_ansi(
         ))
     }));
 
-    // Data rows.
     let data_rows: Vec<Row> = rows
         .iter()
         .enumerate()
         .map(|(row_idx, cells)| {
-            // Row-level file context (type + name), read against the ORIGINAL
-            // column layout — `cells` is indexed by orig_columns, not the
-            // (possibly icon-prefixed) display layout.
             let (row_type, row_name): (Option<String>, String) =
                 row_context(cells, &orig_columns);
 
@@ -127,7 +117,6 @@ pub fn rendered_to_ansi(
                         let style = cell_style_for_name(&row_name, row_type.as_deref());
                         return Cell::from(Text::styled(icon, style));
                     }
-                    // Data columns index into `cells` by the ORIGINAL column order.
                     let cell_idx = orig_columns.iter().position(|c| c == col);
                     let Some(cell) = cell_idx.and_then(|i| cells.get(i)) else {
                         return Cell::from(Text::from(""));
@@ -138,7 +127,6 @@ pub fn rendered_to_ansi(
                 })
                 .collect();
 
-            // Subtle zebra striping: even rows get a dark background.
             let row_style = if row_idx % 2 == 0 {
                 Style::default().bg(Color::Indexed(234))
             } else {
@@ -173,9 +161,51 @@ pub fn rendered_to_ansi(
         .header(header)
         .column_spacing(1);
 
+    Some((table, area))
+}
+
+/// Render a [`RenderedOutput`] to an ANSI string at the given terminal width
+/// and icon style. Returns `None` for non-Table variants (the caller falls
+/// back to plain text), reproducing `render_table_with`'s old "not a table"
+/// contract.
+pub fn rendered_to_ansi(
+    rendered: &RenderedOutput,
+    term_width: u16,
+    icons: IconStyle,
+) -> Option<String> {
+    let (table, area) = build_table_widget(rendered, term_width, icons)?;
     let mut buf = Buffer::empty(area);
     table.render(area, &mut buf);
     Some(buffer_to_ansi(&buf))
+}
+
+/// Render a `RenderedOutput::Table` directly into a ratatui `Buffer` at the
+/// given offset. Used by the block TUI (Plan 038 Gap 4) to draw structured
+/// tables into the `insert_before` buffer — without the ANSI → strip_ansi
+/// round-trip that degraded tables to plain text.
+///
+/// Returns the number of lines the rendered table occupies (for the caller's
+/// height calculation). Returns `None` for non-Table variants.
+pub fn render_table_to_buffer(
+    buf: &mut Buffer,
+    rendered: &RenderedOutput,
+    term_width: u16,
+    icons: IconStyle,
+) -> Option<u16> {
+    let (table, widget_area) = build_table_widget(rendered, term_width, icons)?;
+    // The table widget renders relative to (0,0); we need to shift it to the
+    // target buffer's origin. Render into a temp buffer then blit.
+    let mut temp = Buffer::empty(widget_area);
+    table.render(widget_area, &mut temp);
+    // Blit temp → buf (line by line, cell by cell).
+    for y in 0..widget_area.height {
+        for x in 0..widget_area.width.min(buf.area.width) {
+            let src = temp.get(x, y);
+            let dst = buf.get_mut(buf.area.x + x, buf.area.y + y);
+            *dst = src.clone();
+        }
+    }
+    Some(widget_area.height)
 }
 
 /// Extract (text, tag) from a [`RenderedCell`].

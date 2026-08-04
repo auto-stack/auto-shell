@@ -125,6 +125,7 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         StreamEvent::Warning { text } => println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m"),
         StreamEvent::Done { .. } => {}
+        StreamEvent::Thinking { .. } => {}
         StreamEvent::Error { message } => println!("\n  [error] {message}"),
         StreamEvent::Cancelled { .. } => println!("\n  [cancelled]"),
     });

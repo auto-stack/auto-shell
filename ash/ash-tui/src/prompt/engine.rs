@@ -135,7 +135,7 @@ impl AshPrompt {
 
     /// Build context and render all prompt parts at once.
     /// No I/O — only reads from the global git cache.
-    fn render_all(&self) -> (String, String, String) {
+    pub fn render_all(&self) -> (String, String, String) {
         let ctx = AshContext::from_current();
         let left = self.render_left(&ctx);
         let right = self.render_right(&ctx);
