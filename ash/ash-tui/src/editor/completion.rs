@@ -30,6 +30,11 @@ pub struct CompletionMenu {
     /// (Tab/↓) we must replace against the original — not the already-mutated
     /// buffer — otherwise the span offsets drift and corrupt the text.
     original_line: String,
+    /// True when the candidate list was just (re)queried and the current
+    /// selection (index 0) has NOT yet been applied to the buffer. The first
+    /// Tab after a refresh applies the current candidate instead of advancing,
+    /// so the user sees the first new candidate filled in. Cleared on apply.
+    dirty: bool,
 }
 
 impl CompletionMenu {
@@ -39,6 +44,7 @@ impl CompletionMenu {
             suggestions: Vec::new(),
             selected: 0,
             original_line: String::new(),
+            dirty: false,
         }
     }
 
@@ -49,6 +55,9 @@ impl CompletionMenu {
         self.original_line = line.to_string();
         self.suggestions = self.completer.complete(line, pos);
         self.selected = 0;
+        // Mark dirty: the first Tab after (re)open should apply candidate 0,
+        // not advance to candidate 1.
+        self.dirty = !self.suggestions.is_empty();
     }
 
     /// Close the menu (discard candidates). Called on Esc / submit / any edit
@@ -57,6 +66,7 @@ impl CompletionMenu {
         self.suggestions.clear();
         self.selected = 0;
         self.original_line.clear();
+        self.dirty = false;
     }
 
     /// Whether the menu is currently open (has candidates).
@@ -72,6 +82,13 @@ impl CompletionMenu {
     /// The index of the highlighted candidate.
     pub fn selected(&self) -> usize {
         self.selected
+    }
+
+    /// Whether the candidate list was just (re)queried and candidate 0 hasn't
+    /// been applied yet. The first Tab after a refresh applies the current
+    /// candidate instead of advancing (so the user sees the first new result).
+    pub fn dirty(&self) -> bool {
+        self.dirty
     }
 
     /// Move selection to the next candidate (wraps). No-op if closed.
@@ -108,23 +125,26 @@ impl CompletionMenu {
     /// makes cycling (Tab/↓) correct even after prior applies — every apply
     /// starts from the unchanged original, so span offsets never drift.
     ///
-    /// Returns true if a candidate was applied.
-    pub fn apply_selected(&self, line_buffer: &mut reedline::LineBuffer) -> bool {
+    /// Returns true if a candidate was applied. Clears the dirty flag (the
+    /// current selection has now been applied; subsequent Tabs cycle).
+    pub fn apply_selected(&mut self, line_buffer: &mut reedline::LineBuffer) -> bool {
         let s = match self.suggestions.get(self.selected) {
             Some(s) => s,
             None => return false,
         };
         let span = s.span;
-        let value = &s.value;
+        let append_ws = s.append_whitespace;
+        let value = s.value.clone();
+        self.dirty = false;
         // Rebuild: original[..span.start] + value + original[span.end..]
         let mut new_line = String::with_capacity(self.original_line.len() + value.len());
         new_line.push_str(&self.original_line[..span.start.min(self.original_line.len())]);
-        new_line.push_str(value);
+        new_line.push_str(&value);
         let end = span.end.min(self.original_line.len());
         new_line.push_str(&self.original_line[end..]);
         line_buffer.set_buffer(new_line);
         // Cursor to end of inserted value + optional trailing space.
-        if s.append_whitespace {
+        if append_ws {
             line_buffer.insert_char(' ');
         }
         true

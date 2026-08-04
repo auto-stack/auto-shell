@@ -159,11 +159,16 @@ impl Editor {
             // ── Completion menu navigation (menu already open) ────────
             if menu_open {
                 match (no_mods, ke.code) {
-                    // Tab / ↓ cycle to the next candidate + apply it (quick-
-                    // completion: the buffer updates as you cycle).
+                    // Tab / ↓ cycle to the next candidate + apply it. BUT if
+                    // the list was just refreshed (dirty), apply the current
+                    // (first) candidate first instead of advancing — so after
+                    // typing changes the prefix, the first Tab fills in the
+                    // first new candidate rather than skipping to #2.
                     (true, KeyCode::Tab) | (true, KeyCode::Down) => {
                         if let Some(m) = self.completion.as_mut() {
-                            m.next();
+                            if !m.dirty() {
+                                m.next();
+                            }
                             m.apply_selected(&mut self.line_buffer);
                             self.current_hint.clear();
                         }
@@ -171,7 +176,9 @@ impl Editor {
                     }
                     (true, KeyCode::Up) => {
                         if let Some(m) = self.completion.as_mut() {
-                            m.previous();
+                            if !m.dirty() {
+                                m.previous();
+                            }
                             m.apply_selected(&mut self.line_buffer);
                             self.current_hint.clear();
                         }
@@ -280,7 +287,7 @@ impl Editor {
         }
 
         // Non-arrow keys: route through the reedline EditMode parser.
-        match reedline::ReedlineRawEvent::try_from(event) {
+        let outcome = match reedline::ReedlineRawEvent::try_from(event) {
             Ok(raw) => {
                 let ev = self.edit_mode.parse_event(raw);
                 self.dispatch_reedline_event(ev)
@@ -288,7 +295,25 @@ impl Editor {
             // KeyRelease and a few other event kinds are rejected by reedline's
             // TryFrom — they're a no-op for us.
             Err(()) => EditorOutcome::Continue,
+        };
+
+        // M3: if the completion menu is open and this key mutated the buffer
+        // (typed a char/space, backspace, etc.), re-query the completer so the
+        // candidate list reflects the NEW prefix. Without this, typing "ls "
+        // after Tab-completing "ls" would leave the stale [ls/less] menu
+        // active, and the next Tab would cycle it instead of listing ls's
+        // argument completions (-a, -l, ...).
+        //
+        // We refresh on any non-navigation key (navigation = Tab/↓/↑/Esc/Enter,
+        // which are handled above and return early). If the refreshed query
+        // returns no candidates, close the menu.
+        if let Some(m) = self.completion.as_mut() {
+            if m.is_open() {
+                m.open(self.line_buffer.get_buffer(), self.line_buffer.insertion_point());
+            }
         }
+
+        outcome
     }
 
     /// Accept the currently-selected candidate (apply it + close the menu).
@@ -657,5 +682,86 @@ mod tests {
             crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(e.insertion_point(), 1);
+    }
+
+    /// A stateful completer for the menu-refresh test: returns command-name
+    /// candidates for a bare prefix, and argument candidates once the line
+    /// contains a space (simulating `ls ` → [-a, -l]).
+    struct PrefixCompleter;
+    impl reedline::Completer for PrefixCompleter {
+        fn complete(&mut self, line: &str, _pos: usize) -> Vec<reedline::Suggestion> {
+            use reedline::{Span, Suggestion};
+            let sug = |v: &str, start: usize| Suggestion {
+                value: v.to_string(),
+                description: None,
+                style: None,
+                extra: None,
+                span: Span::new(start, line.len()),
+                append_whitespace: false,
+                match_indices: None,
+            };
+            if line.contains(' ') {
+                // Argument completion: suggest flags after the space.
+                let space = line.find(' ').unwrap_or(line.len());
+                vec![sug("-a", space + 1), sug("-l", space + 1)]
+            } else {
+                // Command-name completion.
+                vec![sug("ls", 0), sug("less", 0)]
+            }
+        }
+    }
+
+    fn editor_with_completer() -> Editor {
+        let mut e = Editor::new(Box::new(Emacs::new(default_emacs_keybindings())));
+        e = e.with_completion(crate::editor::completion::CompletionMenu::new(
+            Box::new(PrefixCompleter),
+        ));
+        e
+    }
+
+    #[test]
+    fn typing_after_tab_refreshes_candidates() {
+        // The bug: Tab completes "l"→"ls" (menu shows [ls,less]); typing a
+        // space should refresh the menu to argument candidates [-a,-l], but
+        // before the fix the menu stayed stale and Tab cycled [ls,less].
+        let mut e = editor_with_completer();
+        type_char(&mut e, 'l');
+        // Tab → opens menu + applies first candidate ("ls").
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.text(), "ls");
+        // Menu now holds [ls, less].
+        let m = e.completion().unwrap();
+        assert_eq!(m.suggestions().len(), 2);
+        assert_eq!(m.suggestions()[0].value, "ls");
+
+        // Type a space — buffer becomes "ls ".
+        type_char(&mut e, ' ');
+        assert_eq!(e.text(), "ls ");
+        // Menu should have refreshed to argument candidates [-a, -l].
+        let m = e.completion().unwrap();
+        assert!(m.is_open());
+        assert_eq!(m.suggestions().len(), 2);
+        assert_eq!(m.suggestions()[0].value, "-a");
+        assert_eq!(m.suggestions()[1].value, "-l");
+    }
+
+    #[test]
+    fn tab_after_space_applies_argument_candidate() {
+        let mut e = editor_with_completer();
+        type_char(&mut e, 'l');
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        )); // "ls"
+        type_char(&mut e, ' '); // "ls "
+        // Tab again → should apply the first argument candidate "-a".
+        e.handle_event(key_press(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(e.text(), "ls -a");
     }
 }
