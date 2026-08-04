@@ -22,6 +22,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::run_command,
+            commands::run_smart_command,
+            commands::cancel_command,
+            commands::history,
             commands::command_list,
             commands::open_path,
         ])

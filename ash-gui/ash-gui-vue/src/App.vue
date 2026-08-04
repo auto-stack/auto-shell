@@ -15,9 +15,19 @@ import PromptBar from '@/components/input/PromptBar.vue'
 import ToolSidebar from '@/components/chrome/ToolSidebar.vue'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-const { blocks, cwd, home, commands, commandNames, history, runCommand, openPath } = isTauri
-  ? useShell()
-  : useShellMock()
+const {
+  blocks,
+  cwd,
+  home,
+  commands,
+  smartCommands,
+  commandNames,
+  history,
+  runCommand,
+  runSmartCommand,
+  cancelCommand,
+  openPath,
+} = isTauri ? useShell() : useShellMock()
 
 const sidebarOpen = ref(true)
 /** Command injected from the sidebar into the PromptBar input. */
@@ -39,6 +49,16 @@ function onInjected() {
   // PromptBar consumed the injected command.
   injectedCommand.value = ''
 }
+
+/** Plan 040 M3: a SmartCommand was clicked — run it by name. */
+function onRunSmart(name: string) {
+  void runSmartCommand(name)
+}
+
+/** Plan 040 M5: cancel the running command (stop button on a Running block). */
+function onStop() {
+  void cancelCommand()
+}
 </script>
 
 <template>
@@ -47,8 +67,9 @@ function onInjected() {
     <ToolSidebar
       v-if="sidebarOpen"
       :commands="commands"
-      :smart-commands="[]"
+      :smart-commands="smartCommands"
       @pick="onPickTool"
+      @run-smart="onRunSmart"
     />
 
     <!-- Main column -->
@@ -75,6 +96,7 @@ function onInjected() {
         :home="home"
         @open-path="onOpenPath"
         @rerun="onRerun"
+        @stop="onStop"
       />
 
       <!-- Command input -->

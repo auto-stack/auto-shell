@@ -8,6 +8,8 @@ const props = defineProps<{ blocks: Block[]; home: string }>()
 const emit = defineEmits<{
   (e: 'openPath', path: string): void
   (e: 'rerun', command: string): void
+  /** Plan 040 M5: stop the running command (from a Running block's stop button). */
+  (e: 'stop'): void
 }>()
 
 const scrollRef = ref<HTMLElement | null>(null)
@@ -40,6 +42,7 @@ watch(
       :home="props.home"
       @open-path="emit('openPath', $event)"
       @rerun="emit('rerun', $event)"
+      @stop="emit('stop')"
     />
   </div>
 </template>

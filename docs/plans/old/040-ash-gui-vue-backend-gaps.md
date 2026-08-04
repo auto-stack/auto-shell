@@ -1,7 +1,7 @@
 # Plan 040: ash-gui-vue 后端差距 — 让 GUI 跑满 ash 的命令能力
 
 > **日期**: 2026-08-04
-> **状态**: 📝 计划(待实施)
+> **状态**: ✅ 完成(M1-M6 已实施)
 > **来源**: Plan 039(ash-gui-vue M1-M4)完成后的差距分析——对比 TUI/CLI ash 与 Vue GUI 的能力
 > **范围**: `ash-gui/ash-gui-vue/src-tauri/`(后端)+ 必要的 `ash-core`/`auto-shell` 改动
 > **前置**: Plan 039 已提交;auto-lang 编译稳定后可联调验证
@@ -139,6 +139,57 @@ TUI/CLI 的 REPL(`repl.rs:35-79`)还加载:别名(`ash.toml`)、`~/.ashrc` 用�
 | M6 | 历史持久化 | 重启后历史保留 |
 
 M1 独立可验证,强烈建议先做。M2-M6 各自独立。
+
+## 3.1 实施记录(M2-M6)
+
+> 提交于 `feat(040 M2-M6)`。后端 `cargo check -p ash-gui-vue` + 前端 `vue-tsc
+> --noEmit` 均通过。
+
+### M2 — Shell 初始化对齐
+新增 `shell_worker::init_shell(&mut Shell)`,镜像 `repl.rs:36-79` 的初始化序列:
+`load_env_persistence` → `AshShellConfig::load` 别名 → `~/.ashrc` 用户函数 →
+`load_all_plugins`。worker 的 `spawn()` 现在调用它(替代原先的裸
+`load_env_persistence`)。`~/.ashrc` 首次缺失时播种默认内容(与 REPL 一致)。
+
+### M3 — SmartCommand 执行
+- `CommandReq::RunSmart { name, args, reply }`:把执行路由到 worker 线程,跑在
+  worker 的**活跃** Shell 上(保留 cwd/env/函数),而非临时 Shell。
+- `ShellHandle::run_smart(name, args)` 用 `oneshot` channel 收回复。
+- Tauri command `run_smart_command(name, args)` 调用上述接口。
+- 前端 `ToolSidebar` 对 SmartCommand 发 `run-smart(name)`(不再注入坏的
+  `smart run X` 文本——`smart` 是 CLI 子命令,不是 Shell 命令)。
+- `App.vue` 把 `smart_commands` 传给侧栏(原先传空数组)。
+- **已知局限**:body 的实时输出打到 worker 线程的 stdout(GUI 不可见),前端
+  只看到成功/失败状态与最终返回值。长时 SmartCommand 的流式化留待后续。
+
+### M4 — 流式输出
+- `run_command` 现在是 `async`。对**简单外部命令**(无重定向/管道 `|`/链式
+  `&&`/`||`/DSL 阶段 `.x`/Auto 表达式/注册命令/legacy builtin/shell 关键字/
+  别名),走 `spawn_external_stream` + 逐行 drain,每行 emit `command-output`
+  chunk;最终 emit `command-result`(携带累计文本)。
+- 其它路径仍走 M1 的 `shell.execute()`(完整预处理 + 结构化捕获)。
+- 资格判定函数 `is_shell_builtin` 列出 `execute_inner`/`execute_builtin` 处理
+  的全部关键字(cd/alias/source/pushd/…),避免把 builtin 当外部进程 spawn。
+- 前端 `useShell` 监听 `command-output`,把 chunk 追加到 Running block 的
+  `streamedText`;`BlockItem` 在 Running 时渲染该文本,`command-result` 到达后
+  清空并由正式 output 取代。
+
+### M5 — 命令取消
+- **关键决策**:取消是**并发信号**,不走命令队列。`ShellHandle` 持有共享
+  `Arc<AtomicBool> cancel`;`cancel_command` Tauri command 直接置位。
+  原因:worker 在 `spawn_blocking(drain_stream)` 期间无法 dequeue channel 消息,
+  若把 Cancel 排进队列会错过窗口。drain 循环在每行之间轮询该标记,置位即停。
+- `CommandReq` 不再有 `Cancel` 变体(改用直接置位的 flag)。
+- 前端每个 Running block 显示 ■ 停止按钮 → `cancelCommand()`(乐观标记为
+  Cancelled,worker 的 `command-result` 随后用真实状态覆盖)。
+- **限制**:仅在流式路径生效;`shell.execute()` 内阻塞的命令自然跑完。
+
+### M6 — 历史持久化
+- Tauri command `history()` 读共享文件 `~/.auto-shell-history`(与 CLI/TUI 同
+  一文件,一行一条),oldest-first。
+- worker 每次命令后 `append_history(&cmd)`(转义内嵌换行,保证一条一行)。
+- 前端 boot 时拉取 `history()` 存入 `persistedHistory`;`history` computed =
+  `persistedHistory + 本次会话命令`,↑/↓ 导航看到两者(按时间顺序)。
 
 ## 4. 风险与回退
 

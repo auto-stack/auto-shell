@@ -3,6 +3,10 @@
  * ToolSidebar — a narrow left rail listing the available commands.
  * Click a command to drop its name into the input (M4, ported from the iced
  * frontend's tool browser). Grouped loosely: commands + SmartCommands.
+ *
+ * Plan 040 M3: SmartCommands are run directly (emit `run-smart` with the spec
+ * name) instead of injecting the broken `smart run X` text — `smart` is a CLI
+ * subcommand, not a Shell command, so the worker couldn't execute it.
  */
 import { computed } from 'vue'
 import type { SmartCommandEntry, ToolEntry } from '@/types/shell'
@@ -12,12 +16,20 @@ const props = defineProps<{
   smartCommands: SmartCommandEntry[]
 }>()
 
-const emit = defineEmits<{ (e: 'pick', command: string): void }>()
+const emit = defineEmits<{
+  (e: 'pick', command: string): void
+  (e: 'runSmart', name: string): void
+}>()
 
 const commandList = computed(() => props.commands)
 
 function pick(name: string) {
   emit('pick', name)
+}
+
+/** Plan 040 M3: run a SmartCommand by name (no text injection). */
+function runSmart(name: string) {
+  emit('runSmart', name)
 }
 </script>
 
@@ -45,13 +57,13 @@ function pick(name: string) {
         SmartCommands
       </div>
       <div class="px-1.5 space-y-0.5">
-        <button
-          v-for="s in props.smartCommands"
-          :key="s.name"
-          class="w-full text-left px-2 py-1 rounded text-xs font-mono-ash text-purple-300/90 hover:bg-muted/60 hover:text-purple-200 transition-colors flex items-baseline gap-1.5"
-          :title="s.description"
-          @click="pick(`smart run ${s.name}`)"
-        >
+          <button
+            v-for="s in props.smartCommands"
+            :key="s.name"
+            class="w-full text-left px-2 py-1 rounded text-xs font-mono-ash text-purple-300/90 hover:bg-muted/60 hover:text-purple-200 transition-colors flex items-baseline gap-1.5"
+            :title="s.description"
+            @click="runSmart(s.name)"
+          >
           <span class="shrink-0">{{ s.name }}</span>
           <span v-if="s.description" class="truncate text-[10px] text-muted-foreground/70">
             {{ s.description }}

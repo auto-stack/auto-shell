@@ -13,6 +13,7 @@ import type {
   RenderedOutput,
   RenderedCell,
   ToolEntry,
+  SmartCommandEntry,
 } from '@/types/shell'
 
 // ── Canned outputs keyed by command ──────────────────────────────────────────
@@ -97,12 +98,19 @@ export function useShellMock() {
   const cwd = ref<string>('C:\\Users\\zhaop\\projects\\ash-gui')
   const home = ref<string>('C:\\Users\\zhaop')
   const commands = ref<ToolEntry[]>([])
+  const smartCommands = ref<SmartCommandEntry[]>([
+    { name: 'gitstat', description: 'show git status summary' },
+  ])
   const commandNames = ref<string[]>([
     'ls', 'cd', 'cat', 'grep', 'mem', 'help', 'echo', 'ps', 'find', 'smart',
   ])
+  const persistedHistory = ref<string[]>(['ls', 'help', 'echo hello'])
   let nextId = 0
 
-  const history = computed(() => blocks.filter((b) => b.command).map((b) => b.command))
+  const history = computed(() => [
+    ...persistedHistory.value,
+    ...blocks.filter((b) => b.command).map((b) => b.command),
+  ])
 
   async function runCommand(command: string) {
     const trimmed = command.trim()
@@ -114,6 +122,7 @@ export function useShellMock() {
       cwd: cwd.value,
       status: { kind: 'Running' },
       output: null,
+      streamedText: '',
       durationMs: null,
     })
     // Simulate async completion.
@@ -125,13 +134,55 @@ export function useShellMock() {
       block.status = ok ? { kind: 'Success' } : { kind: 'Failed', message: `command failed: ${trimmed}` }
       block.output = ok ? output : null
       if (!ok) block.output = output // still show the error card
+      block.streamedText = ''
       block.durationMs = Math.round(delay)
     }, delay)
+  }
+
+  /** Plan 040 M3 mock: run a SmartCommand by name. */
+  async function runSmartCommand(name: string, _args: string[] = []) {
+    const id = nextId++
+    blocks.push({
+      id,
+      command: `smart ${name}`,
+      cwd: cwd.value,
+      status: { kind: 'Running' },
+      output: null,
+      streamedText: '',
+      durationMs: null,
+    })
+    setTimeout(() => {
+      const block = blocks.find((b) => b.id === id)
+      if (!block) return
+      block.status = { kind: 'Success' }
+      block.output = { Text: `[mock] ran SmartCommand ${name}` }
+      block.durationMs = 50
+    }, 150)
+  }
+
+  /** Plan 040 M5 mock: cancel the running command. */
+  async function cancelCommand() {
+    const running = blocks.find((b) => b.status.kind === 'Running')
+    if (running && running.status.kind === 'Running') {
+      running.status = { kind: 'Cancelled' }
+    }
   }
 
   async function openPath(_path: string) {
     // no-op in browser preview
   }
 
-  return { blocks, cwd, home, commands, commandNames, history, runCommand, openPath }
+  return {
+    blocks,
+    cwd,
+    home,
+    commands,
+    smartCommands,
+    commandNames,
+    history,
+    runCommand,
+    runSmartCommand,
+    cancelCommand,
+    openPath,
+  }
 }

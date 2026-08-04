@@ -57,6 +57,7 @@ export type BlockStatus =
   | { kind: 'Running' }
   | { kind: 'Success' }
   | { kind: 'Failed'; message: string }
+  | { kind: 'Cancelled' }
 
 /** One block as tracked by the frontend. */
 export interface Block {
@@ -65,6 +66,12 @@ export interface Block {
   cwd: string
   status: BlockStatus
   output: RenderedOutput | null
+  /**
+   * Incremental text streamed from a long external command (Plan 040 M4).
+   * Shown while status is Running; the final `command-result` replaces this
+   * with the block's `output` (Text).
+   */
+  streamedText: string
   /** Wall-clock ms the command took (filled when status leaves Running). */
   durationMs: number | null
 }
@@ -80,6 +87,13 @@ export interface CommandResultPayload {
     | { Failed: string }
   output: RenderedOutput
   duration_ms: number
+}
+
+/** Payload for the `command-output` streaming event (Plan 040 M4). One chunk of
+ * streamed text from a long external command, attributed to a Running block. */
+export interface CommandOutputPayload {
+  block_id: number
+  chunk: string
 }
 
 // ── Payloads for boot-time commands ──────────────────────────────────────────
