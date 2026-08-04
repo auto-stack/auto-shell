@@ -5,12 +5,25 @@
 //! Like the iced ash-gui (`ash-gui-bin/src/main.rs`), we keep the Shell on one
 //! dedicated thread and communicate via channels. Here the "GUI" is the Tauri
 //! event bus: the worker emits `command-result` events when commands finish.
+//!
+//! ## Plan 040 M1: full command preprocessing
+//!
+//! Commands run through `shell.execute()` — the *complete* pipeline (variable /
+//! tilde / glob / alias expansion, redirects, env prefixes, hooks, security
+//! policy). This fixes the old `render_structured` shortcut, which called
+//! `cmd.run_atom` directly and bypassed expansion (`ls ~/foo`, `echo $HOME`,
+//! `ls *.md`, `grep x file > out.txt` all broke).
+//!
+//! Structured output is recovered via a [`RenderHook`]: `Shell::format_output`
+//! calls `render_pipeline_to_structured` *after* expansion, then hands the
+//! `&RenderedOutput` to our hook, which clones it into a capture slot. The
+//! hook returns `None` so Shell still falls back to text; we prefer the
+//! captured structured data, else the `execute` text.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use ash_core::pipeline::AtomPipeline;
-use ash_core::renderer::{render_pipeline_to_structured, RenderedOutput};
+use ash_core::renderer::RenderedOutput;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
@@ -78,6 +91,14 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                 let mut shell = auto_shell::Shell::new();
                 shell.load_env_persistence();
 
+                // Plan 040 M1: capture structured output via a RenderHook. Shell
+                // calls this from `format_output` *after* full preprocessing.
+                let captured: Arc<Mutex<Option<RenderedOutput>>> = Arc::new(Mutex::new(None));
+                let hook = CaptureHook {
+                    slot: captured.clone(),
+                };
+                shell.set_render_hook(Box::new(hook));
+
                 // Produce the boot snapshot once, for `command_list`.
                 let snapshot = harvest_boot(&shell, &app_for_thread);
                 *boot_for_thread.lock().await = Some(snapshot);
@@ -86,7 +107,7 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                 while let Some(req) = rx.recv().await {
                     let cwd = shell.pwd().to_string_lossy().to_string();
                     let started = Instant::now();
-                    let (status, output) = match run_command(&mut shell, &req.cmd) {
+                    let (status, output) = match run_command(&mut shell, &req.cmd, &captured) {
                         Ok(out) => (CommandStatus::Success, out),
                         Err(msg) => {
                             (CommandStatus::Failed(msg), RenderedOutput::Empty)
@@ -179,39 +200,62 @@ fn harvest_boot(shell: &auto_shell::Shell, _app: &AppHandle) -> BootSnapshot {
     }
 }
 
-// ── Command dispatch (mirrors ash-gui-bin/src/main.rs:335-367) ────────────────
+// ── Command dispatch (Plan 040 M1: full preprocessing + structured capture) ──
+
+/// A [`auto_shell::shell::RenderHook`] that captures the structured output
+/// Shell produces in `format_output`, *after* full expansion. Returns `None`
+/// so Shell still falls back to plain text (we prefer the captured structure).
+struct CaptureHook {
+    /// Receives the last structured output, if any (cleared per command).
+    slot: Arc<Mutex<Option<RenderedOutput>>>,
+}
+
+impl auto_shell::shell::RenderHook for CaptureHook {
+    fn render_structured(
+        &self,
+        rendered: &RenderedOutput,
+        _term_width: u16,
+        _icons: auto_shell::config::IconStyle,
+    ) -> Option<String> {
+        // Clone the structured output for the GUI; let Shell fall through to
+        // text so `execute` still returns a usable string.
+        if let Ok(mut slot) = self.slot.lock() {
+            *slot = Some(rendered.clone());
+        }
+        None
+    }
+}
 
 /// Run a single command against the Shell and return its [`RenderedOutput`].
-fn run_command(shell: &mut auto_shell::Shell, cmd: &str) -> Result<RenderedOutput, String> {
-    // Structured path: parse → run_atom → AtomPipeline → RenderedOutput.
-    if let Some(rendered) = render_structured(shell, cmd) {
-        return Ok(rendered);
+///
+/// Uses `shell.execute()` (the complete preprocessing pipeline), then prefers
+/// the structured output captured by [`CaptureHook`]; otherwise the text that
+/// `execute` returned.
+fn run_command(
+    shell: &mut auto_shell::Shell,
+    cmd: &str,
+    captured: &Arc<Mutex<Option<RenderedOutput>>>,
+) -> Result<RenderedOutput, String> {
+    // Clear the capture slot before executing this command.
+    if let Ok(mut slot) = captured.lock() {
+        *slot = None;
     }
-    // Fallback: plain execute → text. Covers non-atom commands (echo, external).
-    match shell.execute(cmd) {
+
+    let result = shell.execute(cmd);
+
+    // Structured output (Table/Record) captured during format_output?
+    if let Ok(slot) = captured.lock() {
+        if let Some(rendered) = slot.as_ref() {
+            if !matches!(rendered, RenderedOutput::Empty) {
+                return Ok(rendered.clone());
+            }
+        }
+    }
+
+    // No structured output — use the execute result (text or empty).
+    match result {
         Ok(Some(s)) => Ok(RenderedOutput::Text(s)),
         Ok(None) => Ok(RenderedOutput::Empty),
         Err(e) => Err(format!("{e}")),
     }
-}
-
-/// Run a command via the registry and render its AtomPipeline.
-/// Returns `None` for commands that don't go through the atom path.
-fn render_structured(shell: &mut auto_shell::Shell, input: &str) -> Option<RenderedOutput> {
-    let parts = ash_core::parser::parse_args(input);
-    if parts.is_empty() {
-        return None;
-    }
-    let cmd_name = &parts[0];
-    let cmd = shell.registry().get(cmd_name)?;
-    let signature = cmd.signature();
-    let args = &parts[1..];
-    let parsed = auto_shell::cmd::parser::parse_args(&signature, args).ok()?;
-    if parsed.help_requested {
-        return Some(RenderedOutput::Text(signature.format_help()));
-    }
-    let pipeline: AtomPipeline = cmd
-        .run_atom(&parsed, AtomPipeline::empty(), shell)
-        .ok()?;
-    render_pipeline_to_structured(&pipeline).or(Some(RenderedOutput::Text(pipeline.into_text())))
 }
