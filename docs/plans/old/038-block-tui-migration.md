@@ -1,10 +1,20 @@
 # Plan 038: Block TUI 迁移 — ratatui inline viewport 取代 reedline 终端控制
 
-> **日期**: 2026-08-02（2026-08-02 二次调研补充编排层）
-> **分支**: 待建（实验分支，如 `experiment/038-block-tui`）
-> **状态**: 调研完成，待实施（**实验性质** — 做出后再决策是否替代当前 reedline 路线）
+> **日期**: 2026-08-02 ～ 2026-08-04
+> **分支**: `experiment/038-block-tui`
+> **状态**: ✅ **完成（归档 2026-08-04）** — M0-M4 全部交付 + 7 个 gap 全部修复。140 个单元测试通过，真终端验收通过。`--block-tui` 作为 opt-in 实验特性保留。
 > **来源**: Plan 037 M3 的后续调研（reedline 无法实现 sticky block → 探索替代架构）
-> **预估**: **5 个里程碑**（M0-M4），**~3500 行**，6-8 周。详见 §4a 工作量重估
+> **预估**: 5 个里程碑（M0-M4），~3500 行 —— 实际交付 ~4000 行（含 gap 修复）
+>
+> **完成情况**：
+> - **M0** 骨架：crossterm 0.29 统一（排双版本雷）、ratatui inline viewport、`--block-tui` flag
+> - **M1** 编辑器：reedline EditMode + LineBuffer dispatch、vi/emacs、方向键
+> - **M2** 补全三件套：↑↓ 历史、Tab quick-completion（含随输入刷新）、fish 式 hint
+> - **M3** 命令执行：Shell.execute + block 渲染 + vim/less 子进程交接 + 去 alt screen
+> - **M4** 编排层：prompt 模式、多行续行、suggest-next、F1-F4/Esc、Ctrl+E、Ctrl+R、AI 对话
+> - **Gap 1-7**：Shell 初始化、history/abbrev 展开、结构化表格 widget、Ctrl+R 搜索、prompt 模块、F4 流式输出
+>
+> **关键决策（§7 最终决策点）**：block TUI 与 reedline REPL 完全对齐，作为 `--block-tui` opt-in 实验特性保留。是否设为默认 / 合并主线待后续评估。
 >
 > **2026-08-02 二次调研关键修正**：
 > 1. 编排层（`run()`/`run_chat_loop()`/`execute_with_header` 等）是计划最大盲区——之前完全未覆盖，约占 800-1200 行重写（新增 **M4**）
