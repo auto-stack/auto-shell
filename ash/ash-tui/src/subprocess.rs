@@ -69,6 +69,36 @@ pub fn hand_off_to_interactive(
     Ok(())
 }
 
+/// Tear down ratatui (disable raw mode), run `f` in cooked mode, then rebuild.
+///
+/// Unlike `hand_off_to_interactive` (which spawns an external process with
+/// inherited stdio), this takes a closure — for the built-in `less`/`more`
+/// pager commands which are Shell commands that manage their own terminal
+/// (alt-screen + raw mode) internally. Running them from a clean cooked state
+/// avoids the crossterm raw-mode double-acquire bug (Unix single-slot guard).
+pub fn run_with_handoff<F>(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, f: F) -> io::Result<()>
+where
+    F: FnOnce(),
+{
+    // ── Tear down ──
+    disable_raw_mode()?;
+    {
+        use std::io::Write;
+        let mut out = stdout();
+        let _ = writeln!(out);
+        let _ = out.flush();
+    }
+
+    // ── Run the closure (e.g. shell.execute("less file")) ──
+    f();
+
+    // ── Rebuild ──
+    enable_raw_mode()?;
+    let size = terminal.size()?;
+    terminal.resize(ratatui_core::layout::Rect::new(0, 0, size.width, size.height))?;
+    Ok(())
+}
+
 /// Run an external `$EDITOR` on a temp file with the same teardown/rebuild.
 /// Returns the edited content (or the original on editor failure).
 ///

@@ -397,12 +397,38 @@ impl BlockTui {
                     // terminal control — tear down ratatui, run them with
                     // inherited stdio, then rebuild. Non-interactive commands
                     // go through Shell::execute and render as a block.
-                    if ash_core::cmd::interactive::is_interactive_command(&trimmed) {
-                        crate::subprocess::hand_off_to_interactive(
-                            &mut terminal,
-                            &trimmed,
-                            &shell.pwd(),
-                        )?;
+                    //
+                    // Also intercept the BUILT-IN `less`/`more` commands and
+                    // `show --pager`: they're registered Shell commands (not
+                    // external programs), so is_interactive_command doesn't
+                    // catch them — but they enter their own alt-screen + raw
+                    // mode, which conflicts with the block TUI's held raw mode
+                    // (the guard's disable_raw_mode on drop would break us).
+                    // Running them through the teardown/rebuild handoff lets
+                    // them manage the terminal from a clean cooked state.
+                    let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                    let is_pager_cmd = first_word == "less" || first_word == "more";
+                    let is_paged_show = first_word == "show" && trimmed.contains("--pager");
+                    if ash_core::cmd::interactive::is_interactive_command(&trimmed)
+                        || is_pager_cmd
+                        || is_paged_show
+                    {
+                        if is_pager_cmd || is_paged_show {
+                            // Built-in pager: teardown ratatui → shell.execute
+                            // (the pager manages its own terminal) → rebuild.
+                            // The output (if any, e.g. when piped) is discarded
+                            // since the pager already displayed it.
+                            crate::subprocess::run_with_handoff(&mut terminal, || {
+                                let _ = shell.execute(&trimmed);
+                            })?;
+                        } else {
+                            // External interactive command (vim/ssh/top).
+                            crate::subprocess::hand_off_to_interactive(
+                                &mut terminal,
+                                &trimmed,
+                                &shell.pwd(),
+                            )?;
+                        }
                         continue;
                     }
 
