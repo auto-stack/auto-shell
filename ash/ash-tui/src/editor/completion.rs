@@ -25,6 +25,11 @@ pub struct CompletionMenu {
     suggestions: Vec<Suggestion>,
     /// Selected index into `suggestions`. 0 = first.
     selected: usize,
+    /// The original input line captured at open() time. Each suggestion's
+    /// `span` refers to positions in THIS line, so when cycling candidates
+    /// (Tab/↓) we must replace against the original — not the already-mutated
+    /// buffer — otherwise the span offsets drift and corrupt the text.
+    original_line: String,
 }
 
 impl CompletionMenu {
@@ -33,12 +38,15 @@ impl CompletionMenu {
             completer,
             suggestions: Vec::new(),
             selected: 0,
+            original_line: String::new(),
         }
     }
 
     /// Open the menu: query the completer for the current line + position.
     /// Replaces any prior candidates. No-op (closes) if no candidates.
     pub fn open(&mut self, line: &str, pos: usize) {
+        // Snapshot the line BEFORE completing — suggestions' spans index into it.
+        self.original_line = line.to_string();
         self.suggestions = self.completer.complete(line, pos);
         self.selected = 0;
     }
@@ -48,6 +56,7 @@ impl CompletionMenu {
     pub fn close(&mut self) {
         self.suggestions.clear();
         self.selected = 0;
+        self.original_line.clear();
     }
 
     /// Whether the menu is currently open (has candidates).
@@ -89,6 +98,36 @@ impl CompletionMenu {
     pub fn selected_suggestion(&self) -> Option<(&str, reedline::Span, bool)> {
         let s = self.suggestions.get(self.selected)?;
         Some((&s.value, s.span, s.append_whitespace))
+    }
+
+    /// Apply the currently-selected candidate to `line_buffer`.
+    ///
+    /// This is the quick-completion primitive: it reconstructs the line from
+    /// the ORIGINAL input (captured at `open`) with the selected candidate's
+    /// value spliced into its span, then writes it into `line_buffer`. This
+    /// makes cycling (Tab/↓) correct even after prior applies — every apply
+    /// starts from the unchanged original, so span offsets never drift.
+    ///
+    /// Returns true if a candidate was applied.
+    pub fn apply_selected(&self, line_buffer: &mut reedline::LineBuffer) -> bool {
+        let s = match self.suggestions.get(self.selected) {
+            Some(s) => s,
+            None => return false,
+        };
+        let span = s.span;
+        let value = &s.value;
+        // Rebuild: original[..span.start] + value + original[span.end..]
+        let mut new_line = String::with_capacity(self.original_line.len() + value.len());
+        new_line.push_str(&self.original_line[..span.start.min(self.original_line.len())]);
+        new_line.push_str(value);
+        let end = span.end.min(self.original_line.len());
+        new_line.push_str(&self.original_line[end..]);
+        line_buffer.set_buffer(new_line);
+        // Cursor to end of inserted value + optional trailing space.
+        if s.append_whitespace {
+            line_buffer.insert_char(' ');
+        }
+        true
     }
 }
 
@@ -172,5 +211,67 @@ mod tests {
         assert_eq!(val, "git");
         assert_eq!(span, Span::new(0, 1));
         assert!(aws);
+    }
+
+    /// A suggestion that replaces span [0..1] with `value` (simulates typing
+    /// "l" and getting "ls"/"less" back — span covers the typed prefix).
+    fn sug_span(value: &str, start: usize, end: usize) -> Suggestion {
+        let mut s = sug(value);
+        s.span = Span::new(start, end);
+        s
+    }
+
+    #[test]
+    fn apply_selected_writes_first_candidate_to_buffer() {
+        // User typed "l" (span 0..1); candidates ls/less replace 0..1.
+        let mut m = menu(vec![sug_span("ls", 0, 1), sug_span("less", 0, 1)]);
+        let mut lb = reedline::LineBuffer::from("l");
+        m.open("l", 1);
+        // First candidate applied on open.
+        assert!(m.apply_selected(&mut lb));
+        assert_eq!(lb.get_buffer(), "ls");
+    }
+
+    #[test]
+    fn apply_selected_after_next_cycles_correctly() {
+        // Cycle to the 2nd candidate: buffer must reflect "less", not corrupt.
+        let mut m = menu(vec![sug_span("ls", 0, 1), sug_span("less", 0, 1)]);
+        let mut lb = reedline::LineBuffer::from("l");
+        m.open("l", 1);
+        m.apply_selected(&mut lb); // → "ls"
+        assert_eq!(lb.get_buffer(), "ls");
+        m.next();
+        m.apply_selected(&mut lb); // → "less" (rebuilt from ORIGINAL "l")
+        assert_eq!(lb.get_buffer(), "less");
+    }
+
+    #[test]
+    fn apply_selected_preserves_text_after_span() {
+        // User typed "l file" (span 0..1); candidate replaces only the prefix.
+        let mut m = menu(vec![sug_span("ls", 0, 1)]);
+        let mut lb = reedline::LineBuffer::from("l file");
+        m.open("l file", 1);
+        m.apply_selected(&mut lb);
+        assert_eq!(lb.get_buffer(), "ls file");
+    }
+
+    #[test]
+    fn apply_selected_appends_whitespace_when_requested() {
+        let mut s = sug_span("cd", 0, 1);
+        s.append_whitespace = true;
+        let mut m = menu(vec![s]);
+        let mut lb = reedline::LineBuffer::from("c");
+        m.open("c", 1);
+        m.apply_selected(&mut lb);
+        assert_eq!(lb.get_buffer(), "cd ");
+    }
+
+    #[test]
+    fn apply_selected_returns_false_when_no_candidates() {
+        let mut m = menu(vec![]);
+        let mut lb = reedline::LineBuffer::from("x");
+        m.open("x", 1); // StubCompleter returns the empty vec
+        assert!(!m.apply_selected(&mut lb));
+        assert_eq!(lb.get_buffer(), "x");
     }
 }

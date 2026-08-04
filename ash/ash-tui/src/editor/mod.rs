@@ -159,16 +159,21 @@ impl Editor {
             // ── Completion menu navigation (menu already open) ────────
             if menu_open {
                 match (no_mods, ke.code) {
-                    // Tab / ↓ cycle to the next candidate.
+                    // Tab / ↓ cycle to the next candidate + apply it (quick-
+                    // completion: the buffer updates as you cycle).
                     (true, KeyCode::Tab) | (true, KeyCode::Down) => {
                         if let Some(m) = self.completion.as_mut() {
                             m.next();
+                            m.apply_selected(&mut self.line_buffer);
+                            self.current_hint.clear();
                         }
                         return EditorOutcome::Continue;
                     }
                     (true, KeyCode::Up) => {
                         if let Some(m) = self.completion.as_mut() {
                             m.previous();
+                            m.apply_selected(&mut self.line_buffer);
+                            self.current_hint.clear();
                         }
                         return EditorOutcome::Continue;
                     }
@@ -245,19 +250,29 @@ impl Editor {
                         );
                         return EditorOutcome::Continue;
                     }
-                    // Tab opens the completion menu (first press).
+                    // Tab: quick-completion (bash/fish style). First press opens
+                    // the menu AND immediately applies the first candidate to the
+                    // buffer; subsequent Tab presses cycle to the next candidate
+                    // and update the buffer. The menu stays open so the user can
+                    // keep cycling; Enter/Esc/any other key closes it.
                     KeyCode::Tab => {
                         if let Some(m) = self.completion.as_mut() {
                             if !m.is_open() {
-                                m.open(self.line_buffer.get_buffer(), self.line_buffer.insertion_point());
+                                m.open(
+                                    self.line_buffer.get_buffer(),
+                                    self.line_buffer.insertion_point(),
+                                );
+                            } else {
+                                m.next();
                             }
-                            // If still no candidates, fall through to edit mode
-                            // (which will treat Tab as EditCommand::Complete no-op).
                             if m.is_open() {
+                                // Apply the (newly-selected) candidate to the buffer.
+                                m.apply_selected(&mut self.line_buffer);
+                                self.current_hint.clear();
                                 return EditorOutcome::Continue;
                             }
                         }
-                        // Fall through to edit_mode.
+                        // No completer or no candidates: fall through to edit_mode.
                     }
                     _ => {}
                 }
@@ -276,29 +291,11 @@ impl Editor {
         }
     }
 
-    /// Apply the currently-selected completion candidate to the buffer:
-    /// replace the suggestion's span with its value, move the cursor past it,
-    /// append a trailing space if requested, and close the menu.
+    /// Accept the currently-selected candidate (apply it + close the menu).
+    /// Used by Enter to finalize a completion before submitting.
     fn accept_selected_completion(&mut self) {
-        let (value, span, append_ws) = match self.completion.as_ref() {
-            Some(m) => match m.selected_suggestion() {
-                Some(v) => v,
-                None => return,
-            },
-            None => return,
-        };
-        let value = value.to_string();
-        // Replace the span (typed prefix) with the full suggestion value.
-        // LineBuffer::replace_range takes a Range and replacement string.
-        self.line_buffer
-            .replace_range(span.start..span.end, &value);
-        // Move cursor to the end of the inserted value.
-        let new_ip = span.start + value.len();
-        self.line_buffer.set_insertion_point(new_ip);
-        if append_ws {
-            self.line_buffer.insert_char(' ');
-        }
         if let Some(m) = self.completion.as_mut() {
+            m.apply_selected(&mut self.line_buffer);
             m.close();
         }
         self.current_hint.clear();
