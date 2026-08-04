@@ -210,6 +210,32 @@ M1 独立可验证,强烈建议先做。M2-M6 各自独立。
 | `execute_inner` 不可见/不可复用 | 读 `shell.rs` 确认可见性;必要时在 auto-shell 加公开包装 |
 | 流式与结构化渲染冲突 | ExternalStream 先 emit 文本行;最终 `command-result` 再尝试结构化 |
 | auto-lang WIP 不稳定 | 与本次改动无关;联调待稳定后执行 |
+| `shell.execute()` 内阻塞的命令无法取消 | 见下方 §4.1——经评估维持现状 |
+
+### 4.1 为何不修"`execute()` 内命令不可取消"
+
+**结论:维持现状,不予修复。**(2026-08-04 评估)
+
+M5 的取消仅在流式路径(简单外部命令)真正 kill 子进程;`shell.execute()` 内阻塞的
+命令(registered 命令 / builtin / Auto 函数 / 管道)无法中断。经评估不修,理由:
+
+1. **参照的 iced 版前端根本没有取消能力**。`ash-gui-bin`(iced)无 cancel/abort/
+   stop/streaming/kill 任何相关代码;本 GUI 的流式取消已是领先能力,非缺口。
+2. **真正会卡住的 registered 命令极少**。会阻塞的就两类:
+   - `http_get`/`http_post`/...(curl 网络请求)——有 `--timeout` 参数;
+   - `sleep`(`std::thread::sleep`,无超时)——罕见用法。
+   用户日常真正想取消的长命令(`find /`、`cargo build`、`ping`、长构建脚本)全是
+   外部命令,已被流式路径覆盖(kill 真正生效)。
+3. **修复代价极高**。需把整个执行架构从同步改成协作式取消:给 `Command::run_atom`
+   trait 加 cancel-token 轮询、几百个命令实现逐个插检查点、AutoLang VM 解释器循环
+   加中断点、改 `execute_inner` 的展开/管道/链式全部路径。跨 3 个 crate、动 trait
+   签名、影响 698 个测试,只覆盖 `sleep` 和无超时 `http_get` 的边缘场景。
+4. **业界先例一致**。fish / nushell 同样无法中断纯进程内计算,只能 kill 外部进程。
+
+**务实的替代补丁**(若未来有用户报告):
+- 给 `sleep` 命令加上限(如最大 1 小时);
+- 给 `http_*` 命令设默认超时(curl 无 `--max-time` 时默认 30s)。
+这比重构整个执行模型性价比高得多。
 
 ## 5. 参考文件
 
