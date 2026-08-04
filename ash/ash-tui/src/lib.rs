@@ -16,6 +16,8 @@ pub mod block_tui;
 pub mod commands;
 /// Plan 038 M1: the bottom-line input editor for the block TUI.
 pub mod editor;
+/// Plan 038 M3: fullscreen subprocess handoff (teardown/rebuild ratatui).
+pub mod subprocess;
 // `commands_less.rs` is the original `less`/`more` implementation (crossterm),
 // moved verbatim; `commands` re-exports it and adds `color`.
 mod commands_less;

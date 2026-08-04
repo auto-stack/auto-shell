@@ -32,8 +32,7 @@ use std::io::{self, stdout};
 // re-export and ash-tui's previous 0.27 pin were *different types*.
 use ratatui_crossterm::crossterm::{
     event,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    ExecutableCommand,
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui_core::layout::Rect;
 use ratatui_core::style::{Color, Modifier, Style};
@@ -89,12 +88,10 @@ impl BlockTui {
         let edit_mode = build_edit_mode();
         let mut editor = Editor::new(edit_mode);
 
-        // M2: attach history + completion + hints. These reuse the exact same
-        // components as the reedline REPL (FileBackedHistory / ShellCompleter /
-        // AshHinter), built from a throwaway Shell that harvests the command
-        // registry (for completion signatures) + cwd. Real command execution
-        // is M3; M2 only needs the data sources.
-        let (mut history_store, completer, hinter, cwd) = build_history_completion_hints();
+        // M2/M3: build the execution Shell + history/completion/hint sources.
+        // The Shell is the REAL execution shell (render hook + terminal
+        // commands injected) — M3 uses it to run commands.
+        let (mut shell, mut history_store, completer, hinter, cwd) = build_shell_and_sources();
         // HistoryNav is owned HERE (not in Editor) because it needs the
         // FileBackedHistory on each ↑/↓, and that store lives in this scope.
         let mut history_nav = crate::editor::history::HistoryNav::new();
@@ -243,33 +240,74 @@ impl BlockTui {
                 EditorOutcome::Exit => break,
                 EditorOutcome::Submitted => {
                     let line = editor.take_line();
-                    // M2: persist non-empty lines to history (shared file with
-                    // the reedline REPL).
-                    if !line.trim().is_empty() {
+                    let trimmed = line.trim().to_string();
+
+                    // M2: persist non-empty lines to history (shared file).
+                    if !trimmed.is_empty() {
                         use reedline::History;
                         let _ = history_store
-                            .save(reedline::HistoryItem::from_command_line(line.clone()));
+                            .save(reedline::HistoryItem::from_command_line(trimmed.clone()));
                     }
-                    // M1: recognize `exit`/`quit` to leave the loop. Real
-                    // command dispatch + block rendering is M3.
-                    let trimmed = line.trim();
+
+                    // exit/quit leave the loop.
                     if trimmed == "exit" || trimmed == "quit" || trimmed == "q" {
                         break;
                     }
-                    // Push a one-line "block" into the host scrollback above
-                    // the viewport. M3 replaces this with the real command
-                    // header + rendered output.
-                    let display = if line.is_empty() {
-                        "(empty)".to_string()
-                    } else {
-                        line.clone()
+                    // Empty line: no block, just a fresh prompt.
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    // M3: interactive commands (vim/less/top/...) need full
+                    // terminal control — tear down ratatui, run them with
+                    // inherited stdio, then rebuild. Non-interactive commands
+                    // go through Shell::execute and render as a block.
+                    if ash_core::cmd::interactive::is_interactive_command(&trimmed) {
+                        crate::subprocess::hand_off_to_interactive(
+                            &mut terminal,
+                            &trimmed,
+                            &shell.pwd(),
+                        )?;
+                        continue;
+                    }
+
+                    // ── Execute + time (mirrors repl.rs execute_with_header) ──
+                    let start = std::time::Instant::now();
+                    let result = shell.execute(&trimmed);
+                    let elapsed = start.elapsed();
+                    let exit_code = match &result {
+                        Ok(_) => shell.last_exit_code(),
+                        Err(_) => {
+                            let c = shell.last_exit_code();
+                            if c != 0 { c } else { 1 }
+                        }
                     };
-                    terminal.insert_before(1, |buf| {
-                        let rendered = Line::from(vec![
-                            Span::styled("❯ ", Style::default().fg(Color::Green)),
-                            Span::styled(display, Style::default().add_modifier(Modifier::BOLD)),
-                        ]);
-                        buf.set_line(buf.area.x, buf.area.y, &rendered, buf.area.width);
+
+                    // ── Build the block body ──
+                    // Shell::execute returns Option<String>:
+                    //   Some(s) — the command's text output. For structured
+                    //     commands (ls/ps) this is ALREADY ANSI-styled via the
+                    //     TuiRenderHook. ratatui can't parse ANSI, so we strip
+                    //     escapes for the M3 body (tables render as plain text
+                    //     for now; a ratatui-native table widget is a follow-up).
+                    //   None — no output.
+                    let (body_text, is_error): (Option<String>, bool) = match result {
+                        Ok(Some(s)) => (Some(s), false),
+                        Ok(None) => (None, false),
+                        Err(e) => (Some(format!("Error: {e}")), true),
+                    };
+
+                    // Split body into lines (strip ANSI so it doesn't render as
+                    // literal escape gibberish in the ratatui buffer).
+                    let body_lines: Vec<String> = body_text
+                        .map(|s| strip_ansi(&s).lines().map(|l| l.to_string()).collect())
+                        .unwrap_or_default();
+
+                    // ── insert_before: header (1 row) + body (N rows) ──
+                    let height = 1u16 + body_lines.len() as u16;
+                    let header_cmd = trimmed.clone();
+                    terminal.insert_before(height, move |buf| {
+                        render_block(buf, &header_cmd, exit_code, elapsed, &body_lines, is_error);
                     })?;
                 }
             }
@@ -279,7 +317,111 @@ impl BlockTui {
     }
 }
 
-/// Build the reedline `EditMode` (keybinding parser).
+/// Render one completed block into the ratatui buffer: a status-colored
+/// header line (command + duration + ✓/✗) followed by the output body.
+///
+/// This is the M3 replacement for the reedline REPL's `execute_with_header`
+/// (which prints via `println!` in cooked mode). Here we draw directly into
+/// the `insert_before` buffer with ratatui `Span::styled` — we do NOT reuse
+/// `block_header::render_block_header` because it returns an ANSI string that
+/// ratatui can't parse. We do reuse `block_header::format_duration` (pure
+/// `Duration → String`, no ANSI).
+fn render_block(
+    buf: &mut ratatui_core::buffer::Buffer,
+    command: &str,
+    exit_code: i32,
+    elapsed: std::time::Duration,
+    body_lines: &[String],
+    is_error: bool,
+) {
+    use ratatui_core::style::{Color, Modifier, Style};
+    use ratatui_core::text::{Line, Span};
+    use unicode_width::UnicodeWidthStr;
+
+    let w = buf.area.width;
+    // ── Header: "❯ {command}  ...pad...  {duration}  {icon}" ──
+    let dur = crate::block_header::format_duration(elapsed);
+    let (icon, icon_color) = if exit_code == 0 {
+        ("✓", Color::Green)
+    } else {
+        ("✗", Color::Red)
+    };
+    let left = format!("❯ {command}");
+    let right = format!("{dur}  {icon}");
+    let lw = UnicodeWidthStr::width(left.as_str()) as u16;
+    let rw = UnicodeWidthStr::width(right.as_str()) as u16;
+    let pad = w.saturating_sub(lw).saturating_sub(rw);
+    let mut spans: Vec<Span> = vec![Span::styled(left, Style::default().fg(Color::DarkGray))];
+    if pad > 0 {
+        spans.push(Span::raw(" ".repeat(pad as usize)));
+    }
+    spans.push(Span::styled(right, Style::default().fg(icon_color)));
+    let header_line = Line::from(spans);
+    buf.set_line(buf.area.x, buf.area.y, &header_line, w);
+
+    // ── Body ──
+    let body_style = if is_error {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    for (i, ln) in body_lines.iter().enumerate() {
+        let y = buf.area.y + 1 + i as u16;
+        if y >= buf.area.bottom() {
+            break;
+        }
+        buf.set_string(buf.area.x, y, ln, body_style);
+    }
+}
+
+/// Strip ANSI escape sequences from a string.
+///
+/// `Shell::execute` returns text that may be ANSI-styled (structured commands
+/// like `ls` go through `TuiRenderHook` → `rendered_to_ansi`). ratatui can't
+/// parse ANSI, so for M3 we strip it and render the body as plain styled text.
+/// (A ratatui-native table widget that consumes `RenderedOutput` directly is a
+/// follow-up — see Plan 038 M3 §3.)
+fn strip_ansi(s: &str) -> String {
+    // CSI sequences: ESC [ ... letter. Also handle OSC (ESC ] ... BEL/ST).
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        // ESC seen — consume the rest of the escape sequence.
+        match chars.next() {
+            Some('[') => {
+                // CSI: consume until a 0x40..0x7E byte (the final byte).
+                while let Some(fc) = chars.next() {
+                    if fc.is_ascii_alphabetic() || ('@'..='~').contains(&fc) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                // OSC: consume until BEL (\x07) or ST (ESC \).
+                while let Some(fc) = chars.next() {
+                    if fc == '\x07' {
+                        break;
+                    }
+                    if fc == '\x1b' {
+                        // ST = ESC \; consume the backslash.
+                        let _ = chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {
+                // Other ESC sequences (e.g. ESC c, ESC =): consume one more.
+            }
+        }
+    }
+    out
+}
+
+
 ///
 /// Mirrors the selection in `repl.rs::Repl::new` (Plan 302 Step 3.2) with the
 /// same three-layer fallback so the block TUI matches the reedline REPL:
@@ -321,15 +463,26 @@ fn detect_vi_mode() -> bool {
     false
 }
 
-/// Build the history store, completer, hinter, and cwd for M2.
+/// Build the execution Shell + history/completion/hint sources for M2/M3.
 ///
-/// Mirrors the construction in `repl.rs::Repl::new` (lines 81-103, 263-277):
-/// a throwaway `Shell` harvests the command registry (for completion
-/// signatures) and the current working directory. The `FileBackedHistory`
-/// points at `~/.auto-shell-history` (shared with the reedline REPL). The
-/// hinter is only built if autosuggestion is enabled in `ash.toml`.
-fn build_history_completion_hints()
--> (reedline::FileBackedHistory, crate::completions_reedline::ShellCompleter, Option<crate::term::hinter::AshHinter>, String)
+/// Mirrors the construction in `repl.rs::Repl::new` (lines 36-103, 263-277):
+/// the Shell is the REAL execution shell (not a throwaway probe) — it has the
+/// `TuiRenderHook` injected so structured commands (ls/ps) render as tables,
+/// and the terminal-only commands (less/more/color) registered. The pager
+/// hook is intentionally NOT injected (M3: `show --pager` falls back to
+/// streamed highlighting; a ratatui-native pager is M4).
+///
+/// The `FileBackedHistory` points at `~/.auto-shell-history` (shared with the
+/// reedline REPL). The hinter is only built if autosuggestion is on in
+/// `ash.toml`.
+fn build_shell_and_sources()
+-> (
+    auto_shell::Shell,
+    reedline::FileBackedHistory,
+    crate::completions_reedline::ShellCompleter,
+    Option<crate::term::hinter::AshHinter>,
+    String,
+)
 {
     use auto_shell::completions::CompletionSignature;
     use auto_shell::completions::definitions;
@@ -337,16 +490,21 @@ fn build_history_completion_hints()
     use crate::completions_reedline::{CompletionState, ShellCompleter};
     use crate::term::hinter::AshHinter;
 
-    let probe = auto_shell::Shell::new();
-    let cwd = probe.pwd().to_string_lossy().to_string();
+    let mut shell = auto_shell::Shell::new();
+    // M3: inject the render hook (structured output → ANSI tables) + terminal
+    // commands. NO pager hook (see doc comment).
+    shell.set_render_hook(Box::new(crate::renderer::TuiRenderHook));
+    shell.register_commands(crate::commands::terminal_commands());
+    shell.load_env_persistence();
+    let cwd = shell.pwd().to_string_lossy().to_string();
 
     // Completion signatures from the command registry.
     let completion_sigs: Vec<CompletionSignature> =
-        probe.registry().params().into_iter().map(Into::into).collect();
+        shell.registry().params().into_iter().map(Into::into).collect();
     let mut provider = CompletionProvider::new();
     definitions::register_all(&mut provider);
     let completion_state = std::sync::Arc::new(std::sync::Mutex::new(CompletionState::new(
-        probe.pwd().to_path_buf(),
+        shell.pwd().to_path_buf(),
     )));
     let completer = ShellCompleter::new(completion_sigs, provider, completion_state);
 
@@ -372,8 +530,7 @@ fn build_history_completion_hints()
         None
     };
 
-    drop(probe);
-    (history, completer, hinter, cwd)
+    (shell, history, completer, hinter, cwd)
 }
 
 /// If the event is an ↑ or ↓ keypress (no modifiers), return the direction:
@@ -429,14 +586,16 @@ fn handle_history_arrow(
 }
 
 // ── Terminal setup/teardown ─────────────────────────────────────────────
+
+/// Enter raw mode for the inline viewport.
 ///
-/// Note: M0/M1 use the alternate screen for isolation during the experiment so
-/// that a crash cannot corrupt the host scrollback. M3 will drop the alt
-/// screen — the whole point of `Viewport::Inline` is to push blocks into the
-/// *host* scrollback, which the alt screen hides.
+/// M3: the alternate screen is NO LONGER used. The whole point of
+/// `Viewport::Inline` is to push finished blocks into the *host* scrollback
+/// via `insert_before`; the alt screen hid those blocks (M0/M1 used it only
+/// as a temporary crash-isolation measure). Dropping it also makes subprocess
+/// handoff simpler (no Leave/EnterAlternateScreen dance).
 fn setup_terminal() -> io::Result<()> {
     enable_raw_mode()?;
-    stdout().execute(EnterAlternateScreen)?;
     Ok(())
 }
 
@@ -444,7 +603,6 @@ fn setup_terminal() -> io::Result<()> {
 /// from a panic hook even if setup never completed.
 fn restore_terminal() {
     let _ = disable_raw_mode();
-    let _ = stdout().execute(LeaveAlternateScreen);
 }
 
 /// RAII guard: setup on creation, restore on drop. Guarantees terminal
@@ -461,5 +619,42 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         restore_terminal();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_ansi_removes_csi_sequences() {
+        let s = "\x1b[32mgreen\x1b[0m plain \x1b[1;31mbold red\x1b[0m";
+        assert_eq!(strip_ansi(s), "green plain bold red");
+    }
+
+    #[test]
+    fn strip_ansi_handles_osc_sequences() {
+        let s = "before\x1b]0;title\x07after";
+        assert_eq!(strip_ansi(s), "beforeafter");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_plain_text() {
+        assert_eq!(strip_ansi("hello world"), "hello world");
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn strip_ansi_handles_empty_escape() {
+        // A bare ESC followed by nothing useful should not panic.
+        assert_eq!(strip_ansi("\x1b"), "");
+    }
+
+    #[test]
+    fn strip_ansi_multiline_body() {
+        // Simulates a structured command's ANSI table output.
+        let s = "\x1b[1mNAME\x1b[0m  \x1b[1mSIZE\x1b[0m\nfoo  123\nbar  \x1b[36m456\x1b[0m";
+        let stripped = strip_ansi(s);
+        assert_eq!(stripped, "NAME  SIZE\nfoo  123\nbar  456");
     }
 }
