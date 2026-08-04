@@ -46,10 +46,12 @@ use reedline::{
 
 use crate::editor::{Editor, EditorOutcome};
 
-/// The fixed height of the inline viewport (rows). M1 uses 3: one input row
-/// (prompt + buffer), one status row, one margin. M2 will grow this to fit the
-/// completion menu / hints.
-const VIEWPORT_HEIGHT: u16 = 3;
+/// The fixed height of the inline viewport (rows). M2: 2 rows for the editor
+/// (prompt+buffer, status) + up to 6 rows for the completion menu when open.
+/// The unused rows are blank when the menu is closed (ratatui clears them).
+const VIEWPORT_HEIGHT: u16 = 8;
+/// Max completion candidates to show at once (the rest are reachable via ↓).
+const MAX_MENU_ROWS: u16 = 6;
 
 /// The block-TUI experimental REPL. Construct with [`BlockTui::run`]. Returns
 /// when the user exits (Ctrl+D on empty / `exit` / Ctrl+C from the outer loop).
@@ -87,33 +89,98 @@ impl BlockTui {
         let edit_mode = build_edit_mode();
         let mut editor = Editor::new(edit_mode);
 
+        // M2: attach history + completion + hints. These reuse the exact same
+        // components as the reedline REPL (FileBackedHistory / ShellCompleter /
+        // AshHinter), built from a throwaway Shell that harvests the command
+        // registry (for completion signatures) + cwd. Real command execution
+        // is M3; M2 only needs the data sources.
+        let (mut history_store, completer, hinter, cwd) = build_history_completion_hints();
+        // HistoryNav is owned HERE (not in Editor) because it needs the
+        // FileBackedHistory on each ↑/↓, and that store lives in this scope.
+        let mut history_nav = crate::editor::history::HistoryNav::new();
+        // HintSource lives HERE too (needs the history store). Editor only
+        // holds the computed hint string + the completion menu.
+        let mut hint_source: Option<crate::editor::hints::HintSource<_>> =
+            hinter.map(|h| crate::editor::hints::HintSource::new(h));
+        editor = editor.with_completion(crate::editor::completion::CompletionMenu::new(
+            Box::new(completer),
+        ));
+
         loop {
             // ── Draw the fixed-bottom viewport ──────────────────────
-            // Row 0: prompt indicator + the editor's current buffer.
-            // Row 1: a status line (M1 hint text; M2 will show hints/menu).
-            // The cursor is positioned within this same draw call via
-            // `frame.set_cursor_position`, so ratatui applies it after the
-            // buffer diff — no separate cursor write needed.
+            // Row 0: prompt indicator + the editor's buffer + dim hint suffix.
+            // Row 1: a status line.
+            // Rows 2+: completion menu (only when open).
             let ip = editor.insertion_point();
             let buf_text = editor.text().to_string();
+            let hint_text = editor.hint().to_string();
+            // Snapshot the completion menu state for the closure.
+            let comp_suggestions: Vec<(String, String, usize)> = editor
+                .completion()
+                .and_then(|m| if m.is_open() { Some(m) } else { None })
+                .map(|m| {
+                    m.suggestions()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, s)| {
+                            (
+                                s.value.clone(),
+                                s.description.clone().unwrap_or_default(),
+                                i,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let comp_selected = editor.completion().map_or(0, |m| m.selected());
             terminal.draw(|frame| {
                 let area: Rect = frame.area();
-                let input_line = Line::from(vec![
+                // Input line: prompt + typed text + dim hint ghost suffix.
+                let mut input_spans = vec![
                     Span::styled("❯ ", Style::default().fg(Color::Green)),
                     Span::raw(&buf_text),
-                ]);
+                ];
+                if !hint_text.is_empty() {
+                    input_spans.push(Span::styled(
+                        hint_text.clone(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                let input_line = Line::from(input_spans);
                 let status = Line::from(vec![
+                    Span::styled("block-tui M2 ", Style::default().fg(Color::Cyan)),
                     Span::styled(
-                        "block-tui M1 ",
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    Span::styled(
-                        "Enter=submit  Ctrl+D=exit  (emacs: C-a/e/k/w  M-b/f)",
+                        "Enter=submit  Tab=complete  ↑↓=history  Ctrl+D=exit",
                         Style::default().fg(Color::DarkGray),
                     ),
                 ]);
                 frame.render_widget(input_line, Rect::new(area.x, area.y, area.width, 1));
                 frame.render_widget(status, Rect::new(area.x, area.y + 1, area.width, 1));
+
+                // Completion menu (rows 2+), only if there are candidates.
+                if !comp_suggestions.is_empty() {
+                    for (row, (value, desc, idx)) in comp_suggestions.iter().enumerate() {
+                        let selected = *idx == comp_selected;
+                        let style = if selected {
+                            Style::default().fg(Color::Black).bg(Color::Cyan)
+                        } else {
+                            Style::default().fg(Color::White)
+                        };
+                        let label = if desc.is_empty() {
+                            value.clone()
+                        } else {
+                            format!("{value}  {desc}")
+                        };
+                        let menu_line = Line::from(vec![Span::styled(format!("  {label}"), style)]);
+                        let row_y = area.y + 2 + row as u16;
+                        if row_y < area.bottom() {
+                            frame.render_widget(
+                                menu_line,
+                                Rect::new(area.x, row_y, area.width, 1),
+                            );
+                        }
+                    }
+                }
 
                 // Place the visible caret over the insertion point. Column =
                 // viewport x + prompt width (2 for "❯ ") + display width of
@@ -128,13 +195,61 @@ impl BlockTui {
             // it can intercept arrow keys (which reedline's default keybindings
             // leave unbound → would be a no-op).
             let event = event::read()?;
-            let outcome = editor.handle_event(event);
+
+            // M2: history navigation intercept. When the completion menu is
+            // closed and the user hits ↑/↓, walk the history store (Editor
+            // itself only knows line-start/end for ↑/↓ since it doesn't own
+            // the FileBackedHistory).
+            let menu_open = editor
+                .completion()
+                .map_or(false, |m| m.is_open());
+            let history_dir = if !menu_open {
+                history_arrow_direction(&event)
+            } else {
+                None
+            };
+            let handled_by_history = match history_dir {
+                Some(older) => handle_history_arrow(
+                    &mut editor,
+                    &mut history_nav,
+                    &history_store,
+                    older,
+                ),
+                None => false,
+            };
+
+            let outcome = if handled_by_history {
+                EditorOutcome::Continue
+            } else {
+                editor.handle_event(event)
+            };
+
+            // M2: recompute the autosuggestion hint after each event (the
+            // outer loop owns the HintSource since it needs the history store).
+            if let Some(hs) = hint_source.as_mut() {
+                let h = hs.current_hint(
+                    editor.text(),
+                    editor.insertion_point(),
+                    &history_store,
+                    &cwd,
+                );
+                editor.set_hint(h);
+            } else {
+                editor.set_hint(String::new());
+            }
 
             match outcome {
                 EditorOutcome::Continue => continue,
                 EditorOutcome::Exit => break,
                 EditorOutcome::Submitted => {
                     let line = editor.take_line();
+                    // M2: persist non-empty lines to history (shared file with
+                    // the reedline REPL).
+                    if !line.trim().is_empty() {
+                        use reedline::History;
+                        let _ = history_store
+                            .save(reedline::HistoryItem::from_command_line(line.clone()));
+                    }
                     // M1: recognize `exit`/`quit` to leave the loop. Real
                     // command dispatch + block rendering is M3.
                     let trimmed = line.trim();
@@ -206,9 +321,114 @@ fn detect_vi_mode() -> bool {
     false
 }
 
-// ── Terminal setup/teardown ─────────────────────────────────────────────
+/// Build the history store, completer, hinter, and cwd for M2.
+///
+/// Mirrors the construction in `repl.rs::Repl::new` (lines 81-103, 263-277):
+/// a throwaway `Shell` harvests the command registry (for completion
+/// signatures) and the current working directory. The `FileBackedHistory`
+/// points at `~/.auto-shell-history` (shared with the reedline REPL). The
+/// hinter is only built if autosuggestion is enabled in `ash.toml`.
+fn build_history_completion_hints()
+-> (reedline::FileBackedHistory, crate::completions_reedline::ShellCompleter, Option<crate::term::hinter::AshHinter>, String)
+{
+    use auto_shell::completions::CompletionSignature;
+    use auto_shell::completions::definitions;
+    use ash_core::completions::CompletionProvider;
+    use crate::completions_reedline::{CompletionState, ShellCompleter};
+    use crate::term::hinter::AshHinter;
 
-/// Enter raw mode + the alternate screen. Paired with [`restore_terminal`].
+    let probe = auto_shell::Shell::new();
+    let cwd = probe.pwd().to_string_lossy().to_string();
+
+    // Completion signatures from the command registry.
+    let completion_sigs: Vec<CompletionSignature> =
+        probe.registry().params().into_iter().map(Into::into).collect();
+    let mut provider = CompletionProvider::new();
+    definitions::register_all(&mut provider);
+    let completion_state = std::sync::Arc::new(std::sync::Mutex::new(CompletionState::new(
+        probe.pwd().to_path_buf(),
+    )));
+    let completer = ShellCompleter::new(completion_sigs, provider, completion_state);
+
+    // History file (shared with the reedline REPL).
+    let history_path = dirs::home_dir()
+        .map(|h| h.join(".auto-shell-history"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".auto-shell-history"));
+    let history = reedline::FileBackedHistory::with_file(10000, history_path)
+        .unwrap_or_else(|_| reedline::FileBackedHistory::with_file(10000, std::path::PathBuf::from("/dev/null")).unwrap());
+
+    // Hinter (only if autosuggestion is on in config).
+    let shell_config = auto_shell::config::AshShellConfig::load();
+    let hinter: Option<AshHinter> = if shell_config.autosuggestion {
+        let hint_style = nu_ansi_term::Style::new()
+            .fg(nu_ansi_term::Color::DarkGray)
+            .italic();
+        Some(
+            AshHinter::default()
+                .with_style(hint_style)
+                .with_min_chars(shell_config.autosuggestion_min_chars),
+        )
+    } else {
+        None
+    };
+
+    drop(probe);
+    (history, completer, hinter, cwd)
+}
+
+/// If the event is an ↑ or ↓ keypress (no modifiers), return the direction:
+/// `true` = up (older), `false` = down (newer). `None` otherwise.
+fn history_arrow_direction(event: &ratatui_crossterm::crossterm::event::Event) -> Option<bool> {
+    use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    if let Event::Key(ke) = event {
+        if matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && ke.modifiers == KeyModifiers::NONE
+        {
+            return match ke.code {
+                KeyCode::Up => Some(true),
+                KeyCode::Down => Some(false),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Handle an ↑/↓ history navigation. Returns true if consumed (the editor
+/// buffer was updated). `older=true` for ↑, `false` for ↓.
+///
+/// On ↑: load the next older entry (or the most recent on first press) and
+/// replace the editor buffer with it. On ↓: move toward the present; past the
+/// newest entry, restore the saved input and exit navigation.
+fn handle_history_arrow(
+    editor: &mut Editor,
+    nav: &mut crate::editor::history::HistoryNav,
+    history: &reedline::FileBackedHistory,
+    older: bool,
+) -> bool {
+    let entry = if older {
+        nav.older(history, editor.text())
+    } else {
+        match nav.younger() {
+            Some(e) => Some(e),
+            None => {
+                // Past newest — restore saved input.
+                let saved = nav.saved_input().to_string();
+                editor.replace_buffer(saved);
+                return true;
+            }
+        }
+    };
+    match entry {
+        Some(text) => {
+            editor.replace_buffer(text.to_string());
+            true
+        }
+        None => true, // consumed but nothing to show (empty history)
+    }
+}
+
+// ── Terminal setup/teardown ─────────────────────────────────────────────
 ///
 /// Note: M0/M1 use the alternate screen for isolation during the experiment so
 /// that a crash cannot corrupt the host scrollback. M3 will drop the alt

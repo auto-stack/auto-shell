@@ -25,9 +25,14 @@
 //!
 //! See `docs/plans/038-block-tui-migration.md` §2.4 and the M1 research notes.
 
+pub mod completion;
 pub mod dispatch;
+pub mod history;
+pub mod hints;
 
 use reedline::{EditMode, LineBuffer};
+
+use completion::CompletionMenu;
 
 /// The bottom-line input editor. Owns the editable buffer + keybinding parser.
 pub struct Editor {
@@ -40,6 +45,12 @@ pub struct Editor {
     /// `pub(crate)`-gated, so M1 uses a plain `String` (set by `CutWordLeft`
     /// / `KillLine`; not yet yanked back by a paste command — that's M2).
     pub(crate) cut_buffer: String,
+    /// M2: the cached ghost-text hint for the current input. Computed by the
+    /// outer loop (which owns the HintSource) and read by the renderer.
+    current_hint: String,
+    /// M2: completion menu state. `None` until `with_completion` injects a
+    /// completer. When `Some`, Tab opens/navigates the menu.
+    completion: Option<CompletionMenu>,
 }
 
 /// What the editor reports back to the event loop after handling one
@@ -62,7 +73,31 @@ impl Editor {
             line_buffer: LineBuffer::new(),
             edit_mode,
             cut_buffer: String::new(),
+            current_hint: String::new(),
+            completion: None,
         }
+    }
+
+    /// M2: attach a completer for Tab completion.
+    pub fn with_completion(mut self, menu: CompletionMenu) -> Self {
+        self.completion = Some(menu);
+        self
+    }
+
+    /// M2: set the cached ghost-text hint (computed by the outer loop, which
+    /// owns the `HintSource` + cwd). Read by the renderer.
+    pub fn set_hint(&mut self, hint: String) {
+        self.current_hint = hint;
+    }
+
+    /// The cached ghost-text hint suffix (for rendering dim gray).
+    pub fn hint(&self) -> &str {
+        &self.current_hint
+    }
+
+    /// A borrowed view of the completion menu state (for rendering), if any.
+    pub fn completion(&self) -> Option<&CompletionMenu> {
+        self.completion.as_ref()
     }
 
     /// The current input text.
@@ -71,10 +106,15 @@ impl Editor {
     }
 
     /// Take the submitted line, leaving the editor empty for the next prompt.
+    /// Also clears the hint, closes the completion menu, and exits history nav.
     pub fn take_line(&mut self) -> String {
         let text = self.line_buffer.get_buffer().to_string();
         self.line_buffer = LineBuffer::new();
         self.cut_buffer.clear();
+        self.current_hint.clear();
+        if let Some(m) = self.completion.as_mut() {
+            m.close();
+        }
         text
     }
 
@@ -83,25 +123,90 @@ impl Editor {
         self.line_buffer.insertion_point()
     }
 
+    /// Replace the entire buffer with `text` and move the cursor to the end.
+    /// Used by history navigation (↑/↓) to swap in a past command.
+    pub fn replace_buffer(&mut self, text: String) {
+        self.line_buffer.set_buffer(text);
+        self.current_hint.clear();
+        if let Some(m) = self.completion.as_mut() {
+            m.close();
+        }
+    }
+
     /// Feed one raw crossterm event through the keybinding parser + dispatch.
     /// Returns the outcome for the outer loop.
     ///
-    /// Arrow keys are intercepted BEFORE the EditMode parser: reedline's
-    /// default Emacs/Vi keybindings don't bind them, so they'd return
-    /// `ReedlineEvent::None` (no movement). We map Left/Right/Up/Down directly
-    /// to `MoveLeft`/`MoveRight`/`MoveToLineStart`/`MoveToLineEnd` (Up/Down in
-    /// a single-line editor move to line ends — multi-line is M4).
+    /// Interaction priority (each handled BEFORE the EditMode parser):
+    /// 1. Completion menu navigation: when the menu is open, ↑/↓/Tab/Esc
+    ///    navigate/close it instead of moving the cursor.
+    /// 2. History navigation: when the menu is closed, ↑/↓ walk history
+    ///    (if a history store is attached).
+    /// 3. Arrow keys + Home/End: reedline defaults don't bind them.
+    /// 4. Hint acceptance: Right/End at the line end accepts the ghost hint.
+    /// 5. Tab opens the completion menu (if a completer is attached).
     pub fn handle_event(&mut self, event: crossterm::event::Event) -> EditorOutcome {
-        // Arrow-key fallback: works in both Emacs and Vi modes regardless of
-        // keybinding table contents.
+        use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+
         if let crossterm::event::Event::Key(ke) = &event {
-            use crossterm::event::{KeyCode, KeyEventKind};
             // Windows terminals emit Press + Release for each keypress; only
-            // act on Press/Repeat so we don't double-move.
+            // act on Press/Repeat so we don't double-handle.
             if !matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
                 return EditorOutcome::Continue;
             }
-            let no_mods = ke.modifiers == crossterm::event::KeyModifiers::NONE;
+            let no_mods = ke.modifiers == KeyModifiers::NONE;
+            let menu_open = self.completion.as_ref().map_or(false, |m| m.is_open());
+
+            // ── Completion menu navigation (menu already open) ────────
+            if menu_open {
+                match (no_mods, ke.code) {
+                    // Tab / ↓ cycle to the next candidate.
+                    (true, KeyCode::Tab) | (true, KeyCode::Down) => {
+                        if let Some(m) = self.completion.as_mut() {
+                            m.next();
+                        }
+                        return EditorOutcome::Continue;
+                    }
+                    (true, KeyCode::Up) => {
+                        if let Some(m) = self.completion.as_mut() {
+                            m.previous();
+                        }
+                        return EditorOutcome::Continue;
+                    }
+                    (true, KeyCode::Esc) => {
+                        if let Some(m) = self.completion.as_mut() {
+                            m.close();
+                        }
+                        return EditorOutcome::Continue;
+                    }
+                    // Enter accepts the selected candidate, then submits.
+                    (true, KeyCode::Enter) => {
+                        self.accept_selected_completion();
+                        return EditorOutcome::Submitted;
+                    }
+                    _ => {}
+                }
+            }
+
+            // ↑/↓ with no history and no menu: single-line editor → line ends.
+            // (Real history navigation is handled by the outer loop, which owns
+            // the FileBackedHistory; this is the fallback when no history is
+            // attached there.)
+            if no_mods && ke.code == KeyCode::Up {
+                dispatch::dispatch_edit_command(
+                    self,
+                    reedline::EditCommand::MoveToLineStart { select: false },
+                );
+                return EditorOutcome::Continue;
+            }
+            if no_mods && ke.code == KeyCode::Down {
+                dispatch::dispatch_edit_command(
+                    self,
+                    reedline::EditCommand::MoveToLineEnd { select: false },
+                );
+                return EditorOutcome::Continue;
+            }
+
+            // ── Left/Right/Home/End + hint acceptance ────────────────
             if no_mods {
                 match ke.code {
                     KeyCode::Left => {
@@ -111,14 +216,28 @@ impl Editor {
                         );
                         return EditorOutcome::Continue;
                     }
-                    KeyCode::Right => {
-                        dispatch::dispatch_edit_command(
-                            self,
-                            reedline::EditCommand::MoveRight { select: false },
-                        );
+                    KeyCode::Right | KeyCode::End => {
+                        // At line end with a hint → accept it; else move.
+                        let at_end =
+                            self.line_buffer.insertion_point() >= self.line_buffer.len();
+                        if at_end && !self.current_hint.is_empty() {
+                            let hint = std::mem::take(&mut self.current_hint);
+                            self.line_buffer.insert_str(&hint);
+                            return EditorOutcome::Continue;
+                        }
+                        if ke.code == KeyCode::End {
+                            dispatch::dispatch_edit_command(
+                                self,
+                                reedline::EditCommand::MoveToLineEnd { select: false },
+                            );
+                        } else {
+                            dispatch::dispatch_edit_command(
+                                self,
+                                reedline::EditCommand::MoveRight { select: false },
+                            );
+                        }
                         return EditorOutcome::Continue;
                     }
-                    // Home/End are also commonly unbound in reedline defaults.
                     KeyCode::Home => {
                         dispatch::dispatch_edit_command(
                             self,
@@ -126,12 +245,19 @@ impl Editor {
                         );
                         return EditorOutcome::Continue;
                     }
-                    KeyCode::End => {
-                        dispatch::dispatch_edit_command(
-                            self,
-                            reedline::EditCommand::MoveToLineEnd { select: false },
-                        );
-                        return EditorOutcome::Continue;
+                    // Tab opens the completion menu (first press).
+                    KeyCode::Tab => {
+                        if let Some(m) = self.completion.as_mut() {
+                            if !m.is_open() {
+                                m.open(self.line_buffer.get_buffer(), self.line_buffer.insertion_point());
+                            }
+                            // If still no candidates, fall through to edit mode
+                            // (which will treat Tab as EditCommand::Complete no-op).
+                            if m.is_open() {
+                                return EditorOutcome::Continue;
+                            }
+                        }
+                        // Fall through to edit_mode.
                     }
                     _ => {}
                 }
@@ -148,6 +274,34 @@ impl Editor {
             // TryFrom — they're a no-op for us.
             Err(()) => EditorOutcome::Continue,
         }
+    }
+
+    /// Apply the currently-selected completion candidate to the buffer:
+    /// replace the suggestion's span with its value, move the cursor past it,
+    /// append a trailing space if requested, and close the menu.
+    fn accept_selected_completion(&mut self) {
+        let (value, span, append_ws) = match self.completion.as_ref() {
+            Some(m) => match m.selected_suggestion() {
+                Some(v) => v,
+                None => return,
+            },
+            None => return,
+        };
+        let value = value.to_string();
+        // Replace the span (typed prefix) with the full suggestion value.
+        // LineBuffer::replace_range takes a Range and replacement string.
+        self.line_buffer
+            .replace_range(span.start..span.end, &value);
+        // Move cursor to the end of the inserted value.
+        let new_ip = span.start + value.len();
+        self.line_buffer.set_insertion_point(new_ip);
+        if append_ws {
+            self.line_buffer.insert_char(' ');
+        }
+        if let Some(m) = self.completion.as_mut() {
+            m.close();
+        }
+        self.current_hint.clear();
     }
 
     /// Recursively dispatch a `ReedlineEvent`. `Multiple` is unwrapped so that
