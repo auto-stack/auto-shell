@@ -436,6 +436,91 @@ M0（骨架 + 依赖统一）→ M1（编辑器）→ M2（history/completion/hi
 
 ---
 
+## 10. M4 实施后 gap 清单（2026-08-04 核查）
+
+> M0-M4 全部里程碑已交付（7 个子任务 + 多次修复），140 个单元测试通过，真终端验收通过（命令执行、block 渲染、补全、历史、vim/less 交接、F1-F4/AI、多行续行、Ctrl+E、suggest-next）。
+>
+> 本节记录对照 reedline REPL（`repl.rs::Repl::new()` + `run()`）后发现的 **7 个 gap**，按重要性排序，含解决方案和实施状态。
+
+### Gap 1（P0，影响日常可用）：Shell 初始化不完整
+
+**问题**：`block_tui.rs::build_shell_and_sources()` 缺少 `Repl::new()`（repl.rs:48-79）里的 Shell 初始化步骤。用户在 block TUI 里拿不到 ashrc 函数、配置别名、插件。
+
+**缺失项**：
+- ❌ `~/.ashrc` 加载（`shell.source_file(&rc_path)`）—— 用户自定义函数（AutoLang `fn`）和别名
+- ❌ ash.toml aliases（`shell_config.aliases` → `shell.set_alias`）—— 配置的别名不生效
+- ❌ 首次运行 seed DEFAULT_ASHRC（repl.rs:62-73）
+- ❌ plugins 加载（`auto_shell::plugin::load_all_plugins`）—— 已装插件不生效
+- ❌ completion_state 同步（`sync_completion_state`）—— cd 后 completion 的 cwd/last-command/aliases 上下文不刷新
+
+**解决方案**：把 repl.rs:48-79 的初始化段搬到 `build_shell_and_sources`，并在命令执行后调 `sync_completion_state`（completion_state 已经在 completer 里持有 Arc，只需在执行后更新它）。
+
+**状态**：🔴 待实施
+
+### Gap 2（P1）：`!!`/`!n` history 展开未接入
+
+**问题**：M4 验收清单（§M4 验收第 3 行）明确提到"`!!`/`!n` history 展开、缩写展开工作（纯逻辑，应零改动通过）"，但 `block_tui.rs` 没有调 `expand_line_history`。
+
+**解决方案**：在 Submitted 分支、命令执行前，搬 repl.rs:942-955 的 `expand_line_history` 调用（纯逻辑，读历史文件 + `ash_core::parser::history::expand_history`）。展开后显示 expanded 命令。
+
+**状态**：🔴 待实施
+
+### Gap 3（P1）：缩写展开（abbrev）未接入
+
+**问题**：同 Gap 2。`expand_abbreviations`（repl.rs:936-940）没接。
+
+**解决方案**：在 Submitted 分支、history 展开前，搬 `shell.expand_abbreviations(&line)` 调用。展开后显示 expanded 命令。
+
+**状态**：🔴 待实施
+
+### Gap 4（P2，体验优化）：结构化输出仍 strip ANSI
+
+**问题**：M3 已知限制——`ls`/`ps`/`find` 等结构化命令的输出经 `TuiRenderHook` 已带 ANSI，`strip_ansi` 退化成纯文本（表格变成无对齐的文本）。
+
+**解决方案**：写一个 `RenderedOutput → ratatui widget` 的转换器（把 `renderer/tui.rs:166-177` 的 widget 构造段抽成 `pub fn render_table_to_buffer(buf, rendered, ...)`），在 `render_block` 的 body 段直接画 widget 而非 strip ANSI。参考 ash-gui 的 `renderer.rs::rendered_to_iced`（同样的 RenderedOutput → widget 转换）。
+
+**状态**：🟡 已知限制，后续迭代
+
+### Gap 5（P2）：Ctrl+R 反向搜索未实现
+
+**问题**：M2 计划提到 `C-r` 反向搜索，当前 `ReedlineEvent::SearchHistory` 在 `editor/mod.rs:453` 是 no-op。
+
+**解决方案**：自建一个 inline 搜索状态（类似 reedline 的 history_menu，但用 `FileBackedHistory::search(SearchQuery::all_that_contain_rev)` + ratatui 浮动菜单渲染）。或复用 completion_menu 的渲染框架 + history 数据源。
+
+**状态**：🟡 已知限制，后续迭代
+
+### Gap 6（P2）：prompt 模块系统（directory/git/status）
+
+**问题**：计划 §2.4.6 提到复用 `AshPrompt::render_all()` 渲染完整 prompt（当前目录、git 分支、命令耗时等），当前只用了 `ModeState.prompt()` 的符号（`>`/`#`/`?`），没有环境信息。
+
+**解决方案**：暴露 `prompt/engine.rs` 的 `render_all()`（当前私有），在 `prompt_spans()` 里调用它，把返回的 `(left, right, indicator)` 三段渲染成 ratatui spans。模块系统（`prompt/modules/*`）零改动保留。
+
+**状态**：🟡 已知限制，后续迭代
+
+### Gap 7（P2）：F4 流式输出直写 stdout
+
+**问题**：M4-7 的已知限制——AI 对话的 Delta 文本通过回调闭包直写 stdout（`print!`），绕过 ratatui buffer。在 ratatui 持有终端时，这可能与 viewport 渲染交错。
+
+**解决方案**：后台线程跑 `send_turn_streaming`，回调往 `mpsc::channel` 推 `StreamEvent`，主循环用 `event::poll()` 非阻塞读 + draw 渲染。这是调研报告 §2.4.5 的"推荐方案"，但工作量大（需改事件循环为非阻塞）。
+
+**状态**：🟡 已知限制，后续迭代
+
+### 实施优先级
+
+| Gap | 优先级 | 工作量 | 阻塞日常使用? |
+|---|---|---|---|
+| 1 Shell 初始化 | **P0** | ~40 行（搬运） | ✅ 是 |
+| 2 history 展开 | **P1** | ~20 行（搬运） | 部分 |
+| 3 abbrev 展开 | **P1** | ~10 行（搬运） | 部分 |
+| 4 结构化表格 | P2 | ~150 行（新写） | 否 |
+| 5 Ctrl+R 搜索 | P2 | ~100 行（新写） | 否 |
+| 6 prompt 模块 | P2 | ~30 行（适配） | 否 |
+| 7 F4 流式 | P2 | ~200 行（重构） | 否 |
+
+**本轮实施范围**：Gap 1-3（P0+P1，共 ~70 行搬运，让 block TUI 真正可用）。Gap 4-7 标记为已知限制，后续迭代。
+
+---
+
 ## 附录 A：调研证据索引
 
 ### reedline 0.44.0 源码（`~/.cargo/registry/src/*/reedline-0.44.0/`，二次核实对照 `mirrors.aliyun.com-*`）

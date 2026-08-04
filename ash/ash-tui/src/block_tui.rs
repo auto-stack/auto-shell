@@ -98,7 +98,8 @@ impl BlockTui {
         // M2/M3: build the execution Shell + history/completion/hint sources.
         // The Shell is the REAL execution shell (render hook + terminal
         // commands injected) — M3 uses it to run commands.
-        let (mut shell, mut history_store, completer, hinter, cwd) = build_shell_and_sources();
+        let (mut shell, mut history_store, completer, hinter, completion_state, cwd) =
+            build_shell_and_sources();
         // HistoryNav is owned HERE (not in Editor) because it needs the
         // FileBackedHistory on each ↑/↓, and that store lives in this scope.
         let mut history_nav = crate::editor::history::HistoryNav::new();
@@ -366,7 +367,7 @@ impl BlockTui {
                         pending_input.clear();
                         rest
                     };
-                    let trimmed = full_line.trim().to_string();
+                    let mut trimmed = full_line.trim().to_string();
 
                     // M2: persist non-empty lines to history (shared file).
                     if !trimmed.is_empty() {
@@ -382,6 +383,44 @@ impl BlockTui {
                     // Empty line: no block, just a fresh prompt.
                     if trimmed.is_empty() {
                         continue;
+                    }
+
+                    // M4 Gap 3: expand abbreviations (abbr) in-line.
+                    // Mirrors repl.rs:936-940. If expanded, show the expanded
+                    // form so the user sees what will actually run.
+                    let (expanded_abbr, abbr_changed) = shell.expand_abbreviations(&trimmed);
+                    if abbr_changed {
+                        push_block(
+                            &mut terminal,
+                            &[&format!("→ {expanded_abbr}")],
+                            Color::DarkGray,
+                        )?;
+                        trimmed = expanded_abbr;
+                    }
+
+                    // M4 Gap 2: expand history references (!!, !n, !?string).
+                    // Mirrors repl.rs:942-955. Reads the shared history file
+                    // (~/.auto-shell-history) and applies bash-style expansion.
+                    if trimmed.contains('!') {
+                        match expand_history_refs(&trimmed, &history_store) {
+                            Ok(Some(expanded)) => {
+                                push_block(
+                                    &mut terminal,
+                                    &[&format!("→ {expanded}")],
+                                    Color::DarkGray,
+                                )?;
+                                trimmed = expanded;
+                            }
+                            Ok(None) => {} // no expansion needed
+                            Err(e) => {
+                                push_block(
+                                    &mut terminal,
+                                    &[&format!("history expansion error: {e}")],
+                                    Color::Red,
+                                )?;
+                                continue;
+                            }
+                        }
                     }
 
                     // M4: update last_auto before execution (for AI mode restore).
@@ -487,6 +526,16 @@ impl BlockTui {
                             trimmed.clone(),
                             output_snippet,
                         );
+                    }
+
+                    // M4 Gap 1: sync completion state (cwd may have changed
+                    // after cd/pushd; last-command/exit-code/aliases update
+                    // context-aware ranking). Mirrors repl.rs:1004-1005.
+                    if let Ok(mut state) = completion_state.lock() {
+                        state.current_dir = shell.pwd().to_path_buf();
+                        state.last_command = shell.last_command_line().map(String::from);
+                        state.last_exit_code = Some(shell.last_exit_code());
+                        state.aliases = shell.aliases().clone();
                     }
                 }
             }
@@ -935,6 +984,41 @@ fn execute_and_render(
     Ok(())
 }
 
+/// Expand history references (`!!`, `!n`, `!?string`) in a command line.
+/// Uses the shared FileBackedHistory store. Returns:
+/// - `Ok(Some(expanded))` if expansion occurred
+/// - `Ok(None)` if no expansion was needed
+/// - `Err(msg)` on expansion failure
+///
+/// Ported from repl.rs:320-352 (expand_line_history) but uses the live
+/// FileBackedHistory (via History::search) instead of re-reading the raw file.
+fn expand_history_refs(
+    line: &str,
+    history: &reedline::FileBackedHistory,
+) -> Result<Option<String>, String> {
+    use reedline::{History, SearchDirection, SearchQuery};
+    let query = SearchQuery::everything(SearchDirection::Backward, None);
+    let items = history.search(query).map_err(|e| format!("{e}"))?;
+    let strings: Vec<String> = items.into_iter().map(|it| it.command_line).collect();
+    if strings.is_empty() {
+        return Ok(None);
+    }
+    struct FileHistory(Vec<String>);
+    impl ash_core::parser::history::History for FileHistory {
+        fn search(&self, _query: Option<&str>) -> Vec<String> {
+            self.0.clone()
+        }
+    }
+    let fh = FileHistory(strings);
+    let expanded = ash_core::parser::history::expand_history(&line.to_string(), &fh)
+        .map_err(|e| format!("{e}"))?;
+    if expanded != line {
+        Ok(Some(expanded))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Is the event Ctrl+E (open in $EDITOR)?
 fn is_ctrl_e(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
     use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -1188,6 +1272,7 @@ fn build_shell_and_sources()
     reedline::FileBackedHistory,
     crate::completions_reedline::ShellCompleter,
     Option<crate::term::hinter::AshHinter>,
+    std::sync::Arc<std::sync::Mutex<crate::completions_reedline::CompletionState>>,
     String,
 )
 {
@@ -1203,6 +1288,31 @@ fn build_shell_and_sources()
     shell.set_render_hook(Box::new(crate::renderer::TuiRenderHook));
     shell.register_commands(crate::commands::terminal_commands());
     shell.load_env_persistence();
+
+    // M4 Gap 1: Shell initialization — mirrors Repl::new() (repl.rs:48-79) so
+    // the block TUI has the same ashrc/plugins/aliases as the reedline REPL.
+    // Without this, user-defined functions, config aliases, and installed
+    // plugins wouldn't work in --block-tui mode.
+    let shell_config = auto_shell::config::AshShellConfig::load();
+    for (name, value) in &shell_config.aliases {
+        shell.set_alias(name, value);
+    }
+    if let Some(home) = dirs::home_dir() {
+        let rc_path = home.join(".ashrc");
+        if rc_path.exists() {
+            let _ = shell.source_file(&rc_path);
+        } else if let Ok(content) = std::str::from_utf8(auto_shell::DEFAULT_ASHRC.as_bytes()) {
+            let _ = std::fs::write(&rc_path, content);
+            let _ = shell.source_file(&rc_path);
+        }
+    }
+    let plugin_report = auto_shell::plugin::load_all_plugins(&mut shell)
+        .unwrap_or_else(|e| {
+            eprintln!("  plugin load warning: {e}");
+            auto_shell::plugin::PluginLoadReport::default()
+        });
+    plugin_report.print_to_stderr();
+
     let cwd = shell.pwd().to_string_lossy().to_string();
 
     // Completion signatures from the command registry.
@@ -1213,7 +1323,11 @@ fn build_shell_and_sources()
     let completion_state = std::sync::Arc::new(std::sync::Mutex::new(CompletionState::new(
         shell.pwd().to_path_buf(),
     )));
-    let completer = ShellCompleter::new(completion_sigs, provider, completion_state);
+    let completer = ShellCompleter::new(
+        completion_sigs,
+        provider,
+        std::sync::Arc::clone(&completion_state),
+    );
 
     // History file (shared with the reedline REPL).
     let history_path = dirs::home_dir()
@@ -1237,7 +1351,7 @@ fn build_shell_and_sources()
         None
     };
 
-    (shell, history, completer, hinter, cwd)
+    (shell, history, completer, hinter, completion_state, cwd)
 }
 
 /// If the event is an ↑ or ↓ keypress (no modifiers), return the direction:
