@@ -88,6 +88,13 @@ impl BlockTui {
         let edit_mode = build_edit_mode();
         let mut editor = Editor::new(edit_mode);
 
+        // M4: mode state (Shell/AutoScript/AI lock + continuation). Drives the
+        // prompt symbol and F1-F4/Esc behavior. Pure data, reused as-is from
+        // the reedline REPL (repl_mode.rs).
+        let mut mode_state = auto_shell::repl_mode::ModeState::default();
+        // M4: accumulates multi-line continuation input across submits.
+        let mut pending_input = String::new();
+
         // M2/M3: build the execution Shell + history/completion/hint sources.
         // The Shell is the REAL execution shell (render hook + terminal
         // commands injected) — M3 uses it to run commands.
@@ -132,11 +139,12 @@ impl BlockTui {
             let comp_selected = editor.completion().map_or(0, |m| m.selected());
             terminal.draw(|frame| {
                 let area: Rect = frame.area();
-                // Input line: prompt + typed text + dim hint ghost suffix.
-                let mut input_spans = vec![
-                    Span::styled("❯ ", Style::default().fg(Color::Green)),
-                    Span::raw(&buf_text),
-                ];
+                // Input line: prompt symbol + typed text + dim hint suffix.
+                // The prompt symbol comes from mode_state (M4): `▌` prefix if
+                // locked (blue), then the mode symbol (>/#/?/·).
+                let (prompt_spans, prompt_width) = prompt_spans(&mode_state);
+                let mut input_spans = prompt_spans;
+                input_spans.push(Span::raw(&buf_text));
                 if !hint_text.is_empty() {
                     input_spans.push(Span::styled(
                         hint_text.clone(),
@@ -184,7 +192,8 @@ impl BlockTui {
                 // the text left of the insertion point.
                 let prefix = buf_text.get(..ip).unwrap_or("");
                 let col_offset = unicode_width::UnicodeWidthStr::width(prefix) as u16;
-                frame.set_cursor_position((area.x + 2 + col_offset, area.y));
+                // Cursor sits after the prompt (width varies with mode symbol).
+                frame.set_cursor_position((area.x + prompt_width + col_offset, area.y));
             })?;
 
             // ── Read + dispatch one event ───────────────────────────
@@ -192,6 +201,72 @@ impl BlockTui {
             // it can intercept arrow keys (which reedline's default keybindings
             // leave unbound → would be a no-op).
             let event = event::read()?;
+
+            // M4: drain any finished suggest-next results (background thread,
+            // never blocks). Push them into the scrollback as a dim hint block
+            // (like the reedline REPL's println, but via insert_before).
+            if let Some(sugs) = auto_shell::ai::suggest::take_pending() {
+                if !sugs.is_empty() {
+                    let n = sugs.len();
+                    terminal.insert_before(1 + n as u16, move |buf| {
+                        use ratatui_core::text::{Line, Span};
+                        let header = Line::from(vec![Span::styled(
+                            "💡 接下来可能想:",
+                            Style::default().fg(Color::DarkGray),
+                        )]);
+                        buf.set_line(buf.area.x, buf.area.y, &header, buf.area.width);
+                        for (i, s) in sugs.iter().enumerate() {
+                            let line = Line::from(vec![Span::styled(
+                                format!("   {s}"),
+                                Style::default().fg(Color::DarkGray),
+                            )]);
+                            let y = buf.area.y + 1 + i as u16;
+                            if y < buf.area.bottom() {
+                                buf.set_line(buf.area.x, y, &line, buf.area.width);
+                            }
+                        }
+                    })?;
+                }
+            }
+
+            // M4: mode-switch keys (F1/F2/Esc) intercepted BEFORE the editor.
+            // Unlike the reedline REPL (which injected prefix bytes + Submit),
+            // ratatui gives us the raw KeyCode — so we just toggle mode state
+            // and skip the editor entirely (the buffer is untouched).
+            if let Some(mode_changed) = handle_mode_key(&event, &mut mode_state) {
+                if mode_changed {
+                    // Clear any pending continuation when switching modes.
+                    pending_input.clear();
+                    mode_state.in_continuation = false;
+                    editor.take_line(); // reset buffer
+                    continue;
+                }
+            }
+
+            // M4: Ctrl+E — open the current line in $EDITOR (teardown/rebuild
+            // ratatui around the editor subprocess). The edited result replaces
+            // the buffer.
+            if is_ctrl_e(&event) {
+                let current = editor.text().to_string();
+                match crate::subprocess::run_external_editor(&mut terminal, &current) {
+                    Ok(edited) => {
+                        if !edited.is_empty() {
+                            editor.replace_buffer(edited);
+                        }
+                    }
+                    Err(e) => {
+                        // Push the error as a block so the user sees it.
+                        terminal.insert_before(1, |buf| {
+                            let line = Line::from(vec![Span::styled(
+                                format!("editor: {e}"),
+                                Style::default().fg(Color::Red),
+                            )]);
+                            buf.set_line(buf.area.x, buf.area.y, &line, buf.area.width);
+                        })?;
+                    }
+                }
+                continue;
+            }
 
             // M2: history navigation intercept. When the completion menu is
             // closed and the user hits ↑/↓, walk the history store (Editor
@@ -240,7 +315,43 @@ impl BlockTui {
                 EditorOutcome::Exit => break,
                 EditorOutcome::Submitted => {
                     let line = editor.take_line();
-                    let trimmed = line.trim().to_string();
+
+                    // M4: multi-line continuation. If the accumulated input
+                    // needs continuation (unclosed { } ( ) [ ] " ' or trailing
+                    // backslash), append this line to the pending buffer, set
+                    // the continuation prompt (·), and keep editing in the same
+                    // editor — no nested read_line (simpler than reedline).
+                    let acc = if pending_input.is_empty() {
+                        line.clone()
+                    } else {
+                        // Joining: trailing backslash → space (line continuation),
+                        // unclosed delimiter → newline.
+                        let joiner = if pending_input.trim_end().ends_with('\\')
+                            && !pending_input.trim_end().ends_with("\\\\")
+                        {
+                            pending_input.truncate(pending_input.trim_end().len() - 1);
+                            ' ' as char
+                        } else {
+                            '\n'
+                        };
+                        format!("{pending_input}{joiner}{line}")
+                    };
+
+                    if auto_shell::repl_mode::needs_continuation(&acc) {
+                        pending_input = acc;
+                        mode_state.in_continuation = true;
+                        continue;
+                    }
+                    // Complete line: clear continuation state.
+                    mode_state.in_continuation = false;
+                    let full_line = if pending_input.is_empty() {
+                        line
+                    } else {
+                        let rest = pending_input.clone();
+                        pending_input.clear();
+                        rest
+                    };
+                    let trimmed = full_line.trim().to_string();
 
                     // M2: persist non-empty lines to history (shared file).
                     if !trimmed.is_empty() {
@@ -256,6 +367,15 @@ impl BlockTui {
                     // Empty line: no block, just a fresh prompt.
                     if trimmed.is_empty() {
                         continue;
+                    }
+
+                    // M4: update last_auto before execution (for AI mode restore).
+                    if mode_state.locked.is_none() {
+                        mode_state.last_auto = if shell.is_auto_expression_pub(&trimmed) {
+                            auto_shell::repl_mode::InputMode::AutoScript
+                        } else {
+                            auto_shell::repl_mode::InputMode::Shell
+                        };
                     }
 
                     // M3: interactive commands (vim/less/top/...) need full
@@ -297,6 +417,13 @@ impl BlockTui {
                         Err(e) => (Some(format!("Error: {e}")), true),
                     };
 
+                    // Capture a snippet for suggest-next BEFORE body_text is
+                    // consumed by the map below (first 200 chars, like repl.rs).
+                    let output_snippet: String = body_text
+                        .as_deref()
+                        .map(|s| s.chars().take(200).collect())
+                        .unwrap_or_default();
+
                     // Split body into lines (strip ANSI so it doesn't render as
                     // literal escape gibberish in the ratatui buffer).
                     let body_lines: Vec<String> = body_text
@@ -309,12 +436,112 @@ impl BlockTui {
                     terminal.insert_before(height, move |buf| {
                         render_block(buf, &header_cmd, exit_code, elapsed, &body_lines, is_error);
                     })?;
+
+                    // M4: async-suggest next command (opt-in, never blocks).
+                    // Fires a background fetch; the result shows before the next
+                    // prompt if it arrived in time.
+                    if auto_shell::ai::suggest::is_enabled() {
+                        auto_shell::ai::suggest::suggest_next_async(
+                            shell.pwd().to_string_lossy().to_string(),
+                            trimmed.clone(),
+                            output_snippet,
+                        );
+                    }
                 }
             }
         }
 
         Ok(())
     }
+}
+
+/// Is the event Ctrl+E (open in $EDITOR)?
+fn is_ctrl_e(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
+    use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    if let Event::Key(ke) = event {
+        matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && ke.modifiers.contains(KeyModifiers::CONTROL)
+            && ke.code == KeyCode::Char('e')
+    } else {
+        false
+    }
+}
+
+/// If the event is a mode-switch key (F1/F2/Esc/Alt+1/Alt+2), apply it to
+/// mode_state and return Some(true) if the mode changed (the editor should be
+/// skipped). Returns None for non-mode keys (fall through to the editor).
+///
+/// F3 (AI suggest) and F4 (AI chat) are NOT handled here yet (M4-6/M4-7) —
+/// they fall through to the editor as no-ops until wired.
+fn handle_mode_key(
+    event: &ratatui_crossterm::crossterm::event::Event,
+    mode_state: &mut auto_shell::repl_mode::ModeState,
+) -> Option<bool> {
+    use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    let Event::Key(ke) = event else {
+        return None;
+    };
+    if !matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        return None;
+    }
+    // F1 / Alt+1 → toggle Shell lock.
+    if ke.code == KeyCode::F(1)
+        || (ke.code == KeyCode::Char('1') && ke.modifiers.contains(KeyModifiers::ALT))
+    {
+        mode_state.toggle_lock(auto_shell::repl_mode::InputMode::Shell);
+        return Some(true);
+    }
+    // F2 / Alt+2 → toggle AutoScript lock.
+    if ke.code == KeyCode::F(2)
+        || (ke.code == KeyCode::Char('2') && ke.modifiers.contains(KeyModifiers::ALT))
+    {
+        mode_state.toggle_lock(auto_shell::repl_mode::InputMode::AutoScript);
+        return Some(true);
+    }
+    // Esc → unlock (unless in vi mode, where Esc enters normal mode — that's
+    // handled by the EditMode parser inside the editor, not here. We only
+    // intercept Esc when NOT in vi normal mode. But since we don't track vi
+    // mode state here, and Esc-as-unlock is the reedline REPL behavior via
+    // keybinding injection... M4 keeps it simple: Esc always unlocks. Vi
+    // users use Ctrl+C or other keys. This matches the reedline REPL where
+    // Esc was hard-bound to unlock via keybinding injection.)
+    if ke.code == KeyCode::Esc && ke.modifiers == KeyModifiers::NONE {
+        mode_state.unlock();
+        return Some(true);
+    }
+    None
+}
+
+/// Build the prompt spans for the current mode state + the total display
+/// width (for cursor positioning).
+///
+/// - If locked: a blue `▌` prefix + the mode symbol.
+/// - In continuation: a dim `·`.
+/// - Otherwise: just the mode symbol (`>` Shell green, `#` AutoScript cyan,
+///   `?` AI magenta), each followed by a space.
+fn prompt_spans(mode_state: &auto_shell::repl_mode::ModeState) -> (Vec<Span<'static>>, u16) {
+    use unicode_width::UnicodeWidthStr;
+    let symbol = mode_state.prompt();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    // The prompt() string may start with `▌` (locked) — split it for coloring.
+    let (prefix, main) = if let Some(rest) = symbol.strip_prefix('▌') {
+        spans.push(Span::styled("▌".to_string(), Style::default().fg(Color::Blue)));
+        ("▌", rest)
+    } else {
+        ("", symbol.as_str())
+    };
+    let color = if mode_state.in_continuation {
+        Color::DarkGray
+    } else {
+        match mode_state.effective() {
+            auto_shell::repl_mode::InputMode::Shell => Color::Green,
+            auto_shell::repl_mode::InputMode::AutoScript => Color::Cyan,
+            auto_shell::repl_mode::InputMode::AI => Color::Magenta,
+        }
+    };
+    spans.push(Span::styled(format!("{main} "), Style::default().fg(color)));
+    let total = UnicodeWidthStr::width(prefix) as u16 + UnicodeWidthStr::width(main) as u16 + 1;
+    (spans, total)
 }
 
 /// Render one completed block into the ratatui buffer: a status-colored
