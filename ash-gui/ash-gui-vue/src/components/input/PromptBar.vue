@@ -133,7 +133,84 @@ function onKeydown(e: KeyboardEvent) {
   } else if (e.key === 'ArrowDown') {
     e.preventDefault()
     navigateHistory(false)
+  } else if (e.ctrlKey && e.key === 'f') {
+    // Plan 041 M2: Ctrl+F accepts the full ghost-text suggestion.
+    if (ghostText.value) {
+      e.preventDefault()
+      acceptGhostFull()
+    }
+  } else if (e.ctrlKey && e.key === 'ArrowRight') {
+    // Plan 041 M2: Ctrl+Right accepts the next word of the suggestion.
+    if (ghostText.value) {
+      e.preventDefault()
+      acceptGhostWord()
+    }
   }
+}
+
+// ── Plan 041 M2: ghost-text autosuggestion ──────────────────────────────────
+
+/**
+ * The ghost-text suggestion: the longest completion that starts with the
+ * current input. Prefers history (a previously-run full command line — matches
+ * fish/ash-tui AshHinter behavior), then the engine's first candidate.
+ * Empty when the input is empty, the cursor isn't at end, or nothing matches.
+ */
+const ghostText = computed(() => {
+  const line = input.value
+  if (!line || historyCursor.value !== null) return ''
+  // Only show when cursor is at the end (mid-line edits shouldn't ghost).
+  const el = inputEl.value
+  if (el && el.selectionStart !== el.selectionEnd) return '' // selection active
+  if (el && el.selectionStart !== line.length) return ''
+  // 1. History: longest entry that starts with the current line.
+  let best = ''
+  for (let i = props.history.length - 1; i >= 0; i--) {
+    const h = props.history[i]
+    if (h.length > line.length && h.startsWith(line) && h.length > best.length) {
+      best = h
+    }
+  }
+  // 2. Engine candidates (from M7): a command-name completion that extends
+  //    the typed prefix. Only when we're at the command-name position.
+  if (!best) {
+    for (const s of suggestions.value) {
+      if (
+        s.replacement.length > line.length &&
+        s.replacement.toLowerCase().startsWith(line.toLowerCase())
+      ) {
+        best = s.replacement
+        break
+      }
+    }
+  }
+  return best && best.length > line.length ? best.slice(line.length) : ''
+})
+
+/** Accept the entire ghost-text suggestion. */
+function acceptGhostFull() {
+  if (ghostText.value) {
+    input.value += ghostText.value
+    nextTick(() => {
+      inputEl.value?.focus()
+      const len = input.value.length
+      inputEl.value?.setSelectionRange(len, len)
+    })
+  }
+}
+
+/** Accept the next whitespace-delimited word of the ghost text. */
+function acceptGhostWord() {
+  const g = ghostText.value
+  if (!g) return
+  // Take up to and including the next run of whitespace + the next token.
+  const m = g.match(/^\S*\s*\S*/)
+  if (m) input.value += m[0]
+  nextTick(() => {
+    inputEl.value?.focus()
+    const len = input.value.length
+    inputEl.value?.setSelectionRange(len, len)
+  })
 }
 </script>
 
@@ -154,22 +231,30 @@ function onKeydown(e: KeyboardEvent) {
         </span>
       </button>
     </div>
-    <!-- Input row: ❯ cwd + input -->
+    <!-- Input row: ❯ cwd + input (with ghost-text overlay, Plan 041 M2) -->
     <div class="flex items-center gap-2">
       <span class="text-emerald-500 font-mono-ash select-none shrink-0">❯</span>
       <span class="text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate" :title="props.cwd">
         {{ props.cwd ? cwdDisplay : '…' }}
       </span>
-      <input
-        ref="inputEl"
-        v-model="input"
-        @keydown.enter="run"
-        @keydown="onKeydown"
-        spellcheck="false"
-        autocomplete="off"
-        placeholder="type a command…"
-        class="flex-1 bg-transparent outline-none text-sm font-mono-ash placeholder:text-muted-foreground/40"
-      />
+      <!-- Ghost-text wrapper: the typed input + a dimmed overlay of the rest
+           of the suggestion, aligned character-for-character. -->
+      <div class="relative flex-1">
+        <span class="pointer-events-none absolute inset-0 text-sm font-mono-ash whitespace-pre overflow-hidden">
+          <span class="invisible">{{ input }}</span><span class="text-muted-foreground/35">{{ ghostText }}</span>
+        </span>
+        <input
+          ref="inputEl"
+          v-model="input"
+          @keydown.enter="run"
+          @keydown="onKeydown"
+          @keyup="() => {}"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="type a command…"
+          class="relative w-full bg-transparent outline-none text-sm font-mono-ash placeholder:text-muted-foreground/40"
+        />
+      </div>
     </div>
   </div>
 </template>
