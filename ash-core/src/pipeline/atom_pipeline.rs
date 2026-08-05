@@ -140,6 +140,7 @@ impl AtomPipeline {
         match self {
             AtomPipeline::Atom(a) => a.is_structured(),
             AtomPipeline::Stream(_) => true,
+            AtomPipeline::Code { .. } => true, // Plan 042 M6: Code is structured
             _ => false,
         }
     }

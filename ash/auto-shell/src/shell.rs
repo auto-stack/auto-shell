@@ -1035,17 +1035,21 @@ impl Shell {
         // The TUI frontend injects a ratatui renderer; without a hook, structured
         // data falls through to plain text. This replaces the old
         // #[cfg(feature="frontend-tui")] direct call to frontend::renderer.
-        if let AtomPipeline::Atom(ref atom) = pipeline {
-            if atom.is_structured() {
-                if let Some(rendered) = ash_core::renderer::render_pipeline_to_structured(&pipeline)
-                {
-                    if let Some(hook) = &self.render_hook {
-                        let term_width = 80; // width hint; the hook may override
-                        if let Some(out) =
-                            hook.render_structured(&rendered, term_width, self.ls_icons)
-                        {
-                            return out;
-                        }
+        // Plan 042 M6: also handle AtomPipeline::Code (structured code spans).
+        let is_structured_pipeline = match &pipeline {
+            AtomPipeline::Atom(atom) => atom.is_structured(),
+            AtomPipeline::Code { .. } => true,
+            _ => false,
+        };
+        if is_structured_pipeline {
+            if let Some(rendered) = ash_core::renderer::render_pipeline_to_structured(&pipeline)
+            {
+                if let Some(hook) = &self.render_hook {
+                    let term_width = 80; // width hint; the hook may override
+                    if let Some(out) =
+                        hook.render_structured(&rendered, term_width, self.ls_icons)
+                    {
+                        return out;
                     }
                 }
             }
