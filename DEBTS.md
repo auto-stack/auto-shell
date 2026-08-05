@@ -91,51 +91,37 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 **来源**:Plan 043 M2(shell_store.at)。
 
-**现状**:`msg Msg { Complete(str, int) }`、`RunSmart(int, str, []str)` 等任何
-**2 个及以上参数**的消息声明都报 "Expected term, got RBrace"(参数列表未正确消费,
-在 `}` 处失败)。单参数消息(含 `[]str` 数组参数、自定义类型参数如 `CommandResult`)
-均正常。015-notes 的所有 `msg` 全是 0/1 参数,无多参数先例。
-
-**根因**:疑似 `msg` 参数列表解析只消费单个参数类型后没有继续循环
-(parser.rs 的 msg 声明分支),需 auto-lang 侧确认。
-
-**影响**:`shell_store.at` 的 `RunResult(CommandResult)` 等是单参数没问题,但
-`Complete(str, int)`、`RunSmart(int, str, []str)` 无法声明 → shell_store.at 整体编译失败。
-
-**推翻条件**:auto-lang parser 支持 msg 多参数。
+**现状**:**2026-08-06 已解决**——auto-lang worktree `fix/043-m5-lang-limits`
+(commit `f08539b5`)把 `MsgVariant.payload` 从 `Option<Type>` 改为 `Vec<Type>`,
+parser 的 msg payload 解析改为循环 `parse_type()` 逗号分隔(参照 EnumItem tuple),
+Rust 后端发多字段 enum(`Complete(str, int)` → `Complete(String, i32)`)。
+Vue/Kotlin 后端保持 `.first()` 单字段(store 不走 Vue 事件链路;多参数为
+Rust 后端能力,部分功能)。修复已合入该分支,待合 master。
 
 ### computed 只支持单表达式,不支持多行 body
 
 **来源**:Plan 043 M2(shell_store.at 的 `history`/`git_label`)。
 
-**现状**:`computed { history => .persisted_history }`(单表达式)正常;任何
-`computed { name => { ...多条语句... return ... } }` 的多行 body 形式都报
-"Expected term, got RBrace"。015-notes 的 computed(`pinned_notes => .notes.filter(...)`)
-全是单表达式。
-
-**根因**:computed 的 `=>` 右侧复用表达式解析路径,不进入语句块(parse_body)解析。
-
-**影响**:`history`(需要 concat + for 循环拼接)和 `git_label`(多分支格式化)无法
-用多行 body 表达。之前尝试把两者改成 `=> self.persisted_history` 和 `=> ""` 的桩实现
-**已撤销**(那是规避,导致行为丢失),恢复为完整逻辑——当前 shell_store.at 会因此编译失败,
-等 parser 支持 computed 多行 body。
-
-**推翻条件**:auto-lang parser 支持 computed 多行 body(或引入 computed 帮助函数)。
+**现状**:**2026-08-06 已解决**——auto-lang worktree `fix/043-m5-lang-limits`
+(commit `db19b947`)让 `parse_computed_block_inner` 在 `=>` 后遇到 `{` 时走
+`Expr::Block(self.body()?)`(复用 on-handler 的语句块解析路径),单表达式路径不变。
+AST 字段类型不动(`ComputedProperty.expr: Expr`)。Rust 后端 `ast_expr_to_rust`
+新增 `Expr::Block` 分支(渲染成 `{ stmt; ...; tail }`);Vue 后端 `expr_to_js`
+新增 `Expr::Block` 分支(走 `transpile_handler_body`,渲染成 `{ ...; return x; }`)。
+修复已合入该分支,待合 master。
 
 ### view 条件里 `None` 比较不被支持(handler/computed 里正常)
 
 **来源**:Plan 043 M4(block_item.at)。
 
-**现状**:`if .block.output != None { ... }`(**view 树**的 if 条件)报
-"Expected term, got RBrace"。但**handler 里** `if s != None`(015-notes notes_store.at:120
-同款)和 **computed 单表达式** `.git_status != None` 均正常。
-
-**根因**:疑似 view 的 if 条件解析路径(expr_pratt 在 view 上下文)没有处理
-`None` 字面量或比较链,而 handler/computed 走的语句表达式路径正常。
-
-**影响**:`block_item.at` 的 `if .block.output != None`(决定是否显示 BlockBody)无法表达。
-
-**推翻条件**:auto-lang parser 在 view if 条件里支持 `!= None`(或 `is Some` 形式)。
+**现状**:**2026-08-06 已解决**——auto-lang worktree `fix/043-m5-lang-limits`
+(commit `f42ca89c`)的根因是 `parse_condition_expr`(parser.rs:12715 附近)只
+match 了特定 token kind(True/False/运算符/Str/Int/括号等),**漏了 `NoneKW`/`Nil`**,
+所以 `None` 未被消费,parser 在 arm 的 `}` 处 desync 报 "Expected term, got RBrace"。
+加 `NoneKW`/`Nil` 分支即可。同时 vue.rs 的 `convert_condition` 把 Auto 的
+`None`/`nil` 重写成 JS `null`(生成的 `v-if="block.output != null"` 是合法 JS)。
+验证:`block_item.at` 现可编译,生成的 BlockItem.vue:43 为
+`<template v-if="block.output != null">`。修复已合入该分支,待合 master。
 
 ### view 里位置参数调用 view fn 不被支持(必须命名参数)
 
@@ -177,19 +163,37 @@ extract.rs 的 view fn 内联检查 `is_pascal`(extract.rs:650),只有 **PascalC
 
 **来源**:Plan 043 M4(block_body.at 的 if/else if 链)。
 
-**现状**:BlockBody 的 `if kind == "Table" { ... } else if kind == "Record" { ... }
-else if ...` 链,codegen 生成**嵌套错误的 Vue**:
-```html
-<template v-else>
-<template v-if="output.kind == 'Code'">   ← 应为 v-else-if,生成器输出了嵌套 v-if
-```
-`v-else` 后面直接跟 `v-if`(而非 `v-else-if`),且闭合 `</template>` 嵌套错误——生成的
-模板是无效 Vue,无法直接使用。
+**现状**:**2026-08-06 已解决**——auto-lang worktree `fix/043-m5-lang-limits`
+(commit `e487e223`)的根因是 `vue.rs:3321` 的 `AuraNode::Conditional` 分支对**每个**
+Conditional 都生成 `<template v-if>`,即使是 else-if 链的延续节点。`else if` 经
+parser(parser.rs:12515)解析后是 `else_body` 内嵌套的单 Conditional,链尾第 3+ 层
+在 `vue.rs:3346` 递归重新进入 3321 → 生成嵌套的 `<template v-else><template v-if>`
+而非平铺 `v-else-if`。抽 `emit_conditional(node, indent, is_continuation)` helper:
+头 arm 发 `v-if`,延续 arm 发 `v-else-if`,普通 else 发 `v-else`,整条链同 indent
+(Vue 要求连续兄弟)。验证:`block_body.at` 现编译通过,生成的 BlockBody.vue 是
+扁平的 `v-if`/`v-else-if`×4/`v-else` 6 个 `<template>` 兄弟。修复已合入该分支,待合 master。
 
-**根因**:生成器对 `else if` 链的展开逻辑有 bug(vue.rs 的条件分支生成),需 auto-lang
-侧修复。
+### model 字段 `Type{...}` struct-literal 初始化:导入类型不被识别(2026-08-06 新发现)
 
-**影响**:`block_body.at` 的多分支渲染器分发无法直接使用;但**单个分支**的渲染器
-内容已正确生成,可用作对照。
+**来源**:Plan 043 M5 闭环验证(shell_store.at)。
 
-**推翻条件**:auto-lang vue.rs 正确生成 `v-else-if` 链。
+**现状**:`var git_info PromptContext = PromptContext{ git_branch: "", git_status: None }`
+这种**结构体字面量初始化**在 `PromptContext` 是 `use types:` 导入的类型(而非当前文件
+`type` 块声明)时,报 "Expected term, got RBrace"。实测最小复现:本地 `type P {...}`
+声明后 `var x P = P{...}` **可解析**;但 `P` 未声明或仅 `use types: P` 导入时**失败**。
+
+**根因**:parser 的结构体字面量构造路径(`Ident {` 在表达式上下文的识别,`lhs_expr`/
+`expr_pratt`)依赖 `lookup_type`/`type_store` 把 `P` 识别为已知类型才走 struct-literal
+分支;`use types:` 导入在单文件解析里没有把类型注册进 type_store,导致 `P{` 被当作
+普通 Ident,后面 `{...}` 解析 desync。handler/computed 里同理。这是一个跨文件符号
+解析 + 表达式构造的耦合问题,不是几行能补的。
+
+**影响**:`shell_store.at` 整体仍编译失败(仅此一处:`git_info` 的初始化)。这是
+Plan 043 M5 当前**唯一剩余的 auto-lang 阻塞点**(其他 4 项——msg 多参数、computed
+多行 body、view None 比较、else-if 链——已解决,见上)。临时绕过:把 `git_info` 的
+初始化改成 `PromptContext{...}` 之外的形式(如 `List<T>.new([])` 风格),或把
+`PromptContext` 的字段默认值用 `on Init` handler 在运行时填充。
+
+**推翻条件**:auto-lang parser 让 `use types:` 导入的类型在 struct-literal 构造
+(`Name { fields }`)时被识别(或引入显式的结构体构造语法,与 view 元素 `tag {}`
+不冲突)。
