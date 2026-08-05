@@ -11,6 +11,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { abbrevPath } from '@/lib/path'
 import type { CompletionItem } from '@/types/shell'
+import HistorySearch from './HistorySearch.vue'
 
 const cwdDisplay = computed(() => abbrevPath(props.cwd, props.home))
 
@@ -35,6 +36,8 @@ const emit = defineEmits<{
 const input = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
 const historyCursor = ref<number | null>(null)
+// Plan 041 M1: Ctrl+R history-search popover.
+const historyOpen = ref(false)
 
 // Plan 041 M7: completion candidates from the shared backend engine. Async —
 // fetched (debounced) on input change. Falls back to a local command-name
@@ -95,7 +98,17 @@ function run() {
   input.value = ''
   historyCursor.value = null
   suggestions.value = []
+  historyOpen.value = false
   emit('run', cmd)
+}
+
+/** Plan 041 M1: run a command selected from the history-search popover. */
+function runFromHistory(cmd: string) {
+  input.value = cmd
+  emit('run', cmd)
+  input.value = ''
+  historyCursor.value = null
+  suggestions.value = []
 }
 
 /** Navigate history: older=true (↑), newer=false (↓). */
@@ -127,6 +140,12 @@ function pickCompletion(item: CompletionItem) {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // Plan 041 M1: Ctrl+R toggles the history-search popover.
+  if (e.ctrlKey && e.key === 'r') {
+    e.preventDefault()
+    historyOpen.value = !historyOpen.value
+    return
+  }
   if (e.key === 'ArrowUp') {
     e.preventDefault()
     navigateHistory(true)
@@ -231,8 +250,15 @@ function acceptGhostWord() {
         </span>
       </button>
     </div>
-    <!-- Input row: ❯ cwd + input (with ghost-text overlay, Plan 041 M2) -->
-    <div class="flex items-center gap-2">
+    <!-- Input row: ❯ cwd + input (with ghost-text overlay + history-search popover) -->
+    <div class="relative flex items-center gap-2">
+      <!-- Plan 041 M1: history-search popover (floats above the input row) -->
+      <HistorySearch
+        :history="props.history"
+        :open="historyOpen"
+        @run="runFromHistory"
+        @close="historyOpen = false"
+      />
       <span class="text-emerald-500 font-mono-ash select-none shrink-0">❯</span>
       <span class="text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate" :title="props.cwd">
         {{ props.cwd ? cwdDisplay : '…' }}
