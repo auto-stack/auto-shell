@@ -10,6 +10,7 @@
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { abbrevPath } from '@/lib/path'
+import { tokenize } from '@/lib/highlight'
 import type { CompletionItem } from '@/types/shell'
 import HistorySearch from './HistorySearch.vue'
 
@@ -242,6 +243,11 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+// ── Plan 041 M4: syntax highlighting ────────────────────────────────────────
+/** Colored spans of the input, rendered as a `<pre>` overlay behind the
+ * transparent textarea. Mirrors the TUI AshHighlighter coloring scheme. */
+const highlightedSpans = computed(() => tokenize(input.value))
+
 // ── Plan 041 M2: ghost-text autosuggestion ──────────────────────────────────
 
 /**
@@ -338,11 +344,18 @@ function acceptGhostWord() {
       <span class="text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate" :title="props.cwd">
         {{ props.cwd ? cwdDisplay : '…' }}
       </span>
-      <!-- Ghost-text wrapper: the typed input + a dimmed overlay of the rest
-           of the suggestion, aligned character-for-character. -->
+      <!-- Highlight + ghost-text overlay: the colored input (M4) + a dimmed
+           suggestion suffix (M2), behind a transparent textarea. -->
       <div class="relative flex-1">
-        <span class="pointer-events-none absolute inset-0 text-sm font-mono-ash whitespace-pre overflow-hidden">
-          <span class="invisible">{{ input }}</span><span class="text-muted-foreground/35">{{ ghostText }}</span>
+        <span class="pointer-events-none absolute inset-0 text-sm font-mono-ash whitespace-pre-wrap break-all overflow-hidden">
+          <template v-if="highlightedSpans.length">
+            <span
+              v-for="(sp, idx) in highlightedSpans"
+              :key="idx"
+              :class="sp.cls"
+            >{{ sp.text }}</span>
+          </template>
+          <span class="text-muted-foreground/35">{{ ghostText }}</span>
         </span>
         <textarea
           ref="inputEl"
@@ -354,7 +367,7 @@ function acceptGhostWord() {
           autocomplete="off"
           rows="1"
           placeholder="type a command…"
-          class="relative w-full resize-none bg-transparent outline-none text-sm font-mono-ash placeholder:text-muted-foreground/40"
+          class="relative w-full resize-none bg-transparent outline-none text-sm font-mono-ash placeholder:text-muted-foreground/40 text-transparent caret-foreground"
         />
       </div>
     </div>
