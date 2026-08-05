@@ -158,22 +158,15 @@ impl Command for ShowCommand {
             }
         }
 
-        // For code files when this command is the final (or only) one in the
-        // pipeline: stream highlighted output directly to stdout so the first
-        // line appears in ~10 µs.  When piped to another command (e.g.
-        // `show file.rs | less`), return highlighted text through the normal
-        // PipelineData path.
-        match &fmt {
-            Format::Code(ext) if shell.is_pipeline_last() => {
-                let stdout = std::io::stdout();
-                let mut lock = stdout.lock();
-                super::code_highlight::highlight_code_to_writer(&text, ext, &mut lock)
-                    .into_diagnostic()?;
-                lock.flush().into_diagnostic()?;
-                Ok(PipelineData::empty())
-            }
-            _ => parse_text(&text, fmt),
-        }
+        // For code files: return highlighted text through the normal
+        // PipelineData path. Plan 042 bugfix: previously this branch printed
+        // directly to stdout (a CLI/TUI micro-optimization for large files),
+        // but that made `show file.rs` invisible in the GUI — the worker's
+        // CaptureHook/OutputHook can't intercept a direct stdout write. Now
+        // all formats go through parse_text → PipelineData → format_output,
+        // so embedded consumers (GUI) see the output. The CLI/TUI loses the
+        // streaming-to-stdout optimization but gains correctness parity.
+        parse_text(&text, fmt)
     }
 
     fn run_atom(
