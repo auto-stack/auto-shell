@@ -645,6 +645,32 @@ fn is_shell_builtin(name: &str) -> bool {
     )
 }
 
+/// Plan 041 M8: terminal-only commands that the GUI cannot support (they need
+/// crossterm raw mode + alternate screen, which a webview doesn't have). These
+/// are registered in `ash-tui::terminal_commands()` for the CLI/TUI, but the
+/// GUI worker doesn't call `register_commands` — so they'd otherwise fall
+/// through to spawning the system binary into a TTY-less context.
+fn is_terminal_only_command(name: &str) -> bool {
+    matches!(name, "less" | "more" | "color")
+}
+
+/// Plan 041 M8: the friendly message shown when a user runs a terminal-only
+/// command in the GUI. Explains why it's not available and what to do instead.
+fn terminal_only_message(name: &str) -> String {
+    match name {
+        "less" | "more" => format!(
+            "{name} 是终端翻页器,需要交互式终端(raw mode + 键盘控制)。\n\
+             在 GUI 里,长输出已在上方块区可滚动浏览(M4 流式输出)——无需 {name}。\n\
+             如需完整的终端交互,请用 CLI 版 ash 运行此命令。"
+        ),
+        "color" => String::from(
+            "color 显示终端的 24-bit 真彩能力,依赖 crossterm 终端 API。\n\
+             GUI 走 webview CSS 渲染,无终端颜色概念——此命令不适用。",
+        ),
+        _ => format!("{name} 是终端专属命令,GUI 不支持。"),
+    }
+}
+
 /// Plan 040 M4: streaming execution for a *simple external command*.
 ///
 /// Returns `Ok(Some(_))` if the command was streamed (with a final rendered
@@ -735,6 +761,14 @@ async fn run_streaming_external(
     // any of these as an external process would be wrong.
     if auto_shell::cmd::builtin::is_legacy_builtin(cmd_name) || is_shell_builtin(cmd_name) {
         return Ok(None);
+    }
+    // Plan 041 M8: terminal-only commands (less/more/color) need crossterm raw
+    // mode + alternate screen — meaningless in a webview GUI. The worker
+    // doesn't register them (no register_commands), so without this guard
+    // they'd fall through to spawning the system binary, which would try to
+    // take over a non-existent TTY. Intercept and give a friendly note instead.
+    if is_terminal_only_command(cmd_name) {
+        return Ok(Some(RenderedOutput::Text(terminal_only_message(cmd_name))));
     }
 
     // Eligible simple external command — spawn it and stream stdout.
