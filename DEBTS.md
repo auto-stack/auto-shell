@@ -44,23 +44,17 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 ## auto-lang parser(`auto-lang/crates/auto-lang/src/parser.rs`)
 
-### `#[api]` 注解 + `store` 声明解析导致 stack overflow
-
-**来源**:Plan 043 M1(API 层)+ M2(Store 层)。
-
-**现状**:`Parser::parse()` 解析含 `#[api(...)]` 注解或 `store Name { ... }` 声明的
-源码时,触发无限递归 → stack overflow。**015-notes 自己的 `api.at` 和 `notes_store.at`
-也会 overflow**,所以这是 pre-existing bug,不是我们的语法问题。两个声明都会触发,
-很可能是同一条递归路径(属性/声明解析的某个分支)。
-
-**根因**:`#[api]` 属性解析路径(parser.rs `TokenKind::Hash` 分支)在某个递归调用中
-没有正确终止。需要用 `RUST_MIN_STACK` 或 gdb 调试定位具体递归点。
-
-**影响**:Plan 043 的 API 层 `.at` 源码无法被 parser 验证。codegen 无法运行。
-
-**临时绕过**:先写 `.at` 源码(格式已确认与 015-notes 一致),等 parser 修复后批量验证。
-
-**推翻条件**:auto-lang parser 修复 `#[api]` 解析。
+> **2026-08-05 状态更新**:`#[api]`/`store` stack overflow 已修复——`auto-lang-fix043`
+> worktree(分支 `fix/043-parser-stack-overflow`)有未提交的 `parser.rs` 修改
+> (处理 `.field = expr` 点前缀赋值,避免 expr_pratt 无限递归);当前
+> `auto-lang/target/debug/auto.exe`(2026-08-05 15:51 构建)已包含该修复:
+> - 015-notes 的 `api.at`/`notes_store.at` 可正常编译(旧条目所述的 overflow 不再发生);
+> - 我们的 `back/api.at` 编译通过;
+> - `store` 声明、`.field = expr` 赋值(handler/computed)均正常。
+>
+> **注意**:修复尚未合入 auto-lang `master`(`git log master..fix/043-parser-stack-overflow`
+> 为空,改动仅存在于 worktree)。若用 master 源码重新构建,旧问题会回归。M5 验证
+> 必须使用含修复的二进制,并在计划文档中记录所用二进制 commit。
 
 ### `[][]T` 嵌套数组类型不被支持
 
@@ -79,3 +73,96 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 **临时绕过**:`types.at` 中用 `List<List<T>>` 替代 `[][]T`(已应用)。
 
 **推翻条件**:auto-lang parser 的 `parse_array_type` 支持递归嵌套 `[][]T`。
+
+---
+
+## auto-lang parser:store/widget 语法限制(2026-08-05 实测)
+
+> 以下限制用**含 fix043 修复的 debug 二进制**(2026-08-05 15:51 构建)实测复现,
+> 全部以最小复现文件验证过。015-notes 均无对应先例,因此不是我们的语法问题。
+> 处理原则:不做规避(不改写语义),记录并等 parser/codegen 修复。
+
+### `msg` 消息多参数声明不被支持
+
+**来源**:Plan 043 M2(shell_store.at)。
+
+**现状**:`msg Msg { Complete(str, int) }`、`RunSmart(int, str, []str)` 等任何
+**2 个及以上参数**的消息声明都报 "Expected term, got RBrace"(参数列表未正确消费,
+在 `}` 处失败)。单参数消息(含 `[]str` 数组参数、自定义类型参数如 `CommandResult`)
+均正常。015-notes 的所有 `msg` 全是 0/1 参数,无多参数先例。
+
+**根因**:疑似 `msg` 参数列表解析只消费单个参数类型后没有继续循环
+(parser.rs 的 msg 声明分支),需 auto-lang 侧确认。
+
+**影响**:`shell_store.at` 的 `RunResult(CommandResult)` 等是单参数没问题,但
+`Complete(str, int)`、`RunSmart(int, str, []str)` 无法声明 → shell_store.at 整体编译失败。
+
+**推翻条件**:auto-lang parser 支持 msg 多参数。
+
+### computed 只支持单表达式,不支持多行 body
+
+**来源**:Plan 043 M2(shell_store.at 的 `history`/`git_label`)。
+
+**现状**:`computed { history => .persisted_history }`(单表达式)正常;任何
+`computed { name => { ...多条语句... return ... } }` 的多行 body 形式都报
+"Expected term, got RBrace"。015-notes 的 computed(`pinned_notes => .notes.filter(...)`)
+全是单表达式。
+
+**根因**:computed 的 `=>` 右侧复用表达式解析路径,不进入语句块(parse_body)解析。
+
+**影响**:`history`(需要 concat + for 循环拼接)和 `git_label`(多分支格式化)无法
+用多行 body 表达。之前尝试把两者改成 `=> self.persisted_history` 和 `=> ""` 的桩实现
+**已撤销**(那是规避,导致行为丢失),恢复为完整逻辑——当前 shell_store.at 会因此编译失败,
+等 parser 支持 computed 多行 body。
+
+**推翻条件**:auto-lang parser 支持 computed 多行 body(或引入 computed 帮助函数)。
+
+### view 条件里 `None` 比较不被支持(handler/computed 里正常)
+
+**来源**:Plan 043 M4(block_item.at)。
+
+**现状**:`if .block.output != None { ... }`(**view 树**的 if 条件)报
+"Expected term, got RBrace"。但**handler 里** `if s != None`(015-notes notes_store.at:120
+同款)和 **computed 单表达式** `.git_status != None` 均正常。
+
+**根因**:疑似 view 的 if 条件解析路径(expr_pratt 在 view 上下文)没有处理
+`None` 字面量或比较链,而 handler/computed 走的语句表达式路径正常。
+
+**影响**:`block_item.at` 的 `if .block.output != None`(决定是否显示 BlockBody)无法表达。
+
+**推翻条件**:auto-lang parser 在 view if 条件里支持 `!= None`(或 `is Some` 形式)。
+
+### view 里位置参数调用 view fn 不被支持(必须命名参数)
+
+**来源**:Plan 043 M4(block_body.at)。
+
+**现状**:`render_table(.output)`(位置参数调用 view fn)报 "Expected term, got RBrace";
+`render_table(output: .output)`(命名参数)正常。015-notes 里 view fn 调用
+(`NoteItem(note: note, ...)`)全部是命名参数,无位置参数先例。
+
+**根因**:view fn 调用的解析把位置参数当组件属性语法处理,预期的是 `name: expr` 形式。
+
+**影响**:`block_body.at` 当前写法(位置参数)编译失败。**注意**:把调用改为命名参数
+`render_table(output: .output)` 是**规范写法修正**(与 015-notes 一致),不是规避,
+已应用。但跨文件 view fn 仍有下一项问题。
+
+**推翻条件**:auto-lang parser 支持位置参数调用 view fn(或我们统一用命名参数即可绕开——
+此条记录为低优先级)。
+
+### view fn 跨文件 `use` 不被 codegen 支持(生成 `<div :output>` 而非内联展开)
+
+**来源**:Plan 043 M4(renderers.at + block_body.at)。
+
+**现状**:015-notes 的 view fn(`NoteItem`)是**定义与使用同文件**,codegen 将其内联展开
+到调用处。我们的 `renderers.at` 把 4 个 view fn 独立成文件,`block_body.at` 用
+`use renderers: render_table` 跨文件引用——parser 接受,但 codegen 把调用生成成
+`<div :output="output" />`(当作未知组件 + 属性),没有内联展开,行为错误。
+另外纯 view fn 文件编译时报 "No widget or store declarations found"(警告,不阻塞,
+因为作为模块被 use 引用时可解析)。
+
+**影响**:renderers 独立成文件时,生成的 Vue 渲染器全部失效。
+
+**临时处理**:把 view fn 从 `renderers.at` 移入使用它的 `block_body.at`(同文件定义+
+调用,与 015-notes 一致)——这是**结构修正**不是规避,尚未应用,见计划 M4 收尾。
+
+**推翻条件**:auto-lang codegen 支持跨文件 view fn 引用(或统一同文件定义)。

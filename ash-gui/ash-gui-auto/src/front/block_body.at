@@ -18,16 +18,16 @@ widget BlockBody {
     view {
         col {
             if .output.kind == "Table" {
-                render_table(.output)
+                render_table(output: .output)
             } else if .output.kind == "Record" {
                 // Record 渲染(简化:用文本形式)
                 text "Record" { }
             } else if .output.kind == "Code" {
-                render_code(.output)
+                render_code(output: .output)
             } else if .output.kind == "Text" {
-                render_text(.output)
+                render_text(output: .output)
             } else if .output.kind == "Error" {
-                render_error(.output)
+                render_error(output: .output)
             } else {
                 text "(no output)" {
                     style: "text-xs text-muted-foreground italic"

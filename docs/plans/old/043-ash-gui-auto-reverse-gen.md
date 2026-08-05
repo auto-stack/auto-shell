@@ -1,7 +1,7 @@
 # Plan 043: ash-gui 反向生成 Auto 语言版 — 从手写 Vue 到 .at 源码
 
 > **日期**: 2026-08-05
-> **状态**: 📝 计划(待实施)
+> **状态**: 🔄 实施中(M1-M4 完成,M5 阻塞于 auto-lang parser/codegen 限制)
 > **来源**: Plan 042 完成(v0.1.6),ash-gui 的 Vue 手写版已可用且功能完备。下一步:
 > 从手写 Vue/Tauri 代码反向生成对应的 Auto 语言(.at)源码,验证正向生成能产出等价的 Vue 工程。
 > **范围**: 新建 `.at` 源码文件(参照 015-notes 结构)+ 手动/半自动验证正向生成一致性
@@ -267,12 +267,30 @@ API 调用、事件处理表达为 Auto store。transport 选择不在 .at 里(�
 
 **验收**:全部 widget 生成的 Vue SFC 与手写版等价。
 
+**状态**:✅ `.at` 源码完成(2026-08-05 提交 `545959b`)。验证时发现 auto-lang 限制,
+`block_body.at` 的位置参数 view fn 调用改为命名参数(与 015-notes 惯例一致)。
+
 ### M5: 正向生成 + 对比验证
 
 用 auto-lang 从全部 `.at` 源码正向生成 Vue 工程,与手写版逐文件对比。
 
 **验收**:生成的 Vue 工程 `vue-tsc --noEmit` 通过;`npm run dev` 浏览器版能连 ash-server,
 `ls`/`cat`/`show`/补全/历史/ghost text 功能与手写版一致。
+
+**状态**:🚧 阻塞于 auto-lang parser/codegen 限制(2026-08-05 实测,详见 DEBTS.md)。
+
+**当前可编译文件**(使用含 fix043 修复的 debug 二进制,2026-08-05 15:51 构建):
+- ✅ `back/api.at`(`#[api]` 已不 stack overflow,015-notes 同款)
+- ✅ `front/app.at`、`front/block_list.at`、`front/prompt_bar.at`、
+  `front/tool_sidebar.at`、`front/history_search.at`、`front/block_body.at`
+- ⚠️ `front/types.at`(纯类型文件,"No widget or store declarations" 警告,预期)
+- ❌ `front/shell_store.at`(msg 多参数 `Complete(str,int)`/`RunSmart(int,str,[]str)` +
+  computed 多行 body)
+- ❌ `front/block_item.at`(view if 条件里 `None` 比较)
+- ❌ `front/renderers.at`(纯 view fn 文件,codegen 不支持跨文件 view fn 引用)
+
+**注意**:修复仅在 `auto-lang-fix043` worktree(未合入 master)。用 master 重新构建
+二进制会回归 `#[api]`/`store` stack overflow。M5 验证前需确认 auto-lang 修复合入。
 
 ---
 
