@@ -1,7 +1,7 @@
 # Plan 039: ash-gui-vue — Vue3 + shadcn-vue + Tauri 的 ash Block GUI
 
 > **日期**: 2026-08-04
-> **状态**: 🚧 **进行中(M1–M4 代码完成,前端 build ✅,后端 cargo check ✅,完整 Tauri 联调待 auto-lang 编译稳定)**
+> **状态**: ✅ **完成（归档 2026-08-05）** — M1-M4 全部交付。Tauri 版完整可运行:`cargo build` + `vue-tsc` 通过,`ls`/`cat`/`show`/补全/历史/流式输出/取消/SmartCommand 全部验证通过。后续 Plan 040(后端差距)、041(前端体验)已在此基础上完成。
 > **来源**: Plan 030(iced 版 ash-gui)的路线修正——iced 版本地渲染效果不佳(表格未对齐、无 block 边界、无 prompt、无 cwd 显示),转用 Vue/Tauri 技术栈重做 UI
 > **跨 workspace**: ash-core + auto-shell + ash-gui + auto-lang(生成器约定)
 > **预估**: M1–M4,~2500 行(前端 ~1800 + 后端 ~700)
