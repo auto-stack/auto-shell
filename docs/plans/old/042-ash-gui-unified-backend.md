@@ -1,7 +1,7 @@
 # Plan 042: ash-gui 统一后端架构 — 浏览器版与 Tauri 版行为一致
 
 > **日期**: 2026-08-05
-> **状态**: 📝 计划(待实施)
+> **状态**: ✅ **完成（归档 2026-08-05）** — M1-M5 全部交付。新建 `ash-server` crate(Shell worker + axum HTTP + SSE),`ash-gui-vue` 迁移为依赖它,前端 `useShellHttp` 连真实后端,`useShellMock` 删除。三 crate 编译通过、698 测试不回归、vue-tsc 通过。
 > **来源**: Plan 039-041 完成后的架构审查——浏览器版(Vue)与 Tauri 版(桌面 App)行为不一致
 > **范围**: 新建 `ash-server` crate + 重构 `ash-gui-vue` 前端 API 层
 > **前置**: Plan 041 已完成(补全引擎下沉,前端体验齐备)
