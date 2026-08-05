@@ -1,0 +1,143 @@
+// front/types.at — ash-gui 前端类型定义
+// Plan 043 M1: 反向生成自 ash-gui-vue/src/types/shell.ts
+//
+// 这些类型镜像 ash-core 的 RenderedOutput 家族 + ash-gui 的 Block/事件 payload。
+// 后端的 pub type 定义在 back/api.at(共享);这里放前端专用的组合类型。
+
+// ═══════════════════════════════════════════════════════════
+// 渲染输出(RenderedOutput 家族)
+// ═══════════════════════════════════════════════════════════
+
+/// 代码高亮的一个着色片段(Plan 042 M6 B1)
+type CodeSpan {
+    text str
+    r int
+    g int
+    b int
+    bold bool
+    italic bool
+}
+
+/// 渲染单元格:纯文本 或 带标签的文本
+type RenderedCell {
+    text str
+    tag str
+}
+
+/// 渲染输出——命令执行结果的展示描述
+/// 在 Vue 里是 discriminated union;这里用 type + kind 字段表达。
+/// 真正的 union pattern matching 在 widget 层(view fn)处理。
+type RenderedOutput {
+    kind str
+    text str
+    columns []str
+    rows List<List<RenderedCell>>
+    fields List<List<str>>
+    code_lines List<List<CodeSpan>>
+    language str
+    error_message str
+    atom_type str
+}
+
+// ═══════════════════════════════════════════════════════════
+// Block 生命周期
+// ═══════════════════════════════════════════════════════════
+
+/// Block 状态
+type BlockStatus {
+    kind str
+    message str
+}
+
+/// 一个命令块(前端跟踪的最小单元)
+type Block {
+    id int
+    command str
+    cwd str
+    status BlockStatus
+    output RenderedOutput
+    streamed_text str
+    duration_ms int
+}
+
+// ═══════════════════════════════════════════════════════════
+// 事件 payload
+// ═══════════════════════════════════════════════════════════
+
+/// 命令最终结果(command-result 事件)
+type CommandResult {
+    block_id int
+    cwd str
+    status str
+    failed_message str
+    output RenderedOutput
+    duration_ms int
+}
+
+/// 流式输出块(command-output 事件)
+type CommandOutput {
+    block_id int
+    chunk str
+}
+
+/// Shell 事件(SSE 流推送的 union)
+type ShellEvent {
+    event str
+    block_id int
+    chunk str
+    result CommandResult
+}
+
+// ═══════════════════════════════════════════════════════════
+// Boot 数据 + 补全 + Prompt 上下文
+// ═══════════════════════════════════════════════════════════
+
+/// 工具栏命令条目
+type ToolEntry {
+    name str
+    description str
+}
+
+/// SmartCommand 条目
+type SmartCommandEntry {
+    name str
+    description str
+}
+
+/// 启动快照(command_list 返回)
+type BootSnapshot {
+    cwd str
+    home str
+    commands []ToolEntry
+    smart_commands []SmartCommandEntry
+}
+
+/// 补全候选
+type CompletionItem {
+    replacement str
+    display str
+    description str
+    kind str
+}
+
+/// Git 状态摘要
+type GitStatusInfo {
+    staged int
+    unstaged int
+    untracked int
+    conflicted int
+    ahead int
+    behind int
+}
+
+/// Prompt 上下文(git 分支/状态)
+type PromptContext {
+    git_branch str
+    git_status GitStatusInfo
+}
+
+/// SmartCommand 执行结果
+type SmartResult {
+    output str
+    error str
+}

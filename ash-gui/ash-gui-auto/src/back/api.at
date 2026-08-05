@@ -1,0 +1,84 @@
+// back/api.at — ash-gui Shell API 接口定义
+// Plan 043 M1: 反向生成自 ash-server 的 HTTP 端点 + ash-gui-vue 的 types/shell.ts
+//
+// 这些 #[api] 函数定义了前后端之间的契约。auto-lang codegen 会从这份文件生成:
+//   - TypeScript client (api.ts): fetch 调用,浏览器版用
+//   - Axum routes (Rust): HTTP 端点,ash-server 用
+//   - Tauri commands (Rust): Tauri IPC,Tauri 版用
+//
+// 业务逻辑(Shell 执行、补全引擎等)在 auto-shell/ash-core 里,不在此文件。
+
+use types: BootSnapshot, CompletionItem, PromptContext, ShellEvent, SmartResult
+
+// ═══════════════════════════════════════════════════════════
+// Request-Response 端点
+// ═══════════════════════════════════════════════════════════
+
+/// 启动数据:cwd + 命令列表 + SmartCommands
+/// GET /api/command_list
+#[api(method = "GET", path = "/api/command_list")]
+pub fn command_list() BootSnapshot {
+    return shell.command_list()
+}
+
+/// 读取共享 CLI 历史文件
+/// GET /api/history
+#[api(method = "GET", path = "/api/history")]
+pub fn history() []str {
+    return shell.read_history()
+}
+
+/// 补全候选(共享补全引擎,Plan 041 M7)
+/// POST /api/complete
+#[api(method = "POST", path = "/api/complete")]
+pub fn complete(line str, cursor int) []CompletionItem {
+    return shell.complete(line, cursor)
+}
+
+/// Prompt 上下文(git 分支/状态,Plan 041 M5)
+/// GET /api/prompt_context
+#[api(method = "GET", path = "/api/prompt_context")]
+pub fn prompt_context() PromptContext {
+    return shell.prompt_context()
+}
+
+/// 执行命令(非阻塞——结果通过 /api/stream 的 SSE 推送)
+/// POST /api/run_command
+#[api(method = "POST", path = "/api/run_command")]
+pub fn run_command(block_id int, cmd str) {
+    shell.run_command(block_id, cmd)
+}
+
+/// 执行 SmartCommand(同步返回结果)
+/// POST /api/run_smart
+#[api(method = "POST", path = "/api/run_smart")]
+pub fn run_smart(block_id int, name str, args []str) SmartResult {
+    return shell.run_smart(block_id, name, args)
+}
+
+/// 取消当前运行的命令
+/// POST /api/cancel
+#[api(method = "POST", path = "/api/cancel")]
+pub fn cancel() {
+    shell.cancel()
+}
+
+/// 用 OS 默认程序打开路径
+/// POST /api/open_path
+#[api(method = "POST", path = "/api/open_path")]
+pub fn open_path(path str) {
+    shell.open_path(path)
+}
+
+// ═══════════════════════════════════════════════════════════
+// 流式端点(SSE)
+// ═══════════════════════════════════════════════════════════
+
+/// 订阅 Shell 事件流(command-output + command-result)
+/// 浏览器版用 EventSource;Tauri 版用 listen()。
+/// ~Stream<ShellEvent> 让 codegen 生成 SSE (axum) 或 Channel (tauri)。
+/// GET /api/stream
+#[api(method = "GET", path = "/api/stream")]
+pub fn stream() ~Stream<ShellEvent> {
+    return shell.subscribe()
+}
