@@ -24,6 +24,7 @@ import type {
   CommandOutputPayload,
   CommandListResult,
   CompletionItem,
+  PromptContext,
   ToolEntry,
   SmartCommandEntry,
 } from '@/types/shell'
@@ -35,6 +36,9 @@ export function useShell() {
   const commands = ref<ToolEntry[]>([])
   const smartCommands = ref<SmartCommandEntry[]>([])
   const commandNames = ref<string[]>([])
+  /** Plan 041 M5: git branch/status for the prompt. Refreshed after each
+   * command (cwd may change) and at boot. */
+  const gitInfo = ref<PromptContext>({ git_branch: null, git_status: null })
   /** Commands persisted in the shared CLI history file (oldest first, M6). */
   const persistedHistory = ref<string[]>([])
   let nextId = 0
@@ -122,9 +126,21 @@ export function useShell() {
     block.streamedText += o.chunk
   }
 
+  /** Plan 041 M5: refresh the git branch/status from the backend (after cwd
+   * changes via cd, or at boot). Best-effort — failures leave the old info. */
+  async function refreshGit() {
+    try {
+      gitInfo.value = await invoke<PromptContext>('prompt_context')
+    } catch {
+      // leave existing info
+    }
+  }
+
   /** Apply a finished command result to its block. */
   function applyResult(r: CommandResultPayload) {
     cwd.value = r.cwd
+    // Plan 041 M5: cwd may have changed (cd/pushd) → refresh git info.
+    void refreshGit()
     const block = blocks.find((b) => b.id === r.block_id)
     if (!block) return
     if (r.status === 'Success') {
@@ -153,6 +169,8 @@ export function useShell() {
     } catch {
       persistedHistory.value = []
     }
+    // Plan 041 M5: initial git info for the prompt.
+    await refreshGit()
 
     // Listen for finished results pushed by the Shell worker thread.
     unlistenResult = await listen<CommandResultPayload>('command-result', (event) => {
@@ -193,6 +211,7 @@ export function useShell() {
     smartCommands,
     commandNames,
     history,
+    gitInfo,
     runCommand,
     runSmartCommand,
     cancelCommand,

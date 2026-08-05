@@ -58,6 +58,12 @@ pub enum CommandReq {
         cursor: usize,
         reply: tokio::sync::oneshot::Sender<Vec<CompletionItem>>,
     },
+    /// Plan 041 M5: get the prompt context (git branch/status) for the
+    /// worker's current directory. Refreshes the global git cache, then
+    /// returns the cached info (never blocks).
+    PromptContext {
+        reply: tokio::sync::oneshot::Sender<PromptContext>,
+    },
 }
 
 /// Plan 041 M7: one completion candidate, serialized for the frontend. Mirrors
@@ -73,6 +79,28 @@ pub struct CompletionItem {
     pub description: Option<String>,
     /// Semantic kind: command / file / flag / directory / variable / ...
     pub kind: String,
+}
+
+/// Plan 041 M5: prompt context (git branch/status) for the GUI title bar.
+/// Mirrors `auto_shell::prompt::context::GitInfo` / `GitStatus`.
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct PromptContext {
+    /// Current git branch, or None if not in a git repo.
+    pub git_branch: Option<String>,
+    /// Working tree status counts (staged/unstaged/untracked/ahead/behind).
+    pub git_status: Option<GitStatusInfo>,
+}
+
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct GitStatusInfo {
+    pub staged: usize,
+    pub unstaged: usize,
+    pub untracked: usize,
+    pub conflicted: usize,
+    pub ahead: usize,
+    pub behind: usize,
 }
 
 /// Reply to a `RunSmart` request (Plan 040 M3).
@@ -100,6 +128,16 @@ impl ShellHandle {
     /// Submit a command (non-blocking). The result comes back as a Tauri event.
     pub fn submit(&self, block_id: usize, cmd: String) {
         let _ = self.tx.send(CommandReq::Run { block_id, cmd });
+    }
+
+    /// Plan 041 M5: get the prompt context (git branch/status) for the
+    /// worker's current directory.
+    pub async fn prompt_context(&self) -> Result<PromptContext, String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(CommandReq::PromptContext { reply: reply_tx })
+            .map_err(|_| "worker channel closed".to_string())?;
+        reply_rx.await.map_err(|_| "worker dropped reply".to_string())
     }
 
     /// Plan 041 M7: produce completions on the worker's Shell (live cwd/
@@ -320,6 +358,34 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                             let items: Vec<CompletionItem> =
                                 completions.into_iter().map(completion_to_item).collect();
                             let _ = reply.send(items);
+                        }
+                        CommandReq::PromptContext { reply } => {
+                            // Plan 041 M5: refresh the global git cache for the
+                            // worker's cwd, then return the cached info.
+                            let cwd = shell.pwd().to_path_buf();
+                            auto_shell::prompt::context::refresh_git_info_async(cwd);
+                            let ctx = auto_shell::prompt::context::AshContext::new(
+                                shell.pwd().to_path_buf(),
+                                home_dir().unwrap_or_default(),
+                                None,
+                                Some(shell.last_exit_code()),
+                                auto_shell::prompt::AshConfig::default(),
+                            );
+                            let pc = match ctx.git_info() {
+                                Some(gi) => PromptContext {
+                                    git_branch: Some(gi.branch),
+                                    git_status: Some(GitStatusInfo {
+                                        staged: gi.status.staged,
+                                        unstaged: gi.status.unstaged,
+                                        untracked: gi.status.untracked,
+                                        conflicted: gi.status.conflicted,
+                                        ahead: gi.status.ahead,
+                                        behind: gi.status.behind,
+                                    }),
+                                },
+                                None => PromptContext::default(),
+                            };
+                            let _ = reply.send(pc);
                         }
                     }
                 }

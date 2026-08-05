@@ -7,7 +7,7 @@
  * is previewable; inside Tauri the real backend is used. The two composables
  * return identical shapes, so nothing else changes.
  */
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useShell } from '@/composables/useShell'
 import { useShellMock } from '@/composables/useShellMock'
 import BlockList from '@/components/block/BlockList.vue'
@@ -23,6 +23,7 @@ const {
   smartCommands,
   commandNames,
   history,
+  gitInfo,
   runCommand,
   runSmartCommand,
   cancelCommand,
@@ -60,6 +61,25 @@ function onRunSmart(name: string) {
 function onStop() {
   void cancelCommand()
 }
+
+/** Plan 041 M5: format the git status as +N !N ?N ⇡N ⇣N (like the TUI prompt). */
+const gitLabel = computed(() => {
+  const g = gitInfo.value
+  if (!g.git_branch) return ''
+  const s = g.git_status
+  let label = `⎇ ${g.git_branch}`
+  if (s) {
+    const parts: string[] = []
+    if (s.staged) parts.push(`+${s.staged}`)
+    if (s.unstaged) parts.push(`!${s.unstaged}`)
+    if (s.untracked) parts.push(`?${s.untracked}`)
+    if (s.conflicted) parts.push(`✗${s.conflicted}`)
+    if (s.ahead) parts.push(`⇡${s.ahead}`)
+    if (s.behind) parts.push(`⇣${s.behind}`)
+    if (parts.length) label += ' ' + parts.join(' ')
+  }
+  return label
+})
 </script>
 
 <template>
@@ -88,6 +108,9 @@ function onStop() {
         <span class="text-muted-foreground/40">·</span>
         <span class="text-xs font-mono-ash text-sky-300/80 truncate" :title="cwd">
           {{ cwd ? cwd.replace(/\\/g, '/') : '…' }}
+        </span>
+        <span v-if="gitLabel" class="text-xs font-mono-ash text-amber-400/80 shrink-0">
+          {{ gitLabel }}
         </span>
       </header>
 

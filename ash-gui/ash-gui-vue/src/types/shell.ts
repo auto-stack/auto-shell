@@ -130,3 +130,19 @@ export interface CompletionItem {
   /** Semantic kind: command / file / flag / directory / variable / ... */
   kind: string
 }
+
+// ── Plan 041 M5: prompt context (git branch/status) ─────────────────────────
+
+export interface GitStatusInfo {
+  staged: number
+  unstaged: number
+  untracked: number
+  conflicted: number
+  ahead: number
+  behind: number
+}
+
+export interface PromptContext {
+  git_branch: string | null
+  git_status: GitStatusInfo | null
+}

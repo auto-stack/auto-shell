@@ -15,6 +15,7 @@ import type {
   ToolEntry,
   SmartCommandEntry,
   CompletionItem,
+  PromptContext,
 } from '@/types/shell'
 
 // ── Canned outputs keyed by command ──────────────────────────────────────────
@@ -106,6 +107,10 @@ export function useShellMock() {
     'ls', 'cd', 'cat', 'grep', 'mem', 'help', 'echo', 'ps', 'find', 'smart',
   ])
   const persistedHistory = ref<string[]>(['ls', 'help', 'echo hello'])
+  const gitInfo = ref<PromptContext>({
+    git_branch: 'main',
+    git_status: { staged: 2, unstaged: 1, untracked: 0, conflicted: 0, ahead: 0, behind: 0 },
+  })
   let nextId = 0
 
   const history = computed(() => [
@@ -190,6 +195,7 @@ export function useShellMock() {
     smartCommands,
     commandNames,
     history,
+    gitInfo,
     runCommand,
     runSmartCommand,
     cancelCommand,

@@ -25,6 +25,7 @@ pub fn run() {
             commands::run_smart_command,
             commands::cancel_command,
             commands::complete,
+            commands::prompt_context,
             commands::history,
             commands::command_list,
             commands::open_path,

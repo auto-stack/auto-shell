@@ -8,7 +8,7 @@
 
 use tauri::State;
 
-use crate::shell_worker::{read_history, BootSnapshot, BootState, CompletionItem, ShellHandle};
+use crate::shell_worker::{read_history, BootSnapshot, BootState, CompletionItem, PromptContext, ShellHandle};
 
 /// Submit a command for the given block id. Non-blocking: the result arrives as
 /// a `command-result` Tauri event when the Shell worker finishes.
@@ -33,6 +33,14 @@ pub async fn complete(
     shell: State<'_, ShellHandle>,
 ) -> Result<Vec<CompletionItem>, String> {
     shell.complete(line, cursor).await
+}
+
+/// Plan 041 M5: get the prompt context (git branch/status) for the current
+/// directory. Routes to the worker, which refreshes the global git cache and
+/// returns the cached info (never blocks).
+#[tauri::command]
+pub async fn prompt_context(shell: State<'_, ShellHandle>) -> Result<PromptContext, String> {
+    shell.prompt_context().await
 }
 
 /// Plan 040 M5: cancel the currently running command. The worker checks its
