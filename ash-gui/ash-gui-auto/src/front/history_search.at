@@ -1,0 +1,61 @@
+// front/history_search.at — Ctrl+R 历史搜索弹层 widget
+// Plan 043 M4: 反向生成自 HistorySearch.vue
+//
+// fzf 风格的历史搜索面板:模糊过滤、↑↓ 导航、Enter 执行。
+
+widget HistorySearch {
+    msg Msg { Run(str), Close, Move(int) }
+
+    // props: history []str, open bool,
+    //        on_run: msg, on_close: msg
+
+    model {
+        var query str = ""
+        var selected int = 0
+    }
+
+    view {
+        if .open {
+            col {
+                style: "absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-hidden rounded-md border border-border bg-popover shadow-lg z-50"
+
+                // 搜索框
+                row {
+                    style: "items-center gap-2 px-3 py-1.5 border-b border-border"
+                    text "⌕" {
+                        style: "text-xs text-amber-400 font-mono-ash select-none shrink-0"
+                    }
+                    input .query {
+                        oninput: .Move
+                        style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
+                        placeholder: "搜索历史…"
+                    }
+                }
+
+                // 匹配列表
+                col {
+                    style: "overflow-y-auto py-1"
+                    for entry in .matches {
+                        button .entry {
+                            onclick: .Run(.entry)
+                            style: "w-full text-left px-3 py-1 text-sm font-mono-ash"
+                        }
+                    }
+                    if .matches.len() == 0 {
+                        text "无匹配历史" {
+                            style: "px-3 py-4 text-center text-xs text-muted-foreground/50"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    on {
+        .Run(cmd) -> { }
+        .Close -> { }
+        .Move(delta) -> {
+            .selected = .selected + delta
+        }
+    }
+}

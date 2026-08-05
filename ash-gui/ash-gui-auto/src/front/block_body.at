@@ -1,0 +1,42 @@
+// front/block_body.at — 输出渲染器分发
+// Plan 043 M4: 反向生成自 BlockBody.vue
+//
+// 根据 RenderedOutput 的 kind 分发到对应渲染器(Table/Record/Code/Text/Error)。
+// 在 Vue 里用 discriminated union;在 Auto 里用 if/else if 链。
+
+use table_view: render_table
+use code_view: render_code
+use text_view: render_text
+use error_view: render_error
+use types: RenderedOutput
+
+widget BlockBody {
+    msg Msg { OpenPath(str) }
+
+    // props: output RenderedOutput, on_open_path: msg
+
+    view {
+        col {
+            if .output.kind == "Table" {
+                render_table(.output)
+            } else if .output.kind == "Record" {
+                // Record 渲染(简化:用文本形式)
+                text "Record" { }
+            } else if .output.kind == "Code" {
+                render_code(.output)
+            } else if .output.kind == "Text" {
+                render_text(.output)
+            } else if .output.kind == "Error" {
+                render_error(.output)
+            } else {
+                text "(no output)" {
+                    style: "text-xs text-muted-foreground italic"
+                }
+            }
+        }
+    }
+
+    on {
+        .OpenPath(path) -> { }
+    }
+}

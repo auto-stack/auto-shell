@@ -1,0 +1,56 @@
+// front/tool_sidebar.at — 左侧工具栏 widget
+// Plan 043 M4: 反向生成自 ToolSidebar.vue
+//
+// 列出所有可用命令 + SmartCommands,点击触发执行或注入。
+
+use types: ToolEntry, SmartCommandEntry
+
+widget ToolSidebar {
+    msg Msg { Pick(str), RunSmart(str) }
+
+    // props: commands []ToolEntry, smart_commands []SmartCommandEntry,
+    //        on_pick: msg, on_run_smart: msg
+
+    view {
+        col {
+            style: "w-56 shrink-0 border-r border-border bg-card/30 overflow-y-auto"
+
+            // Commands 标题
+            text "Commands" {
+                style: "px-3 py-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide"
+            }
+
+            // 命令列表
+            col {
+                style: "px-1.5 gap-0.5"
+                for c in .commands {
+                    button .c.name {
+                        onclick: .Pick(.c.name)
+                        style: "w-full text-left px-2 py-1 rounded text-xs font-mono-ash text-sky-300/90 hover:bg-muted/60 hover:text-sky-200"
+                    }
+                }
+            }
+
+            // SmartCommands(如果有)
+            if .smart_commands.len() > 0 {
+                text "SmartCommands" {
+                    style: "px-3 pt-3 pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide"
+                }
+                col {
+                    style: "px-1.5 gap-0.5"
+                    for s in .smart_commands {
+                        button .s.name {
+                            onclick: .RunSmart(.s.name)
+                            style: "w-full text-left px-2 py-1 rounded text-xs font-mono-ash text-purple-300/90 hover:bg-muted/60 hover:text-purple-200"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    on {
+        .Pick(name) -> { }
+        .RunSmart(name) -> { }
+    }
+}

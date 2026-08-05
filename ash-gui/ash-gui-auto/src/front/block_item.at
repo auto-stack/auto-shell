@@ -1,0 +1,73 @@
+// front/block_item.at — 单个命令块 widget
+// Plan 043 M4: 反向生成自 BlockItem.vue
+//
+// 一个命令的卡片:头部(❯ command + 状态 + 耗时 + 停止按钮)
+// + cwd 行 + 输出主体(BlockBody 分发渲染器)。
+
+use block_body: BlockBody
+use types: Block
+
+widget BlockItem {
+    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand }
+
+    // props: block Block, home str,
+    //        on_open_path: msg, on_rerun: msg, on_stop: msg
+
+    view {
+        col {
+            style: "border-border bg-card/60 px-3 py-2.5 shadow-sm overflow-hidden rounded-lg border"
+
+            // 头部:❯ command + 操作 + 状态
+            row {
+                style: "items-center gap-2 mb-1.5"
+                text "❯" {
+                    style: "text-muted-foreground select-none"
+                }
+                text .block.command {
+                    style: "font-mono-ash text-sm text-foreground/90 truncate"
+                }
+
+                // 停止按钮(运行中时显示)
+                if .block.status.kind == "Running" {
+                    button "■" {
+                        onclick: .Stop
+                        style: "px-1.5 py-0.5 text-[11px] rounded text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                    }
+                }
+
+                // 状态图标
+                text .status_glyph {
+                    style: "text-xs font-mono-ash " + .status_cls
+                }
+            }
+
+            // cwd 行
+            if .cwd_display != "" {
+                row {
+                    style: "text-[11px] text-muted-foreground/70 font-mono-ash mb-2"
+                    text "📁 " { }
+                    text .cwd_display { }
+                }
+            }
+
+            // 流式输出(运行中时显示)
+            if .block.status.kind == "Running" && .block.streamed_text != "" {
+                text .block.streamed_text {
+                    style: "text-xs font-mono-ash text-foreground/80 whitespace-pre-wrap mb-2"
+                }
+            }
+
+            // 输出主体
+            if .block.output != None {
+                BlockBody(output: .block.output, on_open_path: .OpenPath)
+            }
+        }
+    }
+
+    on {
+        .Stop -> { }
+        .Rerun(cmd) -> { }
+        .CopyCommand -> { }
+        .OpenPath(path) -> { }
+    }
+}
