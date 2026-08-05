@@ -62,9 +62,13 @@ pub fn is_code_file(ext: &str) -> bool {
 pub fn highlight_code(text: &str, ext: &str) -> String {
     let extension = ext.to_ascii_lowercase();
 
-    // TOML/INI are not in syntect's default syntax set. Plan 037 M2.2: the
-    // nu-ansi-term-based TOML highlighter moved to ash-tui; here TOML/INI now
-    // fall through to plain syntect (the documented fallback).
+    // Plan 042 bugfix: TOML/INI are not in syntect's default syntax set, so
+    // they previously fell through to plain text. Added a simple regex-based
+    // TOML/INI highlighter so `show Cargo.toml` gets colors in all frontends.
+    if extension == "toml" || extension == "ini" {
+        return highlight_toml(text);
+    }
+
     let ps = syntax_set();
     let ts = theme_set();
 

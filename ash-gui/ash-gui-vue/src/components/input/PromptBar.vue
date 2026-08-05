@@ -8,7 +8,7 @@
  * (the same one CLI/TUI use) via the `complete` prop — file paths, flags,
  * subcommands, descriptions — not just a command-name prefix filter.
  */
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { abbrevPath } from '@/lib/path'
 import { tokenize } from '@/lib/highlight'
 import type { CompletionItem } from '@/types/shell'
@@ -45,6 +45,13 @@ const historyCursor = ref<number | null>(null)
 const inContinuation = ref(false)
 // Plan 041 M1: Ctrl+R history-search popover.
 const historyOpen = ref(false)
+// Tab-completion: which suggestion is highlighted (null = none).
+const completionIndex = ref<number | null>(null)
+
+// Auto-focus the input on mount.
+onMounted(() => {
+  inputEl.value?.focus()
+})
 
 // Plan 041 M7: completion candidates from the shared backend engine. Async —
 // fetched (debounced) on input change. Falls back to a local command-name
@@ -224,6 +231,16 @@ function onKeydown(e: KeyboardEvent) {
   if (e.ctrlKey && e.key === 'r') {
     e.preventDefault()
     historyOpen.value = !historyOpen.value
+    return
+  }
+  // Tab: apply the first (or highlighted) completion candidate. Prevent the
+  // browser's default focus-jump behavior.
+  if (e.key === 'Tab') {
+    if (suggestions.value.length > 0) {
+      e.preventDefault()
+      const idx = completionIndex.value ?? 0
+      pickCompletion(suggestions.value[idx] ?? suggestions.value[0])
+    }
     return
   }
   if (e.key === 'ArrowUp') {

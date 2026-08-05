@@ -295,3 +295,96 @@ TUI/CLI 版本。
 - `ash-gui/ash-gui-vue/src-tauri/src/commands.rs`(现有 8 个 Tauri command)
 - `ash-gui/ash-gui-vue/src/composables/useShell.ts`(现有 Tauri 前端接入)
 - `ash-gui/ash-gui-vue/src/composables/useShellMock.ts`(待删除的 mock)
+
+---
+
+## 9. 后续补充:代码高亮输出格式(M6,2026-08-05)
+
+### 问题
+
+`show` 命令对代码文件(`.rs`/`.py`/`.toml`...)做语法高亮。当前 `highlight_code`
+返回带 ANSI 转义码的字符串(`\x1b[38;2;R;G;Bm...`)。这在 CLI/TUI 里没问题(终端
+原生渲染 ANSI),但 GUI 前端收到的是纯字符串——ANSI 码要么显示成乱码,要么需要前端
+额外解析(之前临时加了 `ansi.ts` 做 ANSI→HTML 转换,是多余的中转层)。
+
+### 方案讨论
+
+| 方案 | 做法 | 优点 | 缺点 |
+|---|---|---|---|
+| **A. HTML** | `highlight_code` 生成 `<span style="...">` HTML | 最简单 | 绑死 WebView——未来原生桌面端(非 WebView)必须内嵌 HTML 解析器 |
+| **B. 结构化** | `highlight_code` 返回结构化片段,走 `RenderedOutput` | 平台无关——Web 端转 Vue/HTML,桌面端直接渲染 | 需要扩展 `RenderedOutput` |
+| ~~前端自适应~~ | ~~Vue 版用 HTML,Rust 版用结构化~~ | — | 破坏分层:`show`(核心层)不应知道调用方是谁;且浏览器版和 Tauri 版后端都是 Rust、前端都是 Vue,无法分辨 |
+
+### 决策:方案 B(结构化),分两步
+
+**为什么不是方案 A**：方案 A 节省的只是一个 `CodeView.vue` 组件,代价是所有未来
+前端都绑死 HTML。`RenderedOutput` 的设计哲学是"结构化数据 + 各前端各自渲染"
+(Table/Record 已是如此),Code 变体是自然扩展。
+
+**为什么不是"前端自适应"**：`show` 在 `auto-shell` 核心层,不应知道调用方是 Vue、
+Tauri 还是未来原生端。让核心层根据"谁在调用"决定输出格式,会把渲染决策泄漏到核心层。
+而且浏览器版和 Tauri 版的后端都是 Rust(ash-server)、前端都是 Vue/WebView,无法分辨。
+
+#### B1(当前实施):传 RGB + 样式
+
+syntect 的 `highlight_line()` 返回 `Vec<(Style, &str)>`,其中 `Style` 只有
+**RGB + FontStyle(bold/italic)**,不暴露 TextMate scope。
+
+所以 B1 不做 scope → 语义 token 映射,而是直接传 RGB + 样式:
+
+```rust
+pub enum RenderedOutput {
+    // ... 现有变体 ...
+    /// Plan 042 M6: syntax-highlighted code. Each line is a list of colored spans.
+    Code {
+        lines: Vec<Vec<CodeSpan>>,
+        language: String,
+    },
+}
+
+/// One colored span within a line of code.
+pub struct CodeSpan {
+    pub text: String,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub bold: bool,
+    pub italic: bool,
+}
+```
+
+- `highlight_code` 改为返回 `Vec<Vec<CodeSpan>>`(每行多个 span)
+- `show` 命令的 Code 文件路径返回 `RenderedOutput::Code`
+- Web 端新增 `CodeView.vue`,把 `CodeSpan` 渲染为 `<span style="color: rgb(r,g,b)">`
+- 桌面端直接按 RGB 渲染,不需要 HTML/WebView
+- 删除 `ansi.ts`(不再需要 ANSI→HTML 中转)
+
+**B1 的局限**:颜色来自 base16 theme(写死在 syntect 里),换主题需要改 Rust 端。
+但这对当前阶段够用——所有前端共用同一套高亮主题。
+
+#### B2(未来增强):传语义 token type
+
+```rust
+pub struct CodeSpan {
+    pub text: String,
+    pub token: HighlightToken,  // Comment / Keyword / String / Number / ...
+}
+pub enum HighlightToken {
+    Comment, Keyword, String, Number, Function, Type,
+    Operator, Punctuation, Variable, Property, Plain,
+}
+```
+
+- 需要用 syntect 的 `ScopeStack` 做 TextMate scope → token 映射
+- 每个前端用自己的 palette(可换主题),更干净
+- syntect scope 映射 API 复杂,工作量较大
+- **当需要多主题支持或更精细的 token 分类时再做**
+
+### M6 验证
+
+| 场景 | 预期 |
+|---|---|
+| `show main.rs` | 语法高亮的 Rust 代码(keyword/comment/string 异色) |
+| `show Cargo.toml` | TOML 高亮(table/key/string 异色) |
+| `echo hello` | 纯文本输出(走 `Text` 变体,不受影响) |
+| `ls` | 表格输出(走 `Table` 变体,不受影响) |
