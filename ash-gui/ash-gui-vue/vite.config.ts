@@ -26,6 +26,14 @@ export default defineConfig({
       ? { protocol: 'ws', host, port: 1421 }
       : undefined,
     open: !process.env.TAURI_ENV,
+    // Plan 042 M4: proxy /api to the ash-server HTTP backend so the browser
+    // version (npm run dev) connects to the same Shell engine as Tauri.
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     // Tauri supports es2021

@@ -9,12 +9,12 @@
  */
 import { ref, computed } from 'vue'
 import { useShell } from '@/composables/useShell'
-import { useShellMock } from '@/composables/useShellMock'
 import BlockList from '@/components/block/BlockList.vue'
 import PromptBar from '@/components/input/PromptBar.vue'
 import ToolSidebar from '@/components/chrome/ToolSidebar.vue'
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+// Plan 042 M4: useShell() auto-selects Tauri IPC or HTTP (ash-server) based on
+// environment. No more useShellMock — both versions connect to the real engine.
 const {
   blocks,
   cwd,
@@ -29,7 +29,7 @@ const {
   cancelCommand,
   complete,
   openPath,
-} = isTauri ? useShell() : useShellMock()
+} = useShell()
 
 const sidebarOpen = ref(true)
 /** Command injected from the sidebar into the PromptBar input. */
