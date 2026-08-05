@@ -4,6 +4,11 @@
 > **状态**: ✅ **完成（归档 2026-08-04）** — M1-M6 全部交付。`cargo check -p ash-gui-vue` + `vue-tsc --noEmit` 通过；ash-core 5/5、auto-shell 698/698（含 49 个 smart_command）测试通过。`execute()` 内命令不可取消为有意识接受的权衡（见 §4.1 / `DEBTS.md`）。
 > **来源**: Plan 039(ash-gui-vue M1-M4)完成后的差距分析——对比 TUI/CLI ash 与 Vue GUI 的能力
 > **范围**: `ash-gui/ash-gui-vue/src-tauri/`(后端)+ 必要的 `ash-core`/`auto-shell` 改动
+>
+> **⚠️ 架构变更(Plan 042)**: 本计划的 `shell_worker.rs`(Shell worker 线程 + 流式/取消/
+> 历史逻辑)将在 Plan 042 中迁入独立的 `ash-server` crate,通过 `ShellApi` trait 同时服务
+> HTTP(浏览器版)和 Tauri IPC(Tauri 版)。本计划的成果(M1-M6 功能)不受影响,只是换了
+> 容器。
 > **前置**: Plan 039 已提交;auto-lang 编译稳定后可联调验证
 > **预估**: M1-M6,~800 行 Rust
 

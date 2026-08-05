@@ -4,6 +4,11 @@
 > **状态**: ✅ **完成（归档 2026-08-05）** — M1-M8 全部交付。cargo check + vue-tsc 通过;ash-core 79/79、ash-tui 13/13、auto-shell 698/698 测试不回归。
 > **来源**: Plan 039/040 完成后的差距分析——对比 TUI/CLI ash 的输入体验 + 后端能力复用
 > **范围**: `ash-gui/ash-gui-vue/src/`(前端)+ `src-tauri/`(必要的后端桥接)+ `auto-shell`/`ash-tui` 下沉重构
+>
+> **⚠️ 架构变更(Plan 042)**: 本计划的前端组件(PromptBar/BlockList/HistorySearch/等)不受
+> 影响——Plan 042 只换数据源(`useShellMock` → `useShellHttp`,真实后端)。本计划 M7 下沉的
+> 补全引擎(`auto_shell::completions::engine`)继续被 `ash-server` 复用。`useShellMock` 将在
+> Plan 042 M5 删除。
 > **前置**: Plan 040 已完成(shell.execute 完整复用)
 > **预估**: M1-M8,~1100 行 Vue/TS + ~300 行 Rust
 

@@ -5,6 +5,11 @@
 > **来源**: Plan 030(iced 版 ash-gui)的路线修正——iced 版本地渲染效果不佳(表格未对齐、无 block 边界、无 prompt、无 cwd 显示),转用 Vue/Tauri 技术栈重做 UI
 > **跨 workspace**: ash-core + auto-shell + ash-gui + auto-lang(生成器约定)
 > **预估**: M1–M4,~2500 行(前端 ~1800 + 后端 ~700)
+>
+> **⚠️ 架构变更(Plan 042)**: 本计划手写了 Tauri 专用后端(`#[tauri::command]`),浏览器版
+> 被迫用 `useShellMock` 假数据。Plan 042 将后端提取为独立的 `ash-server` crate,同时支持
+> HTTP(axum,浏览器版)和 Tauri IPC(Tauri 版),让两版行为一致。本计划的
+> `shell_worker.rs`/`commands.rs` 逻辑将迁入 `ash-server`。
 
 ---
 

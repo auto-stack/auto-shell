@@ -224,6 +224,19 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
     std::thread::Builder::new()
         .name("ash-gui-shell".into())
         .spawn(move || {
+            // Plan 041 bugfix: Shell::new() + init_shell() build the AutoLang VM
+            // session, which calls `blocking_lock()` internally. That panics
+            // inside a Tokio runtime context ("Cannot block the current thread
+            // from within a runtime"). So we construct + initialize the Shell
+            // BEFORE entering the runtime, then only run the async main loop
+            // inside it.
+            let mut shell = auto_shell::Shell::new();
+
+            // Plan 040 M2: bring the worker's Shell to parity with the
+            // TUI/CLI REPL init sequence (repl.rs:36-79): env persistence,
+            // aliases from ash.toml, ~/.ashrc user functions, plugins.
+            init_shell(&mut shell);
+
             // A small single-threaded Tokio runtime drives the mpsc receiver
             // so we can `.await` channel receives on this thread.
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -232,13 +245,6 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                 .expect("failed to build worker runtime");
 
             runtime.block_on(async move {
-                let mut shell = auto_shell::Shell::new();
-
-                // Plan 040 M2: bring the worker's Shell to parity with the
-                // TUI/CLI REPL init sequence (repl.rs:36-79): env persistence,
-                // aliases from ash.toml, ~/.ashrc user functions, plugins.
-                init_shell(&mut shell);
-
                 // Plan 040 M1: capture structured output via a RenderHook. Shell
                 // calls this from `format_output` *after* full preprocessing.
                 let captured: Arc<Mutex<Option<RenderedOutput>>> = Arc::new(Mutex::new(None));
