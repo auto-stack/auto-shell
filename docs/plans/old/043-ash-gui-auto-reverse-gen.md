@@ -289,8 +289,8 @@ API 调用、事件处理表达为 Auto store。transport 选择不在 .at 里(�
 - ❌ `front/block_item.at`(view if 条件里 `None` 比较)
 - ❌ `front/renderers.at`(纯 view fn 文件,codegen 不支持跨文件 view fn 引用)
 
-**注意**:修复仅在 `auto-lang-fix043` worktree(未合入 master)。用 master 重新构建
-二进制会回归 `#[api]`/`store` stack overflow。M5 验证前需确认 auto-lang 修复合入。
+**注意**:`#[api]`/`store` stack overflow 修复已合入 auto-lang master
+(`d896d263`,dot_item 方案)。M5 验证用 master 最新构建的二进制即可。
 
 ---
 

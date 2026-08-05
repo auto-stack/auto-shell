@@ -44,17 +44,22 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 ## auto-lang parser(`auto-lang/crates/auto-lang/src/parser.rs`)
 
-> **2026-08-05 状态更新**:`#[api]`/`store` stack overflow 已修复——`auto-lang-fix043`
-> worktree(分支 `fix/043-parser-stack-overflow`)有未提交的 `parser.rs` 修改
-> (处理 `.field = expr` 点前缀赋值,避免 expr_pratt 无限递归);当前
-> `auto-lang/target/debug/auto.exe`(2026-08-05 15:51 构建)已包含该修复:
-> - 015-notes 的 `api.at`/`notes_store.at` 可正常编译(旧条目所述的 overflow 不再发生);
-> - 我们的 `back/api.at` 编译通过;
-> - `store` 声明、`.field = expr` 赋值(handler/computed)均正常。
+> **2026-08-05 状态更新**:`#[api]`/`store` stack overflow 已修复**并已合入 master**。
+> 修复历程:
+> 1. `auto-lang-fix043` worktree(分支 `fix/043-parser-stack-overflow`)最初在
+>    `parse_body` 的语句循环里加 `.field = expr` 点前缀分支,避免 expr_pratt 无限
+>    递归——修复了 api.at 的深递归(>8MB 栈 → 2MB),但该分支增大了 parse_body 的
+>    debug 栈帧,把 `test_godot_demo_dodge_player`(player.at,需 ~2MB)推过 2MB
+>    libtest worker 线程栈 → 引入回归。
+> 2. 最终方案(`d896d263`):把 `.field = expr` 处理移入 `dot_item()` 尾部——
+>    parse_body / parse_stmt_inner 完全不动,栈帧与修复前一致。gdscript 63 测试全过
+>    (dodge_player 恢复绿色),api.at 修复保持(2000KB 内可解析)。
 >
-> **注意**:修复尚未合入 auto-lang `master`(`git log master..fix/043-parser-stack-overflow`
-> 为空,改动仅存在于 worktree)。若用 master 源码重新构建,旧问题会回归。M5 验证
-> 必须使用含修复的二进制,并在计划文档中记录所用二进制 commit。
+> 当前 master 用**dot_item 方案**,验证结论:
+> - 015-notes 的 `api.at`/`notes_store.at` 可正常编译(旧条目所述的 overflow 不再发生);
+> - 我们的 `back/api.at` 编译通过(2000KB 栈内);
+> - `store` 声明、`.field = expr` 赋值(handler/computed)均正常;
+> - player.at 解析栈需求 2000KB,与修复前相同(零回归)。
 
 ### `[][]T` 嵌套数组类型不被支持
 
