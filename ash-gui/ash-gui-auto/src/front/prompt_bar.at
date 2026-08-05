@@ -1,0 +1,114 @@
+// front/prompt_bar.at — 命令输入栏 widget
+// Plan 043 M3: 反向生成自 PromptBar.vue
+//
+// 底部输入栏:补全建议行 + ❯ prompt + cwd + 输入框(ghost text + 语法高亮)。
+// 支持:↑↓ 历史、Ctrl+R 搜索、Ctrl+F 接受建议、Tab 补全、多行续行。
+
+use shell_store: ShellStore
+use history_search: HistorySearch
+use types: CompletionItem
+
+widget PromptBar {
+    msg Msg { Run(str), Injected, Clear, Exit,
+              HistoryOlder, HistoryNewer,
+              PickCompletion(CompletionItem),
+              ToggleHistorySearch,
+              AcceptGhost, AcceptGhostWord }
+
+    model {
+        var input str = ""
+        var history_cursor int = -1
+        var in_continuation bool = false
+        var history_open bool = false
+        var suggestions []CompletionItem = []
+    }
+
+    // props: cwd str, home str, command_names []str,
+    //        history []str, injected_command str,
+    //        on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg
+
+    view {
+        col {
+            style: "border-t border-border bg-background/80 px-3 py-2 gap-1"
+
+            // 补全建议行(Plan 041 M7)
+            if .suggestions.len() > 0 {
+                row {
+                    style: "flex-wrap gap-1.5"
+                    for s in .suggestions {
+                        button .s.display {
+                            onclick: .PickCompletion(.s)
+                            style: "text-xs font-mono-ash px-2 py-0.5 rounded bg-muted/60 hover:bg-muted text-sky-300"
+                        }
+                    }
+                }
+            }
+
+            // 输入行:❯ cwd + textarea
+            row {
+                style: "relative items-center gap-2"
+                style: if .in_continuation { "text-amber-400" } else { "text-emerald-500" }
+
+                // 历史搜索弹层
+                HistorySearch(
+                    history: .history,
+                    open: .history_open,
+                    on_run: .Run,
+                    on_close: .ToggleHistorySearch
+                )
+
+                text "❯" {
+                    style: "font-mono-ash select-none shrink-0"
+                }
+                text .cwd_display {
+                    style: "text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate"
+                }
+
+                // 输入框(ghost text + 语法高亮在 Vue 版用 overlay 实现)
+                input .input {
+                    oninput: .Run
+                    style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
+                    placeholder: "type a command…"
+                }
+            }
+        }
+    }
+
+    on {
+        .Run(cmd) -> {
+            if .input.trim() != "" {
+                store.RunCommand(.input)
+                .input = ""
+                .history_cursor = -1
+                .suggestions = []
+            }
+        }
+
+        .PickCompletion(item) -> {
+            // 替换最后一个 token
+            var parts []str = .input.split(" ")
+            parts[parts.len() - 1] = item.replacement
+            .input = parts.join(" ")
+        }
+
+        .ToggleHistorySearch -> {
+            .history_open = !.history_open
+        }
+
+        .Clear -> {
+            .input = ""
+            .history_cursor = -1
+            .suggestions = []
+            .history_open = false
+            .in_continuation = false
+        }
+
+        .AcceptGhost -> {
+            // ghost text 接受逻辑(从 ghost_text computed 取值)
+        }
+
+        .AcceptGhostWord -> {
+            // ghost text 按词接受
+        }
+    }
+}

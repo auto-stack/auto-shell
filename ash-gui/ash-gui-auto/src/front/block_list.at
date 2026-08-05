@@ -1,0 +1,52 @@
+// front/block_list.at — Block 滚动列表 widget
+// Plan 043 M3: 反向生成自 BlockList.vue
+//
+// 可滚动列表,展示每个命令的 BlockItem 卡片,最新的在底部。
+// 自动滚动到最新 block。
+
+use block_item: BlockItem
+use types: Block
+
+widget BlockList {
+    msg Msg { OpenPath(str), Rerun(str), Stop }
+
+    // props: blocks List<Block>, home str,
+    //        on_open_path: msg, on_rerun: msg, on_stop: msg
+
+    view {
+        col {
+            style: "flex-1 overflow-y-auto p-3 gap-2.5"
+
+            if .blocks.len() == 0 {
+                col {
+                    style: "h-full items-center justify-center"
+                    col {
+                        style: "text-center gap-1"
+                        text "No commands yet" {
+                            style: "text-sm text-muted-foreground"
+                        }
+                        text "Type a command below, e.g. ls -al" {
+                            style: "text-xs text-muted-foreground/60"
+                        }
+                    }
+                }
+            }
+
+            for b in .blocks {
+                BlockItem(
+                    block: .b,
+                    home: .home,
+                    on_open_path: .OpenPath,
+                    on_rerun: .Rerun,
+                    on_stop: .Stop
+                )
+            }
+        }
+    }
+
+    on {
+        .OpenPath(path) -> { }
+        .Rerun(cmd) -> { }
+        .Stop -> { }
+    }
+}
