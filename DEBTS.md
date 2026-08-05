@@ -177,23 +177,26 @@ parser(parser.rs:12515)解析后是 `else_body` 内嵌套的单 Conditional,链�
 
 **来源**:Plan 043 M5 闭环验证(shell_store.at)。
 
-**现状**:`var git_info PromptContext = PromptContext{ git_branch: "", git_status: None }`
-这种**结构体字面量初始化**在 `PromptContext` 是 `use types:` 导入的类型(而非当前文件
-`type` 块声明)时,报 "Expected term, got RBrace"。实测最小复现:本地 `type P {...}`
-声明后 `var x P = P{...}` **可解析**;但 `P` 未声明或仅 `use types: P` 导入时**失败**。
+**现状**:**2026-08-06 已解决**——auto-lang worktree `fix/043-m5-lang-limits`
+(commit `16f8188f`)根因是 `atom()`(parser.rs:3103)把 `Ident {` 的结构体构造
+门控在 `is_type`(`lookup_ident_type`),而导入类型未解析时返回 `None` → 跳过
+构造分支 → `{...}` 残留导致 desync。放宽:在 **UI scenario** 下,PascalCase 且
+非已知变量(`Meta::Store`/`Meta::Ref`)的 ident 也接受 `{...}` 构造——与 013-todo/
+015-notes 里 `Todo{...}`/`Note{...}` 的既有用法一致。**仅限 UI scenario**:
+gdscript 等其他 dialect 复用 atom(),放开会重解释它们的 `Ident {` 导致栈溢出。
+小写 ident 永远是普通变量。
 
-**根因**:parser 的结构体字面量构造路径(`Ident {` 在表达式上下文的识别,`lhs_expr`/
-`expr_pratt`)依赖 `lookup_type`/`type_store` 把 `P` 识别为已知类型才走 struct-literal
-分支;`use types:` 导入在单文件解析里没有把类型注册进 type_store,导致 `P{` 被当作
-普通 Ident,后面 `{...}` 解析 desync。handler/computed 里同理。这是一个跨文件符号
-解析 + 表达式构造的耦合问题,不是几行能补的。
+**顺带修复(同一闭环发现)**:on-handler 多参数绑定 bug(commit `d6517a27`)。
+`parse_on_block` 收集 handler 参数 token 后只保留**偶数下标**(假设 `name type` 成对),
+对裸参数 `.RunSmart(block_id, name, args)` 会丢掉 `name`/`cursor` → codegen 报
+`UndefinedVariable`。改为按逗号分组,每组取首 token(名),丢弃可选的 type。
 
-**影响**:`shell_store.at` 整体仍编译失败(仅此一处:`git_info` 的初始化)。这是
-Plan 043 M5 当前**唯一剩余的 auto-lang 阻塞点**(其他 4 项——msg 多参数、computed
-多行 body、view None 比较、else-if 链——已解决,见上)。临时绕过:把 `git_info` 的
-初始化改成 `PromptContext{...}` 之外的形式(如 `List<T>.new([])` 风格),或把
-`PromptContext` 的字段默认值用 `on Init` handler 在运行时填充。
+**验证**:`shell_store.at` 现完整解析通过(所有 .at 文件零 parse error;
+仅 `types.at` 报"No widget or store declarations"——那是纯类型文件,非组件,预期)。
+6 项 Plan 043 M5 auto-lang 限制全部解决(msg 多参数 / computed 多行 body /
+view None 比较 / else-if 链 / struct-literal init / handler 多参数)。
 
-**推翻条件**:auto-lang parser 让 `use types:` 导入的类型在 struct-literal 构造
-(`Name { fields }`)时被识别(或引入显式的结构体构造语法,与 view 元素 `tag {}`
-不冲突)。
+**剩余观察(非 parser 阻塞,记录备查)**:store 声明(`store ShellStore`)解析通过,
+但 codegen **未生成** `@/stores/useShellStoreStore.ts` 模块(App.vue/PromptBar.vue
+引用它,导致 `vue-tsc` 报 `Cannot find module`)。这是 codegen 的 store→TS 模块
+发射功能缺失,与本次 parser 修复无关,单独处理。
