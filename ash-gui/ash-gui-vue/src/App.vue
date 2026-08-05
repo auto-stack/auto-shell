@@ -26,6 +26,7 @@ const {
   runCommand,
   runSmartCommand,
   cancelCommand,
+  complete,
   openPath,
 } = isTauri ? useShell() : useShellMock()
 
@@ -106,6 +107,7 @@ function onStop() {
         :command-names="commandNames"
         :history="history"
         :injected-command="injectedCommand"
+        :complete="complete"
         @run="runCommand($event)"
         @injected="onInjected"
       />

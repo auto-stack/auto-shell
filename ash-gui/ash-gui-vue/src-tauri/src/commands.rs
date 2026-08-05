@@ -8,7 +8,7 @@
 
 use tauri::State;
 
-use crate::shell_worker::{read_history, BootSnapshot, BootState, ShellHandle};
+use crate::shell_worker::{read_history, BootSnapshot, BootState, CompletionItem, ShellHandle};
 
 /// Submit a command for the given block id. Non-blocking: the result arrives as
 /// a `command-result` Tauri event when the Shell worker finishes.
@@ -19,6 +19,20 @@ pub fn run_command(
     shell: State<'_, ShellHandle>,
 ) {
     shell.submit(block_id, cmd);
+}
+
+/// Plan 041 M7: produce completions for `line` at `cursor`. Routes to the
+/// worker thread, which runs the shared completion engine
+/// (`auto_shell::completions::engine::complete`) with the live Shell state
+/// (cwd/history/aliases) — the same engine CLI/TUI use. Returns serialized
+/// candidates for the frontend to render.
+#[tauri::command]
+pub async fn complete(
+    line: String,
+    cursor: usize,
+    shell: State<'_, ShellHandle>,
+) -> Result<Vec<CompletionItem>, String> {
+    shell.complete(line, cursor).await
 }
 
 /// Plan 040 M5: cancel the currently running command. The worker checks its

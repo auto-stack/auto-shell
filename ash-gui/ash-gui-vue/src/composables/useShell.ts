@@ -23,6 +23,7 @@ import type {
   CommandResultPayload,
   CommandOutputPayload,
   CommandListResult,
+  CompletionItem,
   ToolEntry,
   SmartCommandEntry,
 } from '@/types/shell'
@@ -169,6 +170,16 @@ export function useShell() {
     await invoke('open_path', { path })
   }
 
+  /** Plan 041 M7: produce completions via the shared backend engine (same one
+   * CLI/TUI use). Returns candidates with description/kind for richer rendering. */
+  async function complete(line: string, cursor: number): Promise<CompletionItem[]> {
+    try {
+      return await invoke<CompletionItem[]>('complete', { line, cursor })
+    } catch {
+      return []
+    }
+  }
+
   onUnmounted(() => {
     unlistenResult?.()
     unlistenOutput?.()
@@ -185,6 +196,7 @@ export function useShell() {
     runCommand,
     runSmartCommand,
     cancelCommand,
+    complete,
     openPath,
   }
 }

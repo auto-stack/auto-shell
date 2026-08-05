@@ -3,9 +3,14 @@
  * PromptBar — the bottom command input. Fixes the iced prototype's "没 prompt"
  * and "不知当前目录": shows a ❯ prompt symbol + the cwd, with a completion
  * suggestion row and ↑/↓ history navigation.
+ *
+ * Plan 041 M7: completion candidates come from the shared backend engine
+ * (the same one CLI/TUI use) via the `complete` prop — file paths, flags,
+ * subcommands, descriptions — not just a command-name prefix filter.
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { abbrevPath } from '@/lib/path'
+import type { CompletionItem } from '@/types/shell'
 
 const cwdDisplay = computed(() => abbrevPath(props.cwd, props.home))
 
@@ -17,6 +22,9 @@ const props = defineProps<{
   history: string[]
   /** When set (non-empty), the input is replaced with this command once. */
   injectedCommand?: string
+  /** Plan 041 M7: backend completion (shared engine). Returns candidates with
+   * description/kind for richer rendering than a prefix filter. */
+  complete?: (line: string, cursor: number) => Promise<CompletionItem[]>
 }>()
 
 const emit = defineEmits<{
@@ -28,16 +36,41 @@ const input = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
 const historyCursor = ref<number | null>(null)
 
-// Completion suggestions: match the first token (command name) as a prefix.
-const suggestions = computed(() => {
-  const first = input.value.split(/\s+/)[0] ?? ''
-  if (!first) return [] as string[]
-  return props.commandNames.filter((n) => n.startsWith(first)).slice(0, 8)
-})
+// Plan 041 M7: completion candidates from the shared backend engine. Async —
+// fetched (debounced) on input change. Falls back to a local command-name
+// prefix filter if no `complete` prop (e.g. during early boot).
+const suggestions = ref<CompletionItem[]>([])
+let completeTimer: ReturnType<typeof setTimeout> | null = null
+let completeSeq = 0
 
-// Reset history cursor whenever the user types.
+function refreshCompletions() {
+  const line = input.value
+  // No backend: fall back to the old command-name prefix filter.
+  if (!props.complete) {
+    const first = line.split(/\s+/)[0] ?? ''
+    suggestions.value = first
+      ? props.commandNames
+          .filter((n) => n.startsWith(first))
+          .slice(0, 8)
+          .map((n) => ({ replacement: n, display: n, description: null, kind: 'command' }))
+      : []
+    return
+  }
+  // Debounce: the backend engine may probe `--help` (cache-after-first), so we
+  // avoid firing on every keystroke. 80ms feels instant yet coalesces typing.
+  if (completeTimer) clearTimeout(completeTimer)
+  const seq = ++completeSeq
+  completeTimer = setTimeout(async () => {
+    const items = await props.complete!(line, line.length)
+    // Drop stale results if the user typed past this fetch.
+    if (seq === completeSeq) suggestions.value = items.slice(0, 8)
+  }, 80)
+}
+
+// Reset history cursor + refresh completions whenever the user types.
 watch(input, () => {
   historyCursor.value = null
+  refreshCompletions()
 })
 
 // Inject a command from the sidebar (or elsewhere) into the input.
@@ -61,6 +94,7 @@ function run() {
   if (!cmd.trim()) return
   input.value = ''
   historyCursor.value = null
+  suggestions.value = []
   emit('run', cmd)
 }
 
@@ -79,9 +113,17 @@ function navigateHistory(older: boolean) {
   input.value = props.history[next] ?? ''
 }
 
-function pickCompletion(name: string) {
-  const rest = input.value.split(/\s+/).slice(1).join(' ')
-  input.value = rest ? `${name} ${rest}` : name
+/** Apply a completion: replace the last token with the candidate's replacement. */
+function pickCompletion(item: CompletionItem) {
+  const parts = input.value.split(/\s+/)
+  // Replace the last token (the one being completed).
+  parts[parts.length - 1] = item.replacement
+  input.value = parts.join(' ')
+  nextTick(() => {
+    inputEl.value?.focus()
+    const len = input.value.length
+    inputEl.value?.setSelectionRange(len, len)
+  })
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -97,15 +139,19 @@ function onKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="border-t border-border bg-background/80 backdrop-blur px-3 py-2 space-y-1">
-    <!-- Completion suggestions -->
+    <!-- Completion suggestions (Plan 041 M7: from the shared backend engine) -->
     <div v-if="suggestions.length" class="flex flex-wrap gap-1.5">
       <button
-        v-for="s in suggestions"
-        :key="s"
+        v-for="(s, idx) in suggestions"
+        :key="s.replacement + idx"
         @click="pickCompletion(s)"
-        class="text-xs font-mono-ash px-2 py-0.5 rounded bg-muted/60 hover:bg-muted text-sky-300 transition-colors"
+        :title="s.description ?? ''"
+        class="text-xs font-mono-ash px-2 py-0.5 rounded bg-muted/60 hover:bg-muted text-sky-300 transition-colors flex items-baseline gap-1"
       >
-        {{ s }}
+        <span>{{ s.display }}</span>
+        <span v-if="s.description" class="text-[10px] text-muted-foreground/60 truncate max-w-[12rem]">
+          {{ s.description }}
+        </span>
       </button>
     </div>
     <!-- Input row: ❯ cwd + input -->

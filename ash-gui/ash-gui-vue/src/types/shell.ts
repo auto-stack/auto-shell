@@ -114,3 +114,19 @@ export interface CommandListResult {
   commands: ToolEntry[]
   smart_commands: SmartCommandEntry[]
 }
+
+// ── Plan 041 M7: completion (shared engine, serialized for the frontend) ────
+
+/** One completion candidate from the shared backend engine. Mirrors the Rust
+ * `CompletionItem` (shell_worker.rs) — itself a serialization of the core
+ * `auto_shell::completions::Completion` type. */
+export interface CompletionItem {
+  /** What to insert into the input. */
+  replacement: string
+  /** What to show in the completion menu (may differ from replacement). */
+  display: string
+  /** Optional one-line description (e.g. "Reverse sort order" for -r). */
+  description: string | null
+  /** Semantic kind: command / file / flag / directory / variable / ... */
+  kind: string
+}

@@ -17,6 +17,10 @@ pub use ash_core::completions::{
 // the ash-tui crate (`ash_tui::completions_reedline`). The dep-free completion
 // types/specs below stay here.
 
+// Plan 041 M7: the frontend-agnostic completion engine — sinks the orchestration
+// logic out of ShellCompleter so TUI (reedline) and GUI (Tauri) share one engine.
+pub mod engine;
+
 // Plan 315: three-tier spec loading + runtime probe helpers.
 pub mod spec_tiers;
 

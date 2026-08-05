@@ -14,6 +14,7 @@ import type {
   RenderedCell,
   ToolEntry,
   SmartCommandEntry,
+  CompletionItem,
 } from '@/types/shell'
 
 // ── Canned outputs keyed by command ──────────────────────────────────────────
@@ -172,6 +173,15 @@ export function useShellMock() {
     // no-op in browser preview
   }
 
+  /** Plan 041 M7 mock: return command-name completions for browser preview. */
+  async function complete(line: string, _cursor: number): Promise<CompletionItem[]> {
+    const first = line.split(/\s+/)[0] ?? ''
+    return commandNames.value
+      .filter((n) => n.startsWith(first))
+      .slice(0, 8)
+      .map((n) => ({ replacement: n, display: n, description: null, kind: 'command' }))
+  }
+
   return {
     blocks,
     cwd,
@@ -183,6 +193,7 @@ export function useShellMock() {
     runCommand,
     runSmartCommand,
     cancelCommand,
+    complete,
     openPath,
   }
 }

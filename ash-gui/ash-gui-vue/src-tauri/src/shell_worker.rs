@@ -49,6 +49,30 @@ pub enum CommandReq {
         args: Vec<String>,
         reply: tokio::sync::oneshot::Sender<SmartResult>,
     },
+    /// Plan 041 M7: produce completions for `line` at `cursor`, using the
+    /// worker's live Shell state (cwd/history/aliases). Runs the shared
+    /// completion engine (`auto_shell::completions::engine::complete`) on the
+    /// worker thread so the provider/specs stay in sync with the session.
+    Complete {
+        line: String,
+        cursor: usize,
+        reply: tokio::sync::oneshot::Sender<Vec<CompletionItem>>,
+    },
+}
+
+/// Plan 041 M7: one completion candidate, serialized for the frontend. Mirrors
+/// `auto_shell::completions::Completion` (terminal-independent core type).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct CompletionItem {
+    /// What to insert into the input.
+    pub replacement: String,
+    /// What to show in the completion menu (may differ from replacement).
+    pub display: String,
+    /// Optional one-line description (e.g. "Reverse sort order" for `-r`).
+    pub description: Option<String>,
+    /// Semantic kind: command / file / flag / directory / variable / ...
+    pub kind: String,
 }
 
 /// Reply to a `RunSmart` request (Plan 040 M3).
@@ -76,6 +100,21 @@ impl ShellHandle {
     /// Submit a command (non-blocking). The result comes back as a Tauri event.
     pub fn submit(&self, block_id: usize, cmd: String) {
         let _ = self.tx.send(CommandReq::Run { block_id, cmd });
+    }
+
+    /// Plan 041 M7: produce completions on the worker's Shell (live cwd/
+    /// history/aliases). Blocks until the worker finishes and replies. Returns
+    /// the shared engine's candidates, serialized for the frontend.
+    pub async fn complete(&self, line: String, cursor: usize) -> Result<Vec<CompletionItem>, String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(CommandReq::Complete {
+                line,
+                cursor,
+                reply: reply_tx,
+            })
+            .map_err(|_| "worker channel closed".to_string())?;
+        reply_rx.await.map_err(|_| "worker dropped reply".to_string())
     }
 
     /// Plan 040 M3: run a SmartCommand by name on the worker's Shell (preserves
@@ -183,6 +222,17 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                 let snapshot = harvest_boot(&shell, &app_for_thread);
                 *boot_for_thread.lock().await = Some(snapshot);
 
+                // Plan 041 M7: build the completion engine's inputs once (mirrors
+                // repl.rs:89-95): registry signatures + a CompletionProvider with
+                // built-in + tier + plugin specs. These live on the worker thread
+                // (alongside the Shell) and feed `engine::complete` on each request.
+                let completion_sigs: Vec<auto_shell::completions::CompletionSignature> =
+                    shell.registry().params().into_iter().map(Into::into).collect();
+                let mut completion_provider = auto_shell::completions::CompletionProvider::new();
+                auto_shell::completions::definitions::register_all(&mut completion_provider);
+                // Tier specs (generated > user > plugin), same overlay as ShellCompleter.
+                load_tier_specs(&mut completion_provider);
+
                 // Main loop: receive commands, run them, emit results.
                 while let Some(req) = rx.recv().await {
                     match req {
@@ -255,6 +305,22 @@ pub fn spawn(app: AppHandle) -> ShellHandle {
                             }
                             let _ = reply.send(result);
                         }
+                        CommandReq::Complete { line, cursor, reply } => {
+                            // Plan 041 M7: run the shared completion engine on the
+                            // worker thread (live cwd/history/aliases), return
+                            // serialized candidates to the frontend.
+                            let ctx = completion_ctx(&shell);
+                            let completions = auto_shell::completions::engine::complete(
+                                &line,
+                                cursor,
+                                &completion_sigs,
+                                &mut completion_provider,
+                                &ctx,
+                            );
+                            let items: Vec<CompletionItem> =
+                                completions.into_iter().map(completion_to_item).collect();
+                            let _ = reply.send(items);
+                        }
                     }
                 }
             });
@@ -305,7 +371,64 @@ pub(crate) fn init_shell(shell: &mut auto_shell::Shell) {
     }
 }
 
-/// Snapshot produced at boot for completion + the tool sidebar.
+/// Plan 041 M7: load generated → user → plugin tier completion specs into the
+/// provider (override order: plugin > user > generated > built-in). Mirrors
+/// `ShellCompleter::load_tier_specs` (ash-tui) so GUI + TUI resolve the same specs.
+fn load_tier_specs(provider: &mut auto_shell::completions::CompletionProvider) {
+    if let Some(dir) = auto_shell::completions::spec_tiers::generated_dir() {
+        for spec in auto_shell::completions::spec_tiers::load_dir(&dir) {
+            provider.register(spec);
+        }
+    }
+    if let Some(dir) = auto_shell::completions::spec_tiers::user_dir() {
+        for spec in auto_shell::completions::spec_tiers::load_dir(&dir) {
+            provider.register(spec);
+        }
+    }
+    for dir in auto_shell::plugin::loader::enabled_plugin_completion_dirs() {
+        for spec in auto_shell::completions::spec_tiers::load_dir(&dir) {
+            provider.register(spec);
+        }
+    }
+}
+
+/// Plan 041 M7: snapshot the worker Shell's live state into the engine's
+/// context type (cwd / last command / exit code / history / aliases).
+fn completion_ctx(shell: &auto_shell::Shell) -> auto_shell::completions::engine::CompletionCtx {
+    // Recent history (bounded window, same as repl.rs:362-365 `sync_completion_state`).
+    let history = history_file()
+        .map(|p| read_recent_history(&p, 50))
+        .unwrap_or_default();
+    auto_shell::completions::engine::CompletionCtx {
+        current_dir: shell.pwd().to_path_buf(),
+        last_command: shell.last_command_line().map(String::from),
+        last_exit_code: Some(shell.last_exit_code()),
+        history,
+        aliases: shell.aliases().clone(),
+    }
+}
+
+/// Plan 041 M7: map the engine's core `Completion` to the serialized
+/// `CompletionItem` the frontend receives.
+fn completion_to_item(c: auto_shell::completions::Completion) -> CompletionItem {
+    use auto_shell::completions::CompletionKind;
+    let kind = match c.kind {
+        CompletionKind::Command => "command",
+        CompletionKind::External => "external",
+        CompletionKind::File => "file",
+        CompletionKind::Directory => "directory",
+        CompletionKind::Variable => "variable",
+        CompletionKind::Flag => "flag",
+        CompletionKind::Subcommand => "subcommand",
+        CompletionKind::AiSuggested => "ai",
+    };
+    CompletionItem {
+        replacement: c.replacement,
+        display: c.display,
+        description: c.description,
+        kind: kind.to_string(),
+    }
+}
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub struct BootSnapshot {
@@ -760,4 +883,32 @@ pub fn read_history() -> Vec<String> {
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect()
+}
+
+/// Read the last `n` history entries (Plan 041 M7, for completion context).
+/// Mirrors `ash-tui/src/repl.rs::read_recent_history`. Returns oldest-first.
+fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let all = read_history_file(path);
+    let len = all.len();
+    if len <= n {
+        all
+    } else {
+        all[len - n..].to_vec()
+    }
+}
+
+/// Read history entries from a file (one command per line). Mirrors
+/// `ash-tui/src/repl.rs::read_history_file`.
+fn read_history_file(path: &std::path::Path) -> Vec<String> {
+    match std::fs::read_to_string(path) {
+        Ok(c) => c
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.to_string())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
