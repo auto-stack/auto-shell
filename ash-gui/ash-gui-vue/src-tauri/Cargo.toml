@@ -21,6 +21,11 @@ serde_json = "1.0"
 log = "0.4"
 # Worker-thread async runtime: drives the mpsc receiver + the boot snapshot lock.
 tokio = { version = "1", features = ["sync", "rt", "time", "rt-multi-thread"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Plan 042 M3: the unified backend — owns the Shell worker, serves both
+# Tauri IPC (here) and HTTP (browser version via ash-server binary).
+ash-server = { path = "../../ash-server" }
 
 # Shell engine + builtin commands (mirror of ash-gui-bin's deps, minus iced).
 ash-core = { path = "../../../ash-core" }
