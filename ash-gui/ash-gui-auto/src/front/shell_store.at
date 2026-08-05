@@ -1,0 +1,175 @@
+// front/shell_store.at — Shell 状态管理 store
+// Plan 043 M2: 反向生成自 useShellTauri.ts + useShellHttp.ts
+//
+// 这个 store 封装了 Shell 后端的所有交互:命令执行、补全、历史、流式输出。
+// transport 选择(HTTP vs Tauri)不在 .at 里——由 codegen target 决定
+// (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
+// 同一份 api.at,生成不同 transport 的代码。
+
+use back.api: command_list, complete, run_command, run_smart, cancel, prompt_context, history, open_path, stream
+use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, CommandResult, CommandOutput, ShellEvent, SmartResult, RenderedOutput
+
+store ShellStore {
+    model {
+        // ── 核心状态 ──
+        var blocks List<Block> = List<Block>.new([])
+        var cwd str = ""
+        var home str = ""
+        var next_id int = 0
+
+        // ── Boot 数据 ──
+        var commands List<ToolEntry> = List<ToolEntry>.new([])
+        var smart_commands List<SmartCommandEntry> = List<SmartCommandEntry>.new([])
+        var command_names []str = []
+
+        // ── 历史持久化 (Plan 040 M6) ──
+        var persisted_history []str = []
+
+        // ── Prompt 上下文 (Plan 041 M5: git 分支/状态) ──
+        var git_info PromptContext = PromptContext{ git_branch: "", git_status: None }
+
+        // ── 侧栏开关 ──
+        var sidebar_open bool = true
+    }
+
+    msg Msg { Init, RunCommand(str), RunResult(CommandResult), RunOutput(CommandOutput),
+              Cancel, RunSmart(int, str, []str), Complete(str, int),
+              NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
+              SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen }
+
+    computed {
+        // ↑↓ 导航用的历史(文件历史 + 本次会话)
+        history => {
+            var result []str = []
+            result = result.concat(.persisted_history)
+            for b in .blocks {
+                if b.command != "" {
+                    result.push(b.command)
+                }
+            }
+            return result
+        }
+
+        // git label 格式化:⎇ main +2 !1 ?0
+        git_label => {
+            if .git_info.git_branch == "" {
+                return ""
+            }
+            var label str = "⎇ " + .git_info.git_branch
+            var s = .git_info.git_status
+            if s != None {
+                var parts []str = []
+                if s.staged > 0 { parts.push("+" + s.staged) }
+                if s.unstaged > 0 { parts.push("!" + s.unstaged) }
+                if s.untracked > 0 { parts.push("?" + s.untracked) }
+                if s.ahead > 0 { parts.push("⇡" + s.ahead) }
+                if s.behind > 0 { parts.push("⇣" + s.behind) }
+                if parts.len() > 0 {
+                    label = label + " " + parts.join(" ")
+                }
+            }
+            return label
+        }
+    }
+
+    on {
+        // ── 初始化:拉取 boot 数据 + 历史 + git ──
+        .Init -> {
+            var snap BootSnapshot = command_list()
+            .cwd = snap.cwd
+            .home = snap.home
+            .commands = snap.commands
+            .smart_commands = snap.smart_commands
+            .command_names = []
+            for c in snap.commands {
+                .command_names.push(c.name)
+            }
+            .command_names.sort()
+            .persisted_history = history()
+            .RefreshGit()
+        }
+
+        // ── 命令执行 ──
+        .RunCommand(cmd) -> {
+            var id int = .next_id
+            .next_id = .next_id + 1
+            var block Block = Block{
+                id: id,
+                command: cmd,
+                cwd: .cwd,
+                status: BlockStatus{ kind: "Running", message: "" },
+                output: None,
+                streamed_text: "",
+                duration_ms: 0
+            }
+            .blocks.push(block)
+            run_command(id, cmd)
+        }
+
+        // ── 流式输出块(逐行追加到 Running block) ──
+        .RunOutput(output) -> {
+            for b in .blocks {
+                if b.id == output.block_id {
+                    b.streamed_text = b.streamed_text + output.chunk
+                }
+            }
+        }
+
+        // ── 命令最终结果 ──
+        .RunResult(result) -> {
+            .cwd = result.cwd
+            .RefreshGit()
+            for b in .blocks {
+                if b.id == result.block_id {
+                    if result.status == "Success" {
+                        b.status = BlockStatus{ kind: "Success", message: "" }
+                        b.output = result.output
+                    } else {
+                        b.status = BlockStatus{ kind: "Failed", message: result.failed_message }
+                        b.output = None
+                    }
+                    b.streamed_text = ""
+                    b.duration_ms = result.duration_ms
+                }
+            }
+        }
+
+        // ── 取消 ──
+        .Cancel -> {
+            cancel()
+            for b in .blocks {
+                if b.status.kind == "Running" {
+                    b.status = BlockStatus{ kind: "Cancelled", message: "" }
+                }
+            }
+        }
+
+        // ── SmartCommand ──
+        .RunSmart(block_id, name, args) -> {
+            var result SmartResult = run_smart(block_id, name, args)
+            // 结果直接更新 block(同步返回)
+        }
+
+        // ── 补全(由 PromptBar 调用,返回候选) ──
+        .Complete(line, cursor) -> {
+            // 补全候选通过 return 值传给调用者
+            var items []CompletionItem = complete(line, cursor)
+            return items
+        }
+
+        // ── 刷新 git 信息 ──
+        .RefreshGit -> {
+            .git_info = prompt_context()
+        }
+
+        // ── 侧栏 ──
+        .ToggleSidebar -> {
+            .sidebar_open = !.sidebar_open
+        }
+
+        // ── 清屏(归档所有 blocks) ──
+        .ClearScreen -> {
+            .blocks = List<Block>.new([])
+        }
+    }
+}

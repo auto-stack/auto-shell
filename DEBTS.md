@@ -44,13 +44,14 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 ## auto-lang parser(`auto-lang/crates/auto-lang/src/parser.rs`)
 
-### `#[api]` 注解解析导致 stack overflow
+### `#[api]` 注解 + `store` 声明解析导致 stack overflow
 
-**来源**:Plan 043 M1(API 层反向生成)。
+**来源**:Plan 043 M1(API 层)+ M2(Store 层)。
 
-**现状**:`Parser::parse()` 解析含 `#[api(method = "GET", path = "/api/...")]` 注解的
-源码时,触发无限递归 → stack overflow。**015-notes 自己的 `api.at` 也会 overflow**,
-所以这是 pre-existing bug,不是我们的语法问题。
+**现状**:`Parser::parse()` 解析含 `#[api(...)]` 注解或 `store Name { ... }` 声明的
+源码时,触发无限递归 → stack overflow。**015-notes 自己的 `api.at` 和 `notes_store.at`
+也会 overflow**,所以这是 pre-existing bug,不是我们的语法问题。两个声明都会触发,
+很可能是同一条递归路径(属性/声明解析的某个分支)。
 
 **根因**:`#[api]` 属性解析路径(parser.rs `TokenKind::Hash` 分支)在某个递归调用中
 没有正确终止。需要用 `RUST_MIN_STACK` 或 gdb 调试定位具体递归点。
