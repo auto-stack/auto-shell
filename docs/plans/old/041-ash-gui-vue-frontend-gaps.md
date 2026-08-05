@@ -1,7 +1,7 @@
 # Plan 041: ash-gui-vue 前端差距 — 输入体验与后端能力复用
 
 > **日期**: 2026-08-04
-> **状态**: 📝 计划(待实施)
+> **状态**: ✅ **完成（归档 2026-08-05）** — M1-M8 全部交付。cargo check + vue-tsc 通过;ash-core 79/79、ash-tui 13/13、auto-shell 698/698 测试不回归。
 > **来源**: Plan 039/040 完成后的差距分析——对比 TUI/CLI ash 的输入体验 + 后端能力复用
 > **范围**: `ash-gui/ash-gui-vue/src/`(前端)+ `src-tauri/`(必要的后端桥接)+ `auto-shell`/`ash-tui` 下沉重构
 > **前置**: Plan 040 已完成(shell.execute 完整复用)
