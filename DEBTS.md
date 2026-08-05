@@ -39,3 +39,42 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 - 给 `http_*` 命令设默认超时(curl 无 `--max-time` 时默认 30s)。
 
 **推翻条件**:出现高频的、用户反复想取消的非外部命令,且上述替代补丁不足以缓解。
+
+---
+
+## auto-lang parser(`auto-lang/crates/auto-lang/src/parser.rs`)
+
+### `#[api]` 注解解析导致 stack overflow
+
+**来源**:Plan 043 M1(API 层反向生成)。
+
+**现状**:`Parser::parse()` 解析含 `#[api(method = "GET", path = "/api/...")]` 注解的
+源码时,触发无限递归 → stack overflow。**015-notes 自己的 `api.at` 也会 overflow**,
+所以这是 pre-existing bug,不是我们的语法问题。
+
+**根因**:`#[api]` 属性解析路径(parser.rs `TokenKind::Hash` 分支)在某个递归调用中
+没有正确终止。需要用 `RUST_MIN_STACK` 或 gdb 调试定位具体递归点。
+
+**影响**:Plan 043 的 API 层 `.at` 源码无法被 parser 验证。codegen 无法运行。
+
+**临时绕过**:先写 `.at` 源码(格式已确认与 015-notes 一致),等 parser 修复后批量验证。
+
+**推翻条件**:auto-lang parser 修复 `#[api]` 解析。
+
+### `[][]T` 嵌套数组类型不被支持
+
+**来源**:Plan 043 M1(types.at 反向生成)。
+
+**现状**:`parse_array_type`(parser.rs:8929)在解析完 `[]` 后调用 `parse_ident`(期望类型
+名如 `int`/`str`),而不是递归调用类型解析(会处理 `[`)。所以 `[][]str` 在第二个 `[`
+处失败:"Expected term, got RBrace"。
+
+**根因**:parser.rs:8951 `let type_name = self.parse_ident()?` 应该改为能递归解析
+嵌套 `[]` 的类型解析函数(如 `parse_type` 或 `parse_type_expr`)。
+
+**影响**:`RenderedOutput` 的 `rows [][]RenderedCell`、`code_lines [][]CodeSpan` 等
+嵌套数组类型必须用 `List<List<T>>` 替代(已确认可用)。
+
+**临时绕过**:`types.at` 中用 `List<List<T>>` 替代 `[][]T`(已应用)。
+
+**推翻条件**:auto-lang parser 的 `parse_array_type` 支持递归嵌套 `[][]T`。

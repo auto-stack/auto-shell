@@ -5,6 +5,15 @@
 // 后端的 pub type 定义在 back/api.at(共享);这里放前端专用的组合类型。
 
 // ═══════════════════════════════════════════════════════════
+// 类型别名
+// ═══════════════════════════════════════════════════════════
+
+alias AtomType = str
+alias FileNameKind = str
+alias CellTag = str
+alias RenderErrorKind = str
+
+// ═══════════════════════════════════════════════════════════
 // 渲染输出(RenderedOutput 家族)
 // ═══════════════════════════════════════════════════════════
 
@@ -21,12 +30,14 @@ type CodeSpan {
 /// 渲染单元格:纯文本 或 带标签的文本
 type RenderedCell {
     text str
-    tag str
+    tag CellTag
 }
 
 /// 渲染输出——命令执行结果的展示描述
 /// 在 Vue 里是 discriminated union;这里用 type + kind 字段表达。
 /// 真正的 union pattern matching 在 widget 层(view fn)处理。
+/// NOTE: [][]T 嵌套数组是 Auto parser 的已知 bug(parse_array_type 不递归),
+/// 临时用 List<List<T>> 替代。见 DEBTS.md。
 type RenderedOutput {
     kind str
     text str
@@ -36,7 +47,7 @@ type RenderedOutput {
     code_lines List<List<CodeSpan>>
     language str
     error_message str
-    atom_type str
+    atom_type AtomType
 }
 
 // ═══════════════════════════════════════════════════════════
