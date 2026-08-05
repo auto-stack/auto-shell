@@ -1,15 +1,27 @@
-//! ash-server binary — Plan 042 M1 placeholder.
+//! ash-server binary — the standalone HTTP backend for the browser version.
 //!
-//! M2 will add the axum HTTP server here. For now this just spawns the worker
-//! and exits, proving the crate compiles standalone.
+//! Spawns the Shell worker + an axum HTTP server on `0.0.0.0:3000`. The browser
+//! version (`npm run dev`) connects via vite proxy (`/api` → `localhost:3000`).
+//!
+//! Run: `cargo run -p ash-server` (from the ash-server workspace)
 
-fn main() {
-    println!("ash-server: spawning Shell worker (M2 will add HTTP server)...");
-    let _handle = ash_server::spawn();
-    println!("ash-server: worker spawned. Press Ctrl+C to exit.");
-    // Keep alive — the worker thread runs until the channel closes.
-    // M2 will replace this with an axum server that holds the handle.
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(60));
-    }
+use std::net::SocketAddr;
+
+#[tokio::main]
+async fn main() {
+    eprintln!("ash-server: spawning Shell worker...");
+    let shell = ash_server::spawn();
+
+    eprintln!("ash-server: boot data ready, starting HTTP server on :3000...");
+    let app = ash_server::http::create_router(shell);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("failed to bind :3000");
+    eprintln!("ash-server: listening on http://localhost:3000");
+
+    axum::serve(listener, app)
+        .await
+        .expect("server error");
 }

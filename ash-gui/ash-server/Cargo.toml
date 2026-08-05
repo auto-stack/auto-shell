@@ -21,19 +21,16 @@ ash-core = { path = "../../ash-core" }
 auto-shell = { path = "../../ash/auto-shell", default-features = false }
 
 # Async runtime + channels
-tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# HTTP server (M2 — axum)
-# axum = { version = "0.7", optional = true }
-# tower-http = { version = "0.5", features = ["cors"], optional = true }
-
-[features]
-# default = ["http"]
-# http = ["dep:axum", "dep:tower-http"]
+# HTTP server (M2 — axum + tower for CORS)
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # This crate is its OWN workspace (like ash-gui-vue/ash-gui-bin) so its
 # dependency graph does not unify into the shell's workspace.

@@ -1,0 +1,172 @@
+//! HTTP transport — axum routes + SSE streaming (Plan 042 M2).
+//!
+//! Exposes the Shell backend as a REST API + Server-Sent Events stream:
+//!
+//! | Method | Path | Body / Query | Returns |
+//! |--------|------|-------------|---------|
+//! | GET | `/api/command_list` | — | `BootSnapshot` JSON |
+//! | GET | `/api/history` | — | `Vec<String>` JSON |
+//! | POST | `/api/complete` | `{line, cursor}` | `Vec<CompletionItem>` |
+//! | GET | `/api/prompt_context` | — | `PromptContext` |
+//! | POST | `/api/run_command` | `{block_id, cmd}` | `{}` (result via SSE) |
+//! | POST | `/api/run_smart` | `{block_id, name, args}` | `String` |
+//! | POST | `/api/cancel` | — | `{}` |
+//! | POST | `/api/open_path` | `{path}` | `{}` |
+//! | GET | `/api/stream` | — | SSE stream of `ShellEvent` |
+//!
+//! The browser frontend uses `fetch` for request-response endpoints and
+//! `EventSource` for the `/api/stream` SSE channel.
+
+use std::convert::Infallible;
+
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{sse::{Event as SseEvent, KeepAlive, Sse}, IntoResponse, Json},
+    routing::{get, post},
+    Router,
+};
+use serde::Deserialize;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
+
+use crate::worker::ShellHandle;
+
+/// Shared state for all handlers — the Shell handle (Clone + Send).
+#[derive(Clone)]
+pub struct AppState {
+    pub shell: ShellHandle,
+}
+
+/// Build the axum router with all API routes + CORS.
+pub fn create_router(shell: ShellHandle) -> Router {
+    let state = AppState { shell };
+
+    Router::new()
+        .route("/api/command_list", get(command_list))
+        .route("/api/history", get(history))
+        .route("/api/complete", post(complete))
+        .route("/api/prompt_context", get(prompt_context))
+        .route("/api/run_command", post(run_command))
+        .route("/api/run_smart", post(run_smart))
+        .route("/api/cancel", post(cancel))
+        .route("/api/open_path", post(open_path))
+        .route("/api/stream", get(stream_sse))
+        .with_state(state)
+}
+
+// ── Handlers ────────────────────────────────────────────────────────────────
+
+async fn command_list(State(state): State<AppState>) -> impl IntoResponse {
+    match state.shell.command_list().await {
+        Ok(snap) => Json(snap).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+async fn history(State(_state): State<AppState>) -> impl IntoResponse {
+    Json(crate::worker::read_history())
+}
+
+#[derive(Deserialize)]
+struct CompleteBody {
+    line: String,
+    cursor: usize,
+}
+
+async fn complete(
+    State(state): State<AppState>,
+    Json(body): Json<CompleteBody>,
+) -> impl IntoResponse {
+    match state.shell.complete(body.line, body.cursor).await {
+        Ok(items) => Json(items).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+async fn prompt_context(State(state): State<AppState>) -> impl IntoResponse {
+    match state.shell.prompt_context().await {
+        Ok(ctx) => Json(ctx).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct RunCommandBody {
+    block_id: usize,
+    cmd: String,
+}
+
+async fn run_command(
+    State(state): State<AppState>,
+    Json(body): Json<RunCommandBody>,
+) -> impl IntoResponse {
+    // Non-blocking — result arrives via the SSE stream.
+    state.shell.run_command(body.block_id, body.cmd);
+    StatusCode::OK
+}
+
+#[derive(Deserialize)]
+struct RunSmartBody {
+    block_id: usize,
+    name: String,
+    args: Vec<String>,
+}
+
+async fn run_smart(
+    State(state): State<AppState>,
+    Json(body): Json<RunSmartBody>,
+) -> impl IntoResponse {
+    match state.shell.run_smart(body.block_id, body.name, body.args).await {
+        Ok(result) => match result.error {
+            Some(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+            None => Json(result.output).into_response(),
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+async fn cancel(State(state): State<AppState>) -> impl IntoResponse {
+    state.shell.cancel();
+    StatusCode::OK
+}
+
+#[derive(Deserialize)]
+struct OpenPathBody {
+    path: String,
+}
+
+async fn open_path(Json(body): Json<OpenPathBody>) -> impl IntoResponse {
+    let _ = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &body.path])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(&body.path).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(&body.path).spawn()
+    };
+    StatusCode::OK
+}
+
+// ── SSE streaming ───────────────────────────────────────────────────────────
+
+/// SSE endpoint: subscribes to the Shell worker's event broadcast and forwards
+/// each `ShellEvent` as an SSE frame. The browser uses `EventSource('/api/stream')`.
+///
+/// Each frame is `data: <json of ShellEvent>\n\n`. The `ShellEvent` enum is
+/// tagged with `#[serde(tag = "event")]` so the frontend can discriminate by
+/// event type.
+async fn stream_sse(State(state): State<AppState>) -> Sse<impl tokio_stream::Stream<Item = Result<SseEvent, Infallible>>> {
+    let rx = state.shell.subscribe();
+    // BroadcastStream wraps the broadcast receiver into a Stream, handling
+    // Lagged errors gracefully (skips them).
+    let s = BroadcastStream::new(rx).filter_map(|result| {
+        result.ok().map(|event| {
+            let json = serde_json::to_string(&event).unwrap_or_default();
+            Ok(SseEvent::default().data(json))
+        })
+    });
+
+    Sse::new(s).keep_alive(KeepAlive::default())
+}
