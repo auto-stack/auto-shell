@@ -34,8 +34,10 @@ const emit = defineEmits<{
 }>()
 
 const input = ref('')
-const inputEl = ref<HTMLInputElement | null>(null)
+const inputEl = ref<HTMLTextAreaElement | null>(null)
 const historyCursor = ref<number | null>(null)
+// Plan 041 M3: multiline continuation state.
+const inContinuation = ref(false)
 // Plan 041 M1: Ctrl+R history-search popover.
 const historyOpen = ref(false)
 
@@ -74,7 +76,45 @@ function refreshCompletions() {
 watch(input, () => {
   historyCursor.value = null
   refreshCompletions()
+  // Plan 041 M3: track continuation state — `·` prompt when input is incomplete.
+  inContinuation.value = needsContinuation(input.value)
 })
+
+/** Plan 041 M3: the prompt symbol — `❯` normally, `·` during continuation.
+ * Mirrors the TUI's continuation prompt (repl.rs:913). */
+const promptSymbol = computed(() => (inContinuation.value ? '·' : '❯'))
+
+/**
+ * Plan 041 M3: detect unclosed delimiters / trailing backslash. Mirrors
+ * `auto_shell::repl_mode::needs_continuation` (repl_mode.rs:96). Pure string
+ * analysis — no backend round-trip, so the prompt flips instantly.
+ */
+function needsContinuation(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  // 1. Trailing backslash (shell line continuation).
+  if (trimmed.endsWith('\\')) return true
+  // 2. Unclosed delimiters: { } ( ) [ ] and quotes.
+  let brace = 0, paren = 0, bracket = 0
+  let inSingle = false, inDouble = false
+  const chars = [...trimmed]
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]
+    // Skip escaped chars inside double quotes.
+    if (inDouble && c === '\\' && i + 1 < chars.length) { i++; continue }
+    switch (c) {
+      case "'": if (!inDouble) inSingle = !inSingle; break
+      case '"': if (!inSingle) inDouble = !inDouble; break
+      case '{': if (!inSingle && !inDouble) brace++; break
+      case '}': if (!inSingle && !inDouble) brace--; break
+      case '(': if (!inSingle && !inDouble) paren++; break
+      case ')': if (!inSingle && !inDouble) paren--; break
+      case '[': if (!inSingle && !inDouble) bracket++; break
+      case ']': if (!inSingle && !inDouble) bracket--; break
+    }
+  }
+  return brace > 0 || paren > 0 || bracket > 0 || inSingle || inDouble
+}
 
 // Inject a command from the sidebar (or elsewhere) into the input.
 watch(
@@ -99,7 +139,42 @@ function run() {
   historyCursor.value = null
   suggestions.value = []
   historyOpen.value = false
+  inContinuation.value = false
   emit('run', cmd)
+}
+
+/** Plan 041 M3: auto-grow the textarea to fit its content (1–6 lines). */
+function autoGrow() {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 168) + 'px' // cap ~6 lines
+}
+
+/** Plan 041 M3: Enter handler — insert a newline if the input needs
+ * continuation (unclosed delimiters / trailing `\`), otherwise run. Mirrors
+ * repl.rs:903-929. Strips a trailing backslash and joins with a space (shell
+ * line-continuation semantics). */
+function onEnter(e: KeyboardEvent) {
+  if (historyOpen.value) return // let the popover's own handler take it
+  if (needsContinuation(input.value + '\n')) {
+    // Allow the newline — the textarea inserts it by default.
+    // Strip trailing backslash + join with space (repl.rs:907-909 semantics):
+    // the *next* line continues the command.
+    return
+  }
+  // Not continuing — run the command. The trailing backslash case (user typed
+  // `foo \` then Enter with nothing unclosed) should still run after stripping.
+  e.preventDefault()
+  const trimmed = input.value.replace(/\\\n/g, ' ').replace(/\\\s*$/, '')
+  if (trimmed.trim()) {
+    input.value = ''
+    historyCursor.value = null
+    suggestions.value = []
+    historyOpen.value = false
+    inContinuation.value = false
+    emit('run', trimmed)
+  }
 }
 
 /** Plan 041 M1: run a command selected from the history-search popover. */
@@ -259,7 +334,7 @@ function acceptGhostWord() {
         @run="runFromHistory"
         @close="historyOpen = false"
       />
-      <span class="text-emerald-500 font-mono-ash select-none shrink-0">❯</span>
+      <span class="text-emerald-500 font-mono-ash select-none shrink-0" :class="{ 'text-amber-400': inContinuation }">{{ promptSymbol }}</span>
       <span class="text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate" :title="props.cwd">
         {{ props.cwd ? cwdDisplay : '…' }}
       </span>
@@ -269,16 +344,17 @@ function acceptGhostWord() {
         <span class="pointer-events-none absolute inset-0 text-sm font-mono-ash whitespace-pre overflow-hidden">
           <span class="invisible">{{ input }}</span><span class="text-muted-foreground/35">{{ ghostText }}</span>
         </span>
-        <input
+        <textarea
           ref="inputEl"
           v-model="input"
-          @keydown.enter="run"
+          @keydown.enter="onEnter"
           @keydown="onKeydown"
-          @keyup="() => {}"
+          @input="autoGrow"
           spellcheck="false"
           autocomplete="off"
+          rows="1"
           placeholder="type a command…"
-          class="relative w-full bg-transparent outline-none text-sm font-mono-ash placeholder:text-muted-foreground/40"
+          class="relative w-full resize-none bg-transparent outline-none text-sm font-mono-ash placeholder:text-muted-foreground/40"
         />
       </div>
     </div>
