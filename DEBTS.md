@@ -158,16 +158,38 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 **来源**:Plan 043 M4(renderers.at + block_body.at)。
 
-**现状**:015-notes 的 view fn(`NoteItem`)是**定义与使用同文件**,codegen 将其内联展开
-到调用处。我们的 `renderers.at` 把 4 个 view fn 独立成文件,`block_body.at` 用
-`use renderers: render_table` 跨文件引用——parser 接受,但 codegen 把调用生成成
-`<div :output="output" />`(当作未知组件 + 属性),没有内联展开,行为错误。
-另外纯 view fn 文件编译时报 "No widget or store declarations found"(警告,不阻塞,
-因为作为模块被 use 引用时可解析)。
+**现状**:**2026-08-05 已解决**——根因不是"跨文件",而是**命名约定**:
+extract.rs 的 view fn 内联检查 `is_pascal`(extract.rs:650),只有 **PascalCase 标签**
+(如 `NoteItem`)触发内联;snake_case 名(如 `render_table`)不内联,落回普通组件
+生成 `<div :output>`。解决:
+1. 把 4 个 view fn 从 `renderers.at` 移入 `block_body.at`(同文件定义,与 015-notes
+   一致)——`renderers.at` 已删除;
+2. view fn 改名为 **PascalCase**(`RenderTable`/`RenderCode`/`RenderText`/`RenderError`);
+3. 参数引用用**裸标识符**(`output.columns` 而非 `.output.columns`)——substitute_expr
+   只替换裸 Ident 和单层 self-dot,嵌套 self-dot 无法替换。
 
-**影响**:renderers 独立成文件时,生成的 Vue 渲染器全部失效。
+**验证**:生成的 BlockBody.vue 中 4 个渲染器全部正确内联展开(Table/Code/Text/Error
+分支的结构、循环、样式均正确)。
 
-**临时处理**:把 view fn 从 `renderers.at` 移入使用它的 `block_body.at`(同文件定义+
-调用,与 015-notes 一致)——这是**结构修正**不是规避,尚未应用,见计划 M4 收尾。
+**推翻条件**:已推翻(见上)。
 
-**推翻条件**:auto-lang codegen 支持跨文件 view fn 引用(或统一同文件定义)。
+### view else-if 链生成嵌套错误(新发现,2026-08-05)
+
+**来源**:Plan 043 M4(block_body.at 的 if/else if 链)。
+
+**现状**:BlockBody 的 `if kind == "Table" { ... } else if kind == "Record" { ... }
+else if ...` 链,codegen 生成**嵌套错误的 Vue**:
+```html
+<template v-else>
+<template v-if="output.kind == 'Code'">   ← 应为 v-else-if,生成器输出了嵌套 v-if
+```
+`v-else` 后面直接跟 `v-if`(而非 `v-else-if`),且闭合 `</template>` 嵌套错误——生成的
+模板是无效 Vue,无法直接使用。
+
+**根因**:生成器对 `else if` 链的展开逻辑有 bug(vue.rs 的条件分支生成),需 auto-lang
+侧修复。
+
+**影响**:`block_body.at` 的多分支渲染器分发无法直接使用;但**单个分支**的渲染器
+内容已正确生成,可用作对照。
+
+**推翻条件**:auto-lang vue.rs 正确生成 `v-else-if` 链。

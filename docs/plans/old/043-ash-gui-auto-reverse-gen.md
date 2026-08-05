@@ -267,8 +267,13 @@ API 调用、事件处理表达为 Auto store。transport 选择不在 .at 里(�
 
 **验收**:全部 widget 生成的 Vue SFC 与手写版等价。
 
-**状态**:✅ `.at` 源码完成(2026-08-05 提交 `545959b`)。验证时发现 auto-lang 限制,
-`block_body.at` 的位置参数 view fn 调用改为命名参数(与 015-notes 惯例一致)。
+**状态**:✅ `.at` 源码完成(2026-08-05 提交 `545959b`)。M4 收尾(2026-08-05):
+- `block_body.at` 的位置参数 view fn 调用改为命名参数(与 015-notes 惯例一致);
+- `renderers.at` 删除,4 个 view fn 移入 `block_body.at` 同文件定义;
+- view fn 改名为 **PascalCase**(`RenderTable`/`RenderCode`/`RenderText`/`RenderError`)
+  ——view fn 内联仅对 PascalCase 标签触发(extract.rs `is_pascal` 检查);
+- 参数引用用裸标识符(`output.columns` 而非 `.output.columns`);
+- 验证:4 个渲染器在生成的 BlockBody.vue 中**全部正确内联展开**(见 DEBTS)。
 
 ### M5: 正向生成 + 对比验证
 
@@ -287,10 +292,10 @@ API 调用、事件处理表达为 Auto store。transport 选择不在 .at 里(�
 - ❌ `front/shell_store.at`(msg 多参数 `Complete(str,int)`/`RunSmart(int,str,[]str)` +
   computed 多行 body)
 - ❌ `front/block_item.at`(view if 条件里 `None` 比较)
-- ❌ `front/renderers.at`(纯 view fn 文件,codegen 不支持跨文件 view fn 引用)
 
 **注意**:`#[api]`/`store` stack overflow 修复已合入 auto-lang master
 (`d896d263`,dot_item 方案)。M5 验证用 master 最新构建的二进制即可。
+`renderers.at` 已删除(M4 收尾),view fn 内联问题已解决(见 M4 状态)。
 
 ---
 
