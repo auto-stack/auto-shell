@@ -27,6 +27,9 @@ pub enum AtomPipeline {
     ExternalStream(ExternalStream),
     /// Plain text (external commands, legacy compatibility)
     Text(String),
+    /// Plan 042 M6 (B1): syntax-highlighted code spans. Carries structured
+    /// color data (RGB + bold/italic) so frontends render without ANSI/HTML.
+    Code { spans: Vec<Vec<crate::renderer::CodeSpan>>, language: String },
     /// No data
     Empty,
 }
@@ -86,6 +89,7 @@ impl AtomPipeline {
             AtomPipeline::Stream(_) => AtomType::Nothing, // streams don't have a single type
             AtomPipeline::ExternalStream(_) => AtomType::Text, // external output is text
             AtomPipeline::Text(_) => AtomType::Text,
+            AtomPipeline::Code { .. } => AtomType::Text, // code is text with color metadata
             AtomPipeline::Empty => AtomType::Nothing,
         }
     }
@@ -127,6 +131,7 @@ impl AtomPipeline {
             AtomPipeline::Text(s) => s.is_empty(),
             AtomPipeline::Stream(s) => s.total_count() == 0,
             AtomPipeline::ExternalStream(_) => false, // stream not yet read
+            AtomPipeline::Code { spans, .. } => spans.iter().all(|line| line.is_empty()),
         }
     }
 
@@ -153,6 +158,9 @@ impl AtomPipeline {
                 es.read_all().unwrap_or_default()
             }
             AtomPipeline::Text(s) => s,
+            AtomPipeline::Code { spans, .. } => {
+                spans.iter().map(|line| line.iter().map(|s| s.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n")
+            }
             AtomPipeline::Empty => String::new(),
         }
     }
@@ -168,6 +176,7 @@ impl AtomPipeline {
             // ExternalStream cannot be read without consuming; indicate pending
             AtomPipeline::ExternalStream(_) => "<external stream>".to_string(),
             AtomPipeline::Text(s) => s.clone(),
+            AtomPipeline::Code { .. } => "<code>".to_string(),
             AtomPipeline::Empty => String::new(),
         }
     }
@@ -181,6 +190,13 @@ impl AtomPipeline {
                 Some(Value::str(&es.read_all().unwrap_or_default()))
             }
             AtomPipeline::Text(s) => Some(Value::str(&s)),
+            AtomPipeline::Code { spans, .. } => {
+                let text = spans.iter()
+                    .map(|line| line.iter().map(|s| s.text.as_str()).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Some(Value::str(&text))
+            }
             AtomPipeline::Empty => None,
         }
     }
@@ -208,6 +224,12 @@ impl AtomPipeline {
                 Value::str_array(text.lines().map(|l| l.to_string()).collect::<Vec<_>>())
             }
             AtomPipeline::Text(s) => Value::str(&s),
+            AtomPipeline::Code { spans, .. } => {
+                let lines: Vec<String> = spans.iter()
+                    .map(|line| line.iter().map(|s| s.text.as_str()).collect::<String>())
+                    .collect();
+                Value::str_array(lines)
+            }
             AtomPipeline::Empty => Value::Array(Array::new()),
         }
     }
@@ -249,6 +271,12 @@ impl AtomPipeline {
                     .map(|a| a.as_text())
                     .collect();
                 Box::new(items.into_iter())
+            }
+            AtomPipeline::Code { spans, .. } => {
+                let lines: Vec<String> = spans.into_iter()
+                    .map(|line| line.iter().map(|s| s.text.as_str()).collect::<String>())
+                    .collect();
+                Box::new(lines.into_iter())
             }
             AtomPipeline::Empty => Box::new(std::iter::empty()),
         }

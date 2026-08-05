@@ -158,15 +158,17 @@ impl Command for ShowCommand {
             }
         }
 
-        // For code files: return highlighted text through the normal
-        // PipelineData path. Plan 042 bugfix: previously this branch printed
-        // directly to stdout (a CLI/TUI micro-optimization for large files),
-        // but that made `show file.rs` invisible in the GUI — the worker's
-        // CaptureHook/OutputHook can't intercept a direct stdout write. Now
-        // all formats go through parse_text → PipelineData → format_output,
-        // so embedded consumers (GUI) see the output. The CLI/TUI loses the
-        // streaming-to-stdout optimization but gains correctness parity.
-        parse_text(&text, fmt)
+        // For code files when run() is called directly (non-pipeline-last, or
+        // via legacy bridge): produce plain text (ANSI highlighted for
+        // CLI/TUI). The structured Code spans path is in run_atom() above.
+        // JSON/CSV/Text go through parse_text.
+        match &fmt {
+            Format::Code(ext) => {
+                let highlighted = super::code_highlight::highlight_code(&text, ext);
+                Ok(PipelineData::from_text(highlighted))
+            }
+            _ => parse_text(&text, fmt),
+        }
     }
 
     fn run_atom(
@@ -214,7 +216,25 @@ impl Command for ShowCommand {
             }
         }
 
-        // Normal path: bridge to run().
+        // Normal path: for code files (when pipeline-last), produce structured
+        // Code spans (Plan 042 M6 B1). For JSON/CSV/Text, bridge to run().
+        if shell.is_pipeline_last() && args.positionals.len() == 1 {
+            let path = &args.positionals[0];
+            if let Ok(resolved) = shell.resolve_path(path, false) {
+                if let Some(ext) = extension_of(&resolved) {
+                    if let Format::Code(ref lang) = resolve_format(args, Some(&ext)) {
+                        let text = std::fs::read_to_string(&resolved).into_diagnostic()?;
+                        let spans = super::code_highlight::highlight_code_spans(&text, lang);
+                        return Ok(ash_core::pipeline::AtomPipeline::Code {
+                            spans,
+                            language: lang.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Non-code or non-last: bridge to run().
         let legacy_in = atom_to_pipeline_data(input);
         let legacy_out = self.run(args, legacy_in, shell)?;
         Ok(pipeline_data_to_atom(legacy_out))

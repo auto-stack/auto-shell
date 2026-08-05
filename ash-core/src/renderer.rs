@@ -41,11 +41,31 @@ pub enum RenderedOutput {
     Text(String),
     /// Empty output.
     Empty,
+    /// Plan 042 M6: syntax-highlighted code. Each line is a list of colored
+    /// spans (RGB + bold/italic from syntect's theme). Frontend-agnostic —
+    /// web renders as CSS, native renders directly. No HTML dependency.
+    Code {
+        lines: Vec<Vec<CodeSpan>>,
+        language: String,
+    },
     /// An error. (Forward-compat; M1 does not route here.)
     Error {
         message: String,
         kind: RenderErrorKind,
     },
+}
+
+/// One colored span within a line of syntax-highlighted code.
+/// Plan 042 M6 (B1): carries RGB + font style from syntect. Future B2 may
+/// replace these with a semantic `HighlightToken` for multi-theme support.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CodeSpan {
+    pub text: String,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub bold: bool,
+    pub italic: bool,
 }
 
 /// One cell of a rendered table. `Tagged` carries a semantic [`CellTag`] so a
@@ -119,6 +139,14 @@ pub trait Renderer: Send {
 /// column — those are presentation choices left to each frontend (the TUI adds
 /// them in `rendered_to_ansi`; the GUI may choose differently).
 pub fn render_pipeline_to_structured(pipeline: &AtomPipeline) -> Option<RenderedOutput> {
+    // Plan 042 M6 (B1): Code variant → RenderedOutput::Code directly.
+    if let AtomPipeline::Code { spans, language } = pipeline {
+        return Some(RenderedOutput::Code {
+            lines: spans.clone(),
+            language: language.clone(),
+        });
+    }
+
     let atom = match pipeline {
         AtomPipeline::Atom(a) => a,
         _ => return None,

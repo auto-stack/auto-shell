@@ -45,8 +45,19 @@ export type RenderedOutput =
   | { Table: { columns: string[]; rows: RenderedCell[][]; atom_type: AtomType } }
   | { Record: { fields: RecordField[]; atom_type: AtomType } }
   | { Text: string }
+  | { Code: { lines: CodeSpan[][]; language: string } }
   | 'Empty'
   | { Error: { message: string; kind: RenderErrorKind } }
+
+/** Plan 042 M6 (B1): one colored span within a line of syntax-highlighted code. */
+export interface CodeSpan {
+  text: string
+  r: number
+  g: number
+  b: number
+  bold: boolean
+  italic: boolean
+}
 
 export type RenderErrorKind = 'NotFound' | 'PermissionDenied' | 'NonzeroExit' | 'Other'
 

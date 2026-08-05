@@ -45,6 +45,13 @@ pub fn atom_to_pipeline_data(atom: AtomPipeline) -> PipelineData {
             PipelineData::Text(es.read_all().unwrap_or_default())
         }
         AtomPipeline::Text(s) => PipelineData::Text(s),
+        AtomPipeline::Code { spans, .. } => {
+            let text = spans.iter()
+                .map(|line| line.iter().map(|s| s.text.as_str()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            PipelineData::Text(text)
+        }
         AtomPipeline::Empty => PipelineData::empty(),
     }
 }

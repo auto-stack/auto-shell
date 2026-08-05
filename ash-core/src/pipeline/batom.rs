@@ -296,6 +296,15 @@ impl BatomEncoder {
                 let atom = Atom::empty();
                 self.encode_atom(&atom)
             }
+            AtomPipeline::Code { spans, .. } => {
+                // Encode as text (join spans) — batom doesn't preserve color metadata.
+                let text: String = spans.iter()
+                    .map(|line| line.iter().map(|s| s.text.as_str()).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let atom = Atom::text(&text);
+                self.encode_atom(&atom)
+            }
         }
     }
 
