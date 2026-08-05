@@ -32,6 +32,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'run', command: string): void
   (e: 'injected'): void
+  /** Plan 041 M6: Ctrl+L clear the screen (archive blocks). */
+  (e: 'clear'): void
+  /** Plan 041 M6: Ctrl+D on empty input — exit request. */
+  (e: 'exit'): void
 }>()
 
 const input = ref('')
@@ -239,6 +243,25 @@ function onKeydown(e: KeyboardEvent) {
     if (ghostText.value) {
       e.preventDefault()
       acceptGhostWord()
+    }
+  } else if (e.ctrlKey && e.key === 'l') {
+    // Plan 041 M6: Ctrl+L clear the screen (archive blocks).
+    e.preventDefault()
+    emit('clear')
+  } else if (e.ctrlKey && e.key === 'c') {
+    // Plan 041 M6: Ctrl+C clears the current input (or cancels continuation).
+    e.preventDefault()
+    input.value = ''
+    historyCursor.value = null
+    suggestions.value = []
+    historyOpen.value = false
+    inContinuation.value = false
+    autoGrow()
+  } else if (e.ctrlKey && e.key === 'd') {
+    // Plan 041 M6: Ctrl+D on empty input — request exit (like bash).
+    if (!input.value.trim()) {
+      e.preventDefault()
+      emit('exit')
     }
   }
 }

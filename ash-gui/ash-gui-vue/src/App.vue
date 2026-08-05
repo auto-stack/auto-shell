@@ -62,6 +62,16 @@ function onStop() {
   void cancelCommand()
 }
 
+/** Plan 041 M6: Ctrl+L — clear the screen (archive all blocks). */
+function onClear() {
+  blocks.splice(0, blocks.length)
+}
+
+/** Plan 041 M6: Ctrl+D on empty input — exit the app. */
+function onExit() {
+  window.close()
+}
+
 /** Plan 041 M5: format the git status as +N !N ?N ⇡N ⇣N (like the TUI prompt). */
 const gitLabel = computed(() => {
   const g = gitInfo.value
@@ -133,6 +143,8 @@ const gitLabel = computed(() => {
         :complete="complete"
         @run="runCommand($event)"
         @injected="onInjected"
+        @clear="onClear"
+        @exit="onExit"
       />
     </div>
   </div>
