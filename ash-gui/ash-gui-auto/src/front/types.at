@@ -33,22 +33,12 @@ type RenderedCell {
     tag CellTag
 }
 
-/// 渲染输出——命令执行结果的展示描述
-/// 在 Vue 里是 discriminated union;这里用 type + kind 字段表达。
-/// 真正的 union pattern matching 在 widget 层(view fn)处理。
-/// NOTE: [][]T 嵌套数组是 Auto parser 的已知 bug(parse_array_type 不递归),
-/// 临时用 List<List<T>> 替代。见 DEBTS.md。
-type RenderedOutput {
-    kind str
-    text str
-    columns []str
-    rows List<List<RenderedCell>>
-    fields List<List<str>>
-    code_lines List<List<CodeSpan>>
-    language str
-    error_message str
-    atom_type AtomType
-}
+// NOTE(2026-08-06):本文件曾有一份过时的扁平 `RenderedOutput` 定义
+// (带 `kind str` + `List<List<T>>` 写法),已被 `back/api.at` 的 variant-keyed
+// 定义取代(`Table: ?TableOutput` 等,`[][]T` lenient 提取已支持)。已删除。
+// RenderedOutput / TableOutput / CodeOutput / ErrorOutput / RecordOutput /
+// RenderedCell / TaggedCell / CodeSpan 的**权威定义**都在 `back/api.at`。
+// 本文件保留下方的组合类型(Block/事件 payload 等)供前端文档参考。
 
 // ═══════════════════════════════════════════════════════════
 // Block 生命周期

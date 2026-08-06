@@ -56,12 +56,19 @@ pub type ErrorOutput = {
     message: str
 }
 
+/// Record 变体:key/value 字段列表 + atom_type(语义标签,如 MemoryInfo)。
+/// fields 是 (key, cell) 元组数组,服务端 serde 发 `[["key", cell], ...]`。
+pub type RecordOutput = {
+    fields: [](str, RenderedCell)
+    atom_type: str
+}
+
 pub type RenderedOutput = {
     Table: ?TableOutput
     Text: ?str
     Code: ?CodeOutput
     Error: ?ErrorOutput
-    Record: ?str
+    Record: ?RecordOutput
 }
 
 pub type BlockStatus = {
@@ -206,12 +213,13 @@ pub fn open_path(path str) {
 
 /// 订阅 Shell 事件流(command-output + command-result)
 /// 浏览器版用 EventSource;Tauri 版用 listen()。
-/// ~Stream<ShellEvent> 让 codegen 生成 SSE (axum) 或 Channel (tauri)。
-/// NOTE: TS codegen 尚不支持 ~Stream 语法(会原样输出 ~Stream,非法 TS)。
-/// 临时绕过:返回类型用 ShellEvent(单值),前端实际通过 SSE/EventSource
-/// 监听流,不走此函数的返回值。等 auto-lang codegen 支持 ~Stream 后改回。
+///
+/// `~Stream<ShellEvent>` 是**类型驱动 SSE codegen** 的契约(Plan 043 stream phase):
+/// auto-lang 从这个返回类型 + `#[api(path=...)]` 自动在前端 store composable 注入
+/// `EventSource('/api/stream')` 并把每条 SSE 消息按 `data.event` 判别派发到
+/// `RunOutput`/`RunResult` action。api.ts 里不再生成(永不调用的)`stream()` fetch fn。
 /// GET /api/stream
 #[api(method = "GET", path = "/api/stream")]
-pub fn stream() ShellEvent {
+pub fn stream() ~Stream<ShellEvent> {
     return shell.subscribe()
 }

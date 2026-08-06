@@ -1,7 +1,15 @@
 # Plan 043: ash-gui 反向生成 Auto 语言版 — 从手写 Vue 到 .at 源码
 
 > **日期**: 2026-08-05
-> **状态**: 🔄 实施中(M1-M4 完成,M5 阻塞于 auto-lang parser/codegen 限制)
+> **状态**: ✅ **完成**(2026-08-06 复审 + §5.9 闭环)。M1-M5 全部交付;所有 auto-lang
+> parser/codegen 限制已修并合入 master;§8.4 原列 3 项"剩余权衡"在 §5.9 全部消除;
+> **无任何遗留 workaround**。详见 §5.9 与 §8 复审结论。
+>
+> **复审验证(2026-08-06)**:`auto build` 通过 → `vue-tsc --noEmit` **0 错误** →
+> `vite build` 成功;生成 store 由 `~Stream<T>` 类型驱动 SSE(api.ts 无死代码 fetch fn);
+> Record(stat/date/version/sys mem)渲染 key/value + MemoryInfo Progress;playwright
+> 实测全 PASS(ls/cat 表格 + 文本 + Record + 进度条,无回归)。
+> 历史上"M5 阻塞"、"待合 master"、"运行时验证待做"等措辞均已过时,保留于正文仅供追溯。
 > **来源**: Plan 042 完成(v0.1.6),ash-gui 的 Vue 手写版已可用且功能完备。下一步:
 > 从手写 Vue/Tauri 代码反向生成对应的 Auto 语言(.at)源码,验证正向生成能产出等价的 Vue 工程。
 > **范围**: 新建 `.at` 源码文件(参照 015-notes 结构)+ 手动/半自动验证正向生成一致性
@@ -282,20 +290,34 @@ API 调用、事件处理表达为 Auto store。transport 选择不在 .at 里(�
 **验收**:生成的 Vue 工程 `vue-tsc --noEmit` 通过;`npm run dev` 浏览器版能连 ash-server,
 `ls`/`cat`/`show`/补全/历史/ghost text 功能与手写版一致。
 
-**状态**:🚧 阻塞于 auto-lang parser/codegen 限制(2026-08-05 实测,详见 DEBTS.md)。
+**状态**:✅ **完成**(2026-08-06 复审闭环)。早期"阻塞于 auto-lang parser/codegen 限制"
+已**全部解除**——6 项语言限制(msg 多参数 / computed 多行 body / view None 比较 /
+else-if 链 / struct-literal init / handler 多参数)、5.5 cat-3 链式合并、5.6 B 类 6 子类、
+5.7 R1-R4b + G1/G2、5.8 收尾项均已合入 auto-lang master(rebased 后的 commit:
+`f493cff0`/`928ff4ab`/`ef5268e2`/`837c7ad7`/`52f52893`/`8c436e96`/`654ba12e`/
+`718e94aa`/`1f11616b`/`540fbcdb`/`91d02322`/`2456a18b`/`6445b9c3`/`b4ab6d4c`/`a7c5b684`)。
 
-**当前可编译文件**(使用含 fix043 修复的 debug 二进制,2026-08-05 15:51 构建):
-- ✅ `back/api.at`(`#[api]` 已不 stack overflow,015-notes 同款)
-- ✅ `front/app.at`、`front/block_list.at`、`front/prompt_bar.at`、
-  `front/tool_sidebar.at`、`front/history_search.at`、`front/block_body.at`
+**全部 `.at` 文件现已可编译**(2026-08-06 16:30 `auto build` 实测):
+- ✅ `back/api.at`(variant-keyed `RenderedOutput` + `[][]T` lenient 提取)
+- ✅ `front/app.at`/`block_list.at`/`block_item.at`/`block_body.at`(含内联 view fn)/
+  `prompt_bar.at`/`tool_sidebar.at`/`history_search.at`/`shell_store.at`
 - ⚠️ `front/types.at`(纯类型文件,"No widget or store declarations" 警告,预期)
-- ❌ `front/shell_store.at`(msg 多参数 `Complete(str,int)`/`RunSmart(int,str,[]str)` +
-  computed 多行 body)
-- ❌ `front/block_item.at`(view if 条件里 `None` 比较)
 
-**注意**:`#[api]`/`store` stack overflow 修复已合入 auto-lang master
-(`d896d263`,dot_item 方案)。M5 验证用 master 最新构建的二进制即可。
-`renderers.at` 已删除(M4 收尾),view fn 内联问题已解决(见 M4 状态)。
+**复审实测(2026-08-06 18:30)**:`auto build` → `vue-tsc --noEmit` **0 错误** →
+`vite build` 成功(61 modules,dist/index.js 121 KB);生成 `useShellStoreStore.ts`
+含 `EventSource('/api/stream')` 单例订阅;`index.html` 为 `<html class="dark">`;
+PromptBar 键盘(Ctrl+R/L/C/D、↑↓、Tab、Enter)、HistorySearch(过滤/退格关)、
+BlockBody 单元格按 kind 着色全部接线。playwright 11 项实测全 PASS。
+
+**剩余(已记录、可接受的权衡,非阻塞)**:
+- `stream()` 函数的 SSE 接线仍由 G1 的命名启发式(RunOutput/RunResult)驱动,而非
+  类型驱动的 `~Stream<T>` codegen——`api.at` 的 `stream()` 注释已如实标注。等 auto-lang
+  正式支持 `~Stream<T>` → SSE 后可改回类型驱动(非 043 范围)。
+- `Record` 变体在 api.at 简化为 `?str`(实际为 `{fields,atom_type}` 对象)——不影响
+  当前 ls/Table/Text 主链路(详见 5.7 R3 遗留)。
+- `front/types.at` 里有一份**过时的** `RenderedOutput` 扁平定义(带 `kind str` +
+  `List<List<T>>`),已不被生成器使用(实际生效的是 `back/api.at` 的 variant-keyed
+  定义);保留为前端文档,清理属可选打磨。
 
 ---
 
@@ -418,8 +440,8 @@ body-chaining 的设计意图:`let x = A.new().b().c()`(方法链跨行)。它�
 > App.at `on_run` 空桩(codegen 生成 `function RunCommand(){}`,回车不执行命令)+
 > computed 的 if/else-if 表达式生成 `undefined`(状态图标丢失,auto-lang master
 > `92314c2d` 给 `expr_to_js` 加 `Expr::If` → IIFE)。详见 DEBTS.md。
-> **剩余 M5 验收项**:运行时验证(`npm run dev` 浏览器版连 ash-server,核对
-> `ls`/`cat`/`show`/补全/历史/ghost text 与手写版一致)——尚未执行,待做。
+> **剩余 M5 验收项**:~~运行时验证……尚未执行,待做~~ **已完成**(5.7 R1-R4b + G1/G2 +
+> 5.8 收尾后,playwright 11 项实测全 PASS,详见 5.7/5.8 与 §8 复审结论)。
 
 ### 问题(store codegen 清零后剩余的 42 个 vue-tsc 错误)
 
@@ -701,26 +723,28 @@ Config 类 amber、dir 为 sky;退格关弹层;Ctrl+D 浏览器无操作)。
 
 ## 6. 文件清单(预期产物)
 
-### `.at` 源码(`ash-gui/ash-gui-auto/src/`)
+> **2026-08-06 复审订正**:下方"预期产物"是计划初期的设想;实施时 4 个渲染器 view fn
+> (RenderTable/RenderCode/RenderText/RenderError)已**合并进 `block_body.at` 同文件**
+> (M4 收尾,见 §4 M4 状态),未单独拆 `table_view.at`/`code_view.at`/`text_view.at`。
+> 这是与 015-notes 一致的规范写法(view fn 与消费它的 widget 同文件),非缺口。
+
+### `.at` 源码(`ash-gui/ash-gui-auto/src/`)—— 实际产物
 
 ```
 src/
 ├── front/
 │   ├── app.at              App widget(根布局)
-│   ├── prompt_bar.at       PromptBar widget(输入框 + ghost text + 补全)
+│   ├── prompt_bar.at       PromptBar widget(输入框 + 补全 + 键盘快捷键)
 │   ├── block_list.at       BlockList widget(滚动列表)
-│   ├── block_item.at       BlockItem widget(单个命令块)
-│   ├── block_body.at       BlockBody view fn(渲染器分发)
-│   ├── table_view.at       TableView view fn
-│   ├── code_view.at        CodeView view fn
-│   ├── text_view.at        TextView view fn
+│   ├── block_item.at       BlockItem widget(单个命令块 + 重跑/复制)
+│   ├── block_body.at       BlockBody widget + 4 个内联 view fn(RenderTable/Code/Text/Error)
 │   ├── tool_sidebar.at     ToolSidebar widget
-│   ├── history_search.at   HistorySearch widget
+│   ├── history_search.at   HistorySearch widget(过滤 + 退格关)
 │   ├── shell_store.at      ShellStore store
-│   └── types.at            前端类型定义
+│   └── types.at            前端类型定义(含一份过时的 RenderedOutput,见 M5 状态)
 ├── back/
-│   └── api.at              #[api] 端点 + pub type
-└── pac.at                  包定义
+│   └── api.at              #[api] 端点 + pub type(variant-keyed RenderedOutput 家族)
+└── pac.at                  包定义(name: ash-gui, scene: ui, render: vue, api: rust)
 ```
 
 ### 验证产物(`ash-gui/ash-gui-auto/gen/`)
@@ -742,3 +766,139 @@ gen/back/axum/             正向生成的 axum 路由(与 ash-server 对比)
 - `auto-lang/crates/auto-lang/src/aura/types.rs`(widget/store IR)
 - `ash-gui/ash-gui-vue/src/`(手写 Vue 目标)
 - `ash-gui/ash-server/src/`(手写后端,API 层目标)
+
+---
+
+## 5.9 M5 收尾 Phase:Record 完整实现 + Stream 类型驱动 SSE + 清理(2026-08-06)
+
+> **性质**:§8.4 复审发现的 3 项"剩余权衡"全部消除。本节是闭环——把当时归为
+> "框架权衡/未完成"的 3 项做掉,使 Plan 043 真正无遗留 workaround。
+
+### 第 2 项:Record 变体完整实现(消除"?str 简化"权衡)
+
+**问题**:`Record` 变体在 api.at 简化为 `?str`,服务端实际发
+`{fields, atom_type}` 对象,生成版按字符串显示 `[object Object]`。
+
+**修法**:
+- `back/api.at`:新增 `pub type RecordOutput = { fields: [](str, RenderedCell), atom_type: str }`;
+  `RenderedOutput.Record` 从 `?str` 改为 `?RecordOutput`。
+- `front/block_body.at`:新增 `RenderRecord` view fn——key/value 列表(grid 两列)+
+  MemoryInfo usage 进度条(遍历 fields 找 `usage_percent` 字段,就地渲染 `progress`)。
+  cell 取值按 nil 守卫(`if field.1.Text != nil` / `if field.1.Tagged != nil`),
+  与 RenderTable 同模式。
+- value 用 `field.1.Text`/`field.1.Tagged.text`(tuple 下标 `field.0`=key, `field.1`=cell)。
+
+**依赖的 auto-lang 增强**(并入本 phase,worktree → master):
+- **tuple 下标访问**(`field.0`/`field.1`):parser 的 dot-field arm 原先拒绝整数 RHS
+  ("Invalid field name after dot");新增 `Expr::Int(n)`/`Expr::Uint(n)` 分支 →
+  `Expr::Dot(lhs, "<n>")`。vue.rs 所有 Dot 渲染点(`expr_to_js`/`expr_to_vue_text_raw`/
+  `expr_to_vue_bound_value`)+ aura/extract.rs `expr_to_string` + vue.rs `convert_condition`
+  把数字字段渲染成 `obj[n]`(括号形式,TS 合法;`.0` 在 TS 是属性访问非 tuple 下标)。
+  回归测试 `plan043_numeric_dot_field_parses`。
+- **Progress 动态 value**:`progress { value: <expr> }` 原 only 处理 state ref / int 字面量;
+  新增 fallback——动态表达式绑定为 `:model-value="Number(<expr>)"`(满足 number 类型 +
+  运行时 string→number 强转)。Progress 组件按需自动安装(`ui/progress/`)。
+
+**验证**:`stat`/`date`/`version`/`sys mem` 不再显示 `[object Object]`;`sys mem` 渲染
+Progress 进度条;`ls`(Table)/`cat`(Text)不回归(playwright 7 项全 PASS)。
+
+### 第 1 项:Stream 类型驱动 SSE(消除"命名启发式 + 死代码"权衡)
+
+**问题**:`stream()` 的 SSE 接线由 G1 命名启发式(`stream` 函数名 + RunOutput/RunResult
+action 名)驱动,URL/事件名/派发目标全硬编码;且 api.ts 生成不被调用的 `stream()` fetch fn(死代码)。
+
+**修法**(auto-lang worktree `ash-043-stream-sse` → master,merge `c1b05e48`):
+- **类型驱动**:AuraStore 新增 `stream_endpoints: Vec<StreamEndpoint{fn_name, path, item_type}>`,
+  从 `back/api.at` 解析(resolve_stream_endpoints_for_project,regex 扫描
+  `#[api(path=...)] pub fn ... ~Stream<T>`,robust against `use types:`)。
+- **SSE 生成**:`generate_store_composable` 改判 `stream_endpoints` 非空触发(替代旧名启发式),
+  EventSource URL 来自 endpoint 的 path(替代硬编码 `/api/stream`)。
+- **死代码消除**:`generate_simple_client` 对返回 `~Stream<T>` 的端点跳过 fetch fn 生成
+  (注释说明 "consumed via SSE");store import 行排除流端点名(api.ts 不再导出)。
+- **TS 类型支持**:`to_ts_type` 加 `(a, b)` → `[a, b]`(tuple)和 `~Stream<T>`/`Stream<T>` →
+  内层 item 类型(避免非法 TS);`endpoint_is_stream` helper。
+
+**auto-shell 侧 S5**:`back/api.at` 的 `pub fn stream() ShellEvent` 改回
+`pub fn stream() ~Stream<ShellEvent>`,注释从"临时绕过"改为"类型驱动契约"。
+
+**验证**:生成 store 仍含 `EventSource('/api/stream')` + RunOutput/RunResult 派发;
+api.ts 无 `stream()` fetch fn;store import 不含 `stream`;`ls`/`cat` SSE 流式不回归。
+
+### 第 3 项:types.at 清理(消除"过时定义"权衡)
+
+**问题**:`front/types.at` 保留了一份过时的扁平 `RenderedOutput`(带 `kind str` +
+`List<List<T>>`),已不被生成器使用(实际生效的是 `back/api.at` 的 variant-keyed 定义)。
+
+**修法**:删除该过时定义,加注释说明权威定义在 `back/api.at`,本文件保留组合类型
+(Block/事件 payload 等)供前端文档参考。
+
+### 本 phase 的 auto-lang 改动(master commit)
+- `c1b05e48` Merge `ash-043-stream-sse` — 类型驱动 SSE + tuple/Stream TS 类型
+- `48d924cc` parser + vue:numeric tuple index(`field.0` → `field[0]`)+ Progress 动态 value
+
+---
+
+## 8. 复审结论(2026-08-06,§5.9 闭环后更新)
+
+### 8.1 完成度
+
+**Plan 043 全部交付,M1-M5 闭环。** 反向生成目标达成:`.at` 源码(10 个文件)→
+`auto build` → 与手写 Vue 行为/UI 等价的生成工程。
+
+### 8.2 复审实测(全部通过)
+
+| 验证项 | 结果 |
+|---|---|
+| `auto build`(从 `ash-gui-auto/`) | ✅ 0 错误,Vue project built successfully |
+| `vue-tsc --noEmit`(生成工程) | ✅ **0 错误** |
+| `vite build` | ✅ 61 modules,dist/index.js 121 KB / index.css 14 KB |
+| 生成 store SSE 订阅 | ✅ `EventSource('/api/stream')` + RunOutput/RunResult 派发 |
+| 生成 index.html 暗色主题 | ✅ `<html lang="en" class="dark">` |
+| PromptBar 键盘接线 | ✅ Ctrl+R/L/C/D、↑↓、Tab、Enter(v-model + keyup 兜底补全) |
+| HistorySearch 过滤/退格关 | ✅ query 过滤 + 空输入退格 emit Close |
+| BlockBody 单元格按 kind 着色 | ✅ if/else-if 链 → 嵌套三元(Dir/CodeAtRs/Executable/Config/…) |
+| playwright 11 项 | ✅ 全 PASS(ls 表格 + cat 文本 + 键盘 + 单元格点击) |
+
+**构建工具**:`auto.exe`(`D:/autostack/auto-lang/target/debug/`)在 PATH 上,
+2026-08-06 构建;`auto build` 从 `ash-gui-auto/` 目录(`pac.at` 所在)调用。
+
+### 8.3 auto-lang 修复全部合入 master(原"待合 master"措辞已过时)
+
+复审确认下列分支/commit **均已 rebase 后合入 auto-lang master**(HEAD `a541777a`),
+`fix/043-m5-lang-limits`/`fix/043-m5-runtime-bug` 等分支已删除:
+
+| 阶段 | 原 worktree commit | master 实际 commit(rebased) |
+|---|---|---|
+| 5.5 cat-3 链式合并 | `654ba12e` | `654ba12e`(未变) |
+| 5.6 B 类 6 子类 | `718e94aa` | `718e94aa`(未变,merge `e4fd405d`) |
+| msg 多参数 | `f08539b5` | `f493cff0` |
+| computed 多行 body | `db19b947` | `928ff4ab` |
+| view None 比较 | `f42ca89c` | `ef5268e2` |
+| else-if 链 | `e487e223` | `837c7ad7` |
+| struct-literal init | `16f8188f` | `52f52893` |
+| handler 多参数 | `d6517a27` | `8c436e96` |
+| 5.7 R1(struct-literal)+R2(dark) | `1f11616b` | `1f11616b`(merge `e1219f54`) |
+| 5.7 R3(RenderedOutput 契约) | `540fbcdb` | `540fbcdb`(merge `e1219f54`) |
+| 5.7 G1(SSE wiring) | `91d02322` | `91d02322`(merge `209f938c`) |
+| 5.7 R4/R4b(子组件事件名) | `2456a18b`/`6445b9c3` | 同(已 push) |
+| 5.8 R5/R6(条件 style) | — | `b4ab6d4c`/`a7c5b684` |
+
+### 8.4 剩余权衡(§5.9 闭环后:全部消除)
+
+§8.4 初版列出的 3 项"剩余权衡"已在 §5.9 phase **全部做掉**:
+
+1. ~~`stream()` SSE 接线非类型驱动~~ → **§5.9 第 1 项**:改为 `~Stream<T>` 类型驱动
+   (auto-lang `c1b05e48`);api.ts 死代码 `stream()` fetch fn 已消除。
+2. ~~`Record` 变体简化为 `?str`~~ → **§5.9 第 2 项**:`RecordOutput` + `RenderRecord`
+   view fn + MemoryInfo Progress(auto-lang `48d924cc` 加 tuple 下标 + Progress 动态 value)。
+3. ~~`front/types.at` 过时的 `RenderedOutput`~~ → **§5.9 第 3 项**:已删除。
+
+**当前真正剩余(非 workaround、有意识接受、不影响验收)**:**无。** Plan 043 至此无任何
+遗留 workaround 或未完成事项。
+
+### 8.5 结论
+
+**Plan 043 状态 = ✅ 完成(§5.9 闭环后)。** 反向生成目标完整达成:`.at` 源码 →
+`auto build` → 与手写 Vue 行为/UI 等价的生成工程。所有 5 个里程碑(M1-M5)+ 8 个收尾
+phase(5.5-5.9,含 R1-R4b/G1/G2/Stream/Record)全部交付。本计划的产出是后续 ash-gui
+"源码驱动"工作流的基础:从此改动 `.at` 源码即可重新生成等价 Vue 工程。

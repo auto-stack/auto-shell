@@ -6,6 +6,21 @@
 >
 > 与 [`TODO.md`](TODO.md) 的区别:TODO 是"以后可能做"的方向;DEBTS 是"现在故意
 > 不做,因为代价/收益不划算"的记录。
+>
+> ---
+>
+> **2026-08-06 复审注(Plan 043)**:下方 auto-lang parser/store-codegen 各条
+> "待合 master"措辞**均已过时**——`fix/043-m5-lang-limits`(6 项)、`fix/043-m5-bclass`、
+> `fix/043-m5-runtime-bug`、`fix/043-m5-g1-sse`、5.5/5.7/5.8 的修复在 rebase 后**全部
+> 合入 auto-lang master**,原 worktree 分支已删除。Plan 043 整体状态
+> = **✅ 完成**(`auto build` + vue-tsc 0 + vite build 成功 + playwright 全 PASS)。
+>
+> **§5.9 闭环(2026-08-06 晚)**:原 §8.4 列的 3 项"剩余权衡"**全部做掉**:
+> ① stream() SSE 改 `~Stream<T>` 类型驱动(auto-lang `c1b05e48`,消除命名启发式 + 死代码 fetch fn);
+> ② Record 变体完整实现(RecordOutput + RenderRecord + MemoryInfo Progress,auto-lang `48d924cc` 加 tuple 下标 + Progress 动态 value);
+> ③ types.at 过时 RenderedOutput 已删除。
+> **Plan 043 至此无任何遗留 workaround。** 正文保留原始措辞仅供追溯;实际 master commit
+> 映射见 `docs/plans/old/043-*.md` §8.3。
 
 ---
 
@@ -63,6 +78,12 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 ### `[][]T` 嵌套数组类型不被支持
 
+> **2026-08-06 复审**:**功能上已解决**(lenient 提取路径,见本条末尾的 2026-08-06 更新)。
+> `api.at` 的 `rows [][]RenderedCell` / `lines [][]CodeSpan` 现可正常进入生成的 interface
+> 并通过 vue-tsc + vite build。**仅 full-parse 路径仍不支持**(理论限制,`auto build` 不走
+> 该路径),故保留本条记录,推翻条件不变。`front/types.at` 里残留的 `List<List<T>>` 是
+> 该文件的过时定义(已不被生成器使用,实际生效的是 `api.at` 的 variant-keyed 定义)。
+
 **来源**:Plan 043 M1(types.at 反向生成)。
 
 **现状**:`parse_array_type`(parser.rs:8929)在解析完 `[]` 后调用 `parse_ident`(期望类型
@@ -80,6 +101,13 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 **推翻条件**:auto-lang parser 的 `parse_array_type` 支持递归嵌套 `[][]T`。
 
 ### 比较运算符(`>` `<` `==`)在表达式上下文中导致 stack overflow
+
+> **2026-08-06 复审**:**已不复现**——当前 `.at` 源码大量使用 `!=`/`==`/`>`/`<`
+> (app.at `!= ""`、block_item.at `== "Success"`、tool_sidebar.at `> 0`、
+> shell_store.at `== "Success"` 等),`auto build` + vue-tsc 0 错误 + vite build 成功。
+> 推测后续 parser 修复(`dot_item` 演进 + cat-3 链式合并 `654ba12e` 等)已顺带覆盖了
+> 比较运算符的 RHS 解析。下方"临时绕过"未再应用(.at 源码直接用比较运算符)。本条保留
+> 供根因追溯,推翻条件视为已满足;如未来再现再深挖。
 
 **来源**:Plan 043 M5(正向生成验证)。
 
