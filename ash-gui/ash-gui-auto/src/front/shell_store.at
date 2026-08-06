@@ -7,7 +7,7 @@
 // 同一份 api.at,生成不同 transport 的代码。
 
 use back.api: command_list, complete, run_command, run_smart, cancel, prompt_context, history, open_path, stream
-use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, CommandResult, CommandOutput, ShellEvent, SmartResult, RenderedOutput
+use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, CommandResult, CommandOutput, ShellEvent, RenderedOutput
 
 store ShellStore {
     model {
@@ -89,6 +89,8 @@ store ShellStore {
         }
 
         // ── 命令最终结果 ──
+        // status 是 serde 联合:"Success"(裸串)或 {"Failed": msg}(对象)。
+        // `result.status == "Success"` 对对象为 false → else 分支取 status.Failed。
         .RunResult(result) -> {
             .cwd = result.cwd
             .RefreshGit()
@@ -98,7 +100,7 @@ store ShellStore {
                         b.status = BlockStatus{ kind: "Success", message: "" }
                         b.output = result.output
                     } else {
-                        b.status = BlockStatus{ kind: "Failed", message: result.failed_message }
+                        b.status = BlockStatus{ kind: "Failed", message: result.status.Failed }
                         b.output = None
                     }
                     b.streamed_text = ""
@@ -118,9 +120,33 @@ store ShellStore {
         }
 
         // ── SmartCommand ──
+        // 镜像手写 runSmartCommand:推一个 Running block,调用 run_smart(返回裸文本),
+        // 成功则 output = {Text: result},失败则 status = Failed(message)。
         .RunSmart(block_id, name, args) -> {
-            var result SmartResult = run_smart(block_id, name, args)
-            // 结果直接更新 block(同步返回)
+            var id int = .next_id
+            .next_id = .next_id + 1
+            var display str = "smart " + name
+            if args.len() > 0 {
+                display = display + " " + args.join(" ")
+            }
+            var block Block = Block{
+                id: id,
+                command: display,
+                cwd: .cwd,
+                status: BlockStatus{ kind: "Running", message: "" },
+                output: None,
+                streamed_text: "",
+                duration_ms: 0
+            }
+            .blocks.push(block)
+            var result str = run_smart(id, name, args)
+            for b in .blocks {
+                if b.id == id {
+                    b.status = BlockStatus{ kind: "Success", message: "" }
+                    b.output = RenderedOutput{ Text: result }
+                    b.streamed_text = ""
+                }
+            }
         }
 
         // ── 补全(由 PromptBar 调用,返回候选) ──

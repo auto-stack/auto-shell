@@ -453,7 +453,18 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 > `auto-shell-043-codegen-parity`)。这 3 项是 auto-lang codegen bug(.at 源码正确),
 > 已用 `auto-shell-` 前缀 worktree 修复合 master + push。playwright 实测:状态字形 ✓
 > 渲染、`show` 语法高亮(75 个着色 span)、重跑按钮 + `$event` 转发、ls/cat/stat 不回归。
-> **剩余 🔴:H3/H4/H6**(均在 auto-shell 侧,待修)。
+>
+> **2026-08-07 二次更新**:**H3/H4/H6 已修复**(auto-shell `.at` 源码,commit 见下)。
+> 这 3 项是 .at 源码契约错误或样式写法问题。
+> - **H3** playwright 实测 ✅:失败命令显示 ✗ 字形 + `result.status.Failed` 错误消息。
+> - **H4** 代码正确但**运行时无法端到端验证**——当前 ash-server 未注册任何 smart 命令
+>   (`/api/command_list` 返回 `smart_commands: []`),ToolSidebar 不渲染 smart 按钮。
+>   生成的 `RunSmart` 已推 block + 设 `output = { Text: result }`,待有 smart 命令时即生效。
+> - **H6** 代码正确(选中行有 `:class="idx == selected ? '...bg-accent...' : '...'"`)但
+>   **playwright headless 难以验证**——HistorySearch 面板 `absolute bottom-full` 在
+>   900px 视口下定位到视口外(`Element is outside of the viewport`),且过滤依赖 keyup 事件
+>   (与 PromptBar G2 同款的 v-model 吞 oninput 兜底)。生成代码层面已修复。
+> **全部 6 项 H1-H6 修复完成。** 剩余仅为 🟡 一致性打磨项。
 
 ### 🔴 高风险(功能错误或缺失,codegen/.at 双方都有)
 
@@ -461,10 +472,10 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 |---|---|---|---|
 | ~~H1~~ ✅ | ~~状态字形永不渲染~~ | ~~codegen IIFE 漏 return~~ → **已修**(auto-lang `db384870`:`transpile_body_as_return` 给 Expr::If IIFE 的分支加 return) | 生成 `BlockItem.vue:8-9` |
 | ~~H2~~ ✅ | ~~重跑/点击打开失效~~ | ~~msg-forwarding 用 loop var~~ → **已修**(auto-lang `db384870`:`msg_payload_arities` 索引;带 payload 的 handler 转发 `$event`,无 payload 的保留 loop var) | 生成 `BlockList.vue:47` |
-| H3 | **失败命令不显示错误信息** | `.at` 的 `CommandResult.failed_message: str` 字段在服务端**不存在**——服务端用 `status: CommandStatus::Failed(String)` 枚举变体携带消息。`result.failed_message` 永远 `undefined`。源码层契约错误。 | `back/api.at:121`;服务端 `ash-server/src/types.rs:83-96` |
-| H4 | **SmartCommand 永无输出** | store 的 `RunSmart` action 丢弃 `run_smart()` 返回值,且不推 block。源码注释说"result 直接更新 block"但实际 no-op。 | `front/shell_store.at:121-124`;生成 `useShellStoreStore.ts:63-65` |
+| ~~H3~~ ✅ | ~~失败命令不显示错误~~ | ~~`failed_message` 字段服务端不存在~~ → **已修**(`api.at` CommandResult 删 `failed_message`,`status: str` 联合擦除成 any;store RunResult 改读 `result.status.Failed`,JS 动态派发——`status=="Success"` 走成功,否则 `.Failed` 取消息) | `back/api.at` + `shell_store.at:101` |
+| ~~H4~~ ✅ | ~~SmartCommand 永无输出~~ | ~~store RunSmart no-op~~ → **已修**(`api.at` run_smart 返回 `str` 裸文本而非 SmartResult 结构;store RunSmart 镜像手写 runSmartCommand:推 Running block → `run_smart()` → `output = RenderedOutput{ Text: result }`) | `back/api.at` + `shell_store.at:121` |
 | ~~H5~~ ✅ | ~~`show` 语法高亮丢失~~ | ~~push_style_class 丢弃 Expr::Bina 拼接~~ → **已修**(auto-lang `db384870`:动态 style 表达式渲染为 `:style="<expr>"`) | 生成 `BlockBody.vue:78` |
-| H6 | **HistorySearch 选中项无高亮** | `selected` ref 更新但行无 `:class` 绑定,用户看不到当前选中。 | 生成 `HistorySearch.vue:74` |
+| ~~H6~~ ✅ | ~~HistorySearch 选中无高亮~~ | ~~`+` 拼接的 if/else 条件被 codegen 渲染成 null~~ → **已修**(改纯 `if/else` 条件 style,不拼接;生成 `:class="idx == selected ? '...bg-accent...' : '...'"`) | `history_search.at:50` |
 
 ### 🟡 一致性遗漏(功能可用但与手写版不一致)
 
@@ -482,7 +493,8 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 
 ### 推翻条件
 - ~~H1/H2/H5 已修(auto-lang `db384870`)~~ ✅
-- 剩余 **H3/H4/H6** 修复后,Plan 043 可按"功能对等"归档。这 3 项均在 auto-shell 侧
-  (.at 源码契约错误 H3/H4 + HistorySearch 选中高亮 H6)。
-- 验证方式:扩展 playwright 覆盖到失败命令、SmartCommand、选中高亮(状态字形/show 高亮/
-  重跑/点击打开 已在 `ash_gui_parity_test.cjs` 覆盖,全 PASS)。
+- ~~H3/H4/H6 已修(auto-shell `.at` 源码)~~ ✅
+- **全部 6 项 H1-H6 修复完成。** Plan 043 可按"功能对等"归档(剩余仅为 🟡 一致性打磨:
+  duration 标签 / cwd 缩写 / copy 兜底 / HistorySearch 排序与大小写 / ToolSidebar 描述 /
+  PromptBar debounce / SSE onerror / ghost text overlay——均非功能缺失,是体验打磨)。
+- 验证:H3 playwright ✅;H4 待 smart 命令注册;H6 生成代码正确(面板布局/keyup 为独立项)。

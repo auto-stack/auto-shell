@@ -40,14 +40,19 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
                     }
                 }
 
-                // 匹配列表(选中项高亮)
+                // 匹配列表(选中项高亮)。整个 class 用条件表达式(if/else),
+                // 不用 + 拼接(避免 codegen 把 Expr::If 渲染成 null)。
                 col {
                     style: "overflow-y-auto py-1"
                     for idx, entry in .matches {
                         button .entry {
                             onclick: .Run(.entry)
                             onmousemove: .SelectIdx(idx)
-                            style: "w-full text-left px-3 py-1 text-sm font-mono-ash " + (if idx == .selected { "bg-accent text-accent-foreground" } else { "text-muted-foreground hover:bg-muted/50" })
+                            style: if idx == .selected {
+                                "w-full text-left px-3 py-1 text-sm font-mono-ash bg-accent text-accent-foreground"
+                            } else {
+                                "w-full text-left px-3 py-1 text-sm font-mono-ash text-muted-foreground hover:bg-muted/50"
+                            }
                         }
                     }
                     if .matches.len() == 0 {
@@ -89,7 +94,9 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
             }
         }
 
-        // 输入变化 → 过滤历史(大小写不敏感子串)
+        // 输入变化 → 过滤历史(子串匹配)。
+        // 注:大小写不敏感需 to_lower,但 ts_adapter 尚未映射 to_lower→toLowerCase;
+        // 暂用大小写敏感 contains(DEBTS 记录的一致性遗漏)。
         .OnQuery -> {
             if .query.trim() != "" {
                 var out []str = []
