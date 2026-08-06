@@ -511,6 +511,71 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 
 ---
 
+## 5.7 M5 运行时验证 Phase:功能缺口补修(2026-08-06)
+
+> **性质**:运行时验证(起 ash-server + 生成版 dev)发现 2 个功能性缺口,非类型错误。
+> G2 已修复;G1 需 auto-lang codegen 增强,方案见下。
+
+### G2(已修复,auto-shell commit `2d88ae0`):PromptBar 输入交互
+
+**现象**:生成的 PromptBar 输入框完全不可用——`<input :name="input" @input="Run">`:
+- `:name="input"` 是 name 属性,不是值绑定(应 v-model)→ 输入不更新 `.input`
+- `@input="Run"` 映射错(打字触发执行命令处理器)
+- 无 Enter 处理、补全无人触发
+
+**修法**(参照 013-todo 的 `value: + oninput:` → v-model 模式):
+| 位置 | 改动 |
+|---|---|
+| `prompt_bar.at` input | `input { value: .input, oninput: .OnInput, onkeyup: .OnInput, onenter: .Run(.input) }` → 生成 `v-model="input"` + `@keyup.enter="Run(input)"` + `@keyup="OnInput"`(v-model 会吞 oninput,用 onkeyup 兜底触发补全) |
+| `prompt_bar.at` `.Run(cmd)` | 改为纯转发(清状态 + 自动 `emit('Run', cmd)` → App 执行),消除之前 PromptBar+App **双执行** `store.RunCommand` |
+| `prompt_bar.at` `.OnInput` | `await complete(.input, .input.len())` → 填 `.suggestions`(补全 UI 已存在);需 `use back.api: complete` |
+| `app.at` `.RunCommand(cmd)` | 加空命令守卫 `if cmd.trim() != ""` |
+
+**验证**:vue-tsc 0 + vite build 成功;生成代码 v-model/@keyup.enter/@keyup 均正确。
+
+**遗留(非核心,记录)**:ghost text 语法高亮 overlay、↑/↓ 历史导航、Ctrl+R 搜索、
+Tab 接受补全——.at 有 stub(`AcceptGhost`/`HistoryOlder`/`ToggleHistorySearch` 等)
+但无 keydown 事件接线。输入→执行→补全主链路已通。
+
+### G1(方案已定,待实施):SSE 流式输出未接线
+
+**现象**:生成的 `useShellStoreStore.ts` 有 `RunOutput`/`RunResult` action
+(命令输出/结果处理器),但**没有 `EventSource('/api/stream')` 订阅**——命令执行后
+界面永不更新。手写版 `useShellHttp.ts` 有 `connectSSE()`。
+
+**服务器侧已确认正常**(重建 ash-server 后):`/api/stream` 推送
+`{"event":"command_result",...}`,`ls -la` → `Table{columns,rows}`、`cat` → `Text`
+——与生成版 BlockBody 渲染器的数据契约完全吻合。之前 :3000 上跑的是**过期二进制**
+(SSE 无输出),误导排查。
+
+**修法(auto-lang codegen,`generate_store_composable`)**:当
+`store.api_imports` 含 `stream` 且 store 有 `RunOutput`+`RunResult` action 时,注入:
+```ts
+// 模块级(单例守卫,多个 widget 各自 reactive(useStore()) 只连一次)
+let __streamConnected = false;
+// 函数体内(action 声明之后):
+if (!__streamConnected) {
+  __streamConnected = true;
+  const es = new EventSource('/api/stream');
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.event === 'command_output') RunOutput(data);
+      else if (data.event === 'command_result') RunResult(data);
+    } catch { }
+  };
+}
+```
+**判据**:`stream` api 函数 + `RunOutput`/`RunResult` action 命名(Store 消费
+`~Stream` 的实用模式;待 codegen 正式支持 `~Stream<T>` 后替换为类型驱动)。
+
+**备选方案(否决)**:手写逃逸(ext_component)——破坏"源码驱动"的正向生成一致性。
+
+**验收**:生成 store 含 EventSource 订阅;`auto build` 后 vue-tsc 0;
+命令执行后 blocks 列表实时更新(需浏览器实测,当前环境 IAB 不可用,以代码级+HTTP 级验证)。
+
+---
+
 ## 6. 文件清单(预期产物)
 
 ### `.at` 源码(`ash-gui/ash-gui-auto/src/`)
