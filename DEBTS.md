@@ -295,3 +295,39 @@ ash-gui-auto 的 vue-tsc 错误 **19 → 0**(+ vite build 成功)。分类与修
      `(() => { if (c1) { v1 } else if (c2) { v2 } else { v3 } })()`。
   验证:生成的 BlockItem.vue 状态字形/类正确,App.vue RunCommand 带
   `store.RunCommand(cmd)`,vue-tsc 0 + vite build 成功。
+
+**043 M5 Phase 5.7 R3(2026-08-06 已解决)**:RenderedOutput 数据契约不匹配 —
+auto-lang worktree `fix/043-m5-runtime-bug` commit `540fbcdb`(待合 master)。
+
+**现象**:R1(struct-literal)修完后用户实测 `ls -al` 仍"没有反应"。curl
+`/api/stream` 确认服务端发 **serde externally-tagged union**
+(`{"Table":{columns,rows}}` / `{"Text":"..."}`,单元格 `{"Tagged":{text,tag}}`),
+而生成版前端按扁平 `output.kind`/`output.columns` 访问 → 全部 undefined。
+api.at 的 `RenderedOutput` 改 variant-keyed 可选字段后,block_body.at 重写报
+`"Expected term, got RBrace"`——暴露 auto-lang 两个独立缺陷:
+
+1. **struct-literal widening 误伤 dot 表达式 RHS**(parser.rs,`in_dot_rhs`):
+   上一轮 struct-literal 修复让"任意 PascalCase 标识符 + `{` → 构造"。
+   `text cell.Text { }` 里 `Text` 后紧跟元素 props 的 `{`,被当 `Text{...}`
+   构造吞掉 → desync。小写 `cell.text` 不受影响,所以此前一直没暴露。
+   修复:parser 加 `in_dot_rhs` 标志,仅 `Op::Dot` 的 RHS 抑制 widening;
+   `x = Type{...}`(Asn)等不受影响。dot 表达式 RHS 是字段/方法名,结构体
+   字面量永远是独立 `Type{...}`。
+
+2. **view fn 内联时 ForLoop iterable 未做参数替换**(extract.rs):iterable 是
+   字符串,`expand_fragment_node` 原样保留(原版靠 widget 同名 prop 碰巧
+   解析)。修复:iterable 也走 `substitute_condition` — `for col in
+   output.columns` → `output.Table.columns`(窄化到 variant 子类型);
+   `expr_to_condition_str` 修 self-dot 基座:`.output.Table` → `output.Table`
+   (而非 `self.output.Table`)。
+
+**验证**:回归测试 `test_dot_rhs_field_access_not_struct_construction`;
+parser 161 + gdscript 63 + aura 46 全过;ash-gui-auto vue-tsc 0 + build 成功;
+生成 BlockBody.vue 为 `v-if="output.Table != null"` + `v-for="col in
+output.Table.columns"` + `cell.Tagged.text`;SSE 实测 `status:"Success"` /
+`Table{columns,rows}` / 单元格 `Tagged{text,tag}` 与 api.at 契约完全吻合。
+
+**遗留(记录)**:`Record` 变体在 api.at 简化为 `?str`(实际为 `{fields,atom_type}`
+对象,stat/date/version 命令走此分支会显示 `[object Object]`);单元格 `tag`
+类型简化为 `str`(实际为 `"Dir" | {FileName: Kind}`)。均不影响当前 ls/Table
+链路,后续如需 Record/着色可再补。

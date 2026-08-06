@@ -26,21 +26,41 @@ pub type CodeSpan = {
     italic: bool
 }
 
-pub type RenderedCell = {
+// RenderedOutput 是 Rust 枚举,serde 用变体名作键(tagged union):
+//   {"Table":{columns,rows}} | {"Text":"..."} | {"Code":{lines,language}}
+//   | {"Error":{message}} | {"Record":{...}}
+// 字段用 ?T(可选)表达"仅一个变体存在"。前端用 `if .output.Table != None`
+// 分发并窄化类型。RenderedCell 同理:{"Text":"..."} | {"Tagged":{text,tag}}。
+pub type TaggedCell = {
     text: str
     tag: str
 }
 
-pub type RenderedOutput = {
-    kind: str
-    text: str
+pub type RenderedCell = {
+    Text: ?str
+    Tagged: ?TaggedCell
+}
+
+pub type TableOutput = {
     columns: []str
     rows [][]RenderedCell
-    fields [][]str
-    code_lines [][]CodeSpan
+}
+
+pub type CodeOutput = {
+    lines [][]CodeSpan
     language: str
-    error_message: str
-    atom_type: str
+}
+
+pub type ErrorOutput = {
+    message: str
+}
+
+pub type RenderedOutput = {
+    Table: ?TableOutput
+    Text: ?str
+    Code: ?CodeOutput
+    Error: ?ErrorOutput
+    Record: ?str
 }
 
 pub type BlockStatus = {

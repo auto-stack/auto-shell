@@ -1,8 +1,10 @@
 // front/block_body.at — 输出渲染器分发 widget
 // Plan 043 M4: 反向生成自 BlockBody.vue
 //
-// 根据 RenderedOutput 的 kind 分发到对应渲染器(Table/Record/Code/Text/Error)。
-// 在 Vue 里用 discriminated union;在 Auto 里用 if/else if 链。
+// 根据 RenderedOutput 的 serde tagged-union 变体(Table/Record/Code/Text/Error)
+// 分发到对应渲染器。服务端序列化为 {"Table":{...}} | {"Text":"..."} 等,字段
+// 是可选变体 key(RenderedOutput.Table: ?TableOutput),前端用 `!= nil` 判断
+// 并窄化类型(等价于 Vue 里 discriminated union 的 'Table' in o 检查)。
 //
 // 渲染器(view fn)与 widget 同文件定义——与 015-notes 的 NoteItem 模式一致。
 // view fn 必须用 **PascalCase** 命名(codegen 只对内联 PascalCase 标签,见
@@ -10,14 +12,12 @@
 // .output.columns,substitute_expr 只替换裸 Ident 和单层 self-dot)。
 // 详见 DEBTS。
 
-use types: RenderedOutput, CodeSpan
+use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 
 /// 表格渲染器(ls/ps 等结构化命令的输出)
-// 参数引用用裸标识符(output.columns / col / row / cell)而非 .output.columns——
-// 与 015-notes NoteItem 的 note.title 模式一致:substitute_expr 只替换裸 Ident
-// 和单层 self-dot(.field),嵌套 self-dot(.output.text)无法替换,会导致 view fn
-// 调用落回普通组件(生成 <div :output>)。见 DEBTS 第 5 项限制。
-view fn RenderTable(output RenderedOutput) {
+// 参数是窄化后的 TableOutput(view fn 只替换裸 Ident 参数,把 .output.Table
+// 传进来即可在 body 里用 output.columns)。
+view fn RenderTable(output TableOutput) {
     col {
         style: "text-sm font-mono-ash"
         // 表头
@@ -32,7 +32,15 @@ view fn RenderTable(output RenderedOutput) {
             row {
                 style: "gap-4 px-2 py-1 border-b border-border/50"
                 for cell in row {
-                    text cell.text { }
+                    // tagged-union:Text/Tagged 恰有一个变体,用两个并列 if
+                    // 而非 else-if(widget-tree 解析器对 for 体内的 else-if
+                    // 解析不稳定,见 DEBTS)。
+                    if cell.Tagged != nil {
+                        text cell.Tagged.text { }
+                    }
+                    if cell.Text != nil {
+                        text cell.Text { }
+                    }
                 }
             }
         }
@@ -41,10 +49,10 @@ view fn RenderTable(output RenderedOutput) {
 
 /// 代码渲染器(show 命令的语法高亮输出)
 /// CodeSpan 携带 RGB + bold/italic,前端直接渲染为着色文本。
-view fn RenderCode(output RenderedOutput) {
+view fn RenderCode(output CodeOutput) {
     col {
         style: "text-sm font-mono-ash overflow-x-auto"
-        for line in output.code_lines {
+        for line in output.lines {
             row {
                 for span in line {
                     text span.text {
@@ -56,18 +64,11 @@ view fn RenderCode(output RenderedOutput) {
     }
 }
 
-/// 纯文本渲染器(echo/cat 等命令的输出)
-view fn RenderText(output RenderedOutput) {
-    text output.text {
-        style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words"
-    }
-}
-
 /// 错误渲染器
-view fn RenderError(output RenderedOutput) {
+view fn RenderError(output ErrorOutput) {
     col {
         style: "px-3 py-2 rounded bg-red-500/10 border border-red-500/20"
-        text output.error_message {
+        text output.message {
             style: "text-sm font-mono-ash text-red-400"
         }
     }
@@ -78,17 +79,18 @@ widget BlockBody(output: RenderedOutput, on_open_path: msg) {
 
     view {
         col {
-            if .output.kind == "Table" {
-                RenderTable(output: .output)
-            } else if .output.kind == "Record" {
-                // Record 渲染(简化:用文本形式)
-                text "Record" { }
-            } else if .output.kind == "Code" {
-                RenderCode(output: .output)
-            } else if .output.kind == "Text" {
-                RenderText(output: .output)
-            } else if .output.kind == "Error" {
-                RenderError(output: .output)
+            if .output.Table != nil {
+                RenderTable(output: .output.Table)
+            } else if .output.Record != nil {
+                text .output.Record { }
+            } else if .output.Code != nil {
+                RenderCode(output: .output.Code)
+            } else if .output.Text != nil {
+                text .output.Text {
+                    style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words"
+                }
+            } else if .output.Error != nil {
+                RenderError(output: .output.Error)
             } else {
                 text "(no output)" {
                     style: "text-xs text-muted-foreground italic"

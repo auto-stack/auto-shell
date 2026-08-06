@@ -545,6 +545,35 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 零新增失败。parser 改动同时修复了此前 master 上的 ark/vue/vm 个别失败
 (用户 VM 重构合并后已消失)。
 
+**R3 — `ls -al` 仍无结果:RenderedOutput 数据契约不匹配**(已修复,auto-lang
+worktree `fix/043-m5-runtime-bug` commit `540fbcdb`,待合 master)
+
+**现象**:R1/R2 修完后用户实测仍"没有反应"。curl `/api/stream` 确认服务端
+发送 **serde externally-tagged union**(`{"Table":{columns,rows}}` /
+`{"Text":"..."}`,单元格 `{"Tagged":{text,tag}}`),而生成版前端仍按**扁平
+kind 字段**(`output.kind`/`output.columns`)访问 → 全部 undefined。api.at 的
+`RenderedOutput` 已改为 variant-keyed 可选字段(`Table: ?TableOutput` 等),
+但 block_body.at 重写后 parse 报 `"Expected term, got RBrace"`——暴露 auto-lang
+两个独立缺陷:
+
+1. **struct-literal widening 误伤 dot 表达式 RHS**(parser.rs,`in_dot_rhs`):
+   R1 让"任意 PascalCase 标识符 + `{` → 结构体构造",在 `text cell.Text { }`
+   中 `Text` 后紧跟元素 props 的 `{`,被当 `Text{...}` 构造吞掉括号 → desync。
+   `cell.text`(小写)不受影响,所以此前一直没暴露。修复:parser 加
+   `in_dot_rhs` 标志,仅 `Op::Dot` 的 RHS 抑制 widening(Asn 等不受影响,
+   `x = Type{...}` 仍正常)。
+2. **view fn 内联时 ForLoop iterable 未做参数替换**(extract.rs):iterable 是
+   字符串,`expand_fragment_node` 原样保留 → 原版靠 widget 同名 prop 碰巧
+   解析。修复:iterable 也走 `substitute_condition`,`for col in output.columns`
+   → `output.Table.columns`;`expr_to_condition_str` 修 self-dot 基座
+   (`.output.Table` → `output.Table`,而非 `self.output.Table`)。
+
+**验证**:新回归测试 `test_dot_rhs_field_access_not_struct_construction`;
+parser 161 + gdscript 63 + aura 46 全过;ash-gui-auto vue-tsc 0 + build 成功;
+生成 BlockBody.vue 为 `v-if="output.Table != null"` + `v-for="col in
+output.Table.columns"` + `cell.Tagged.text`;SSE 实测 `status:"Success"` /
+`Table{columns,rows}` / `Tagged{text,tag}` 与 api.at 契约完全吻合。
+
 ### G2(已修复,auto-shell commit `2d88ae0`):PromptBar 输入交互
 
 **现象**:生成的 PromptBar 输入框完全不可用——`<input :name="input" @input="Run">`:
