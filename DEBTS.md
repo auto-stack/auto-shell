@@ -79,6 +79,17 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 **推翻条件**:auto-lang parser 的 `parse_array_type` 支持递归嵌套 `[][]T`。
 
+**2026-08-06 部分解决(B 类修复,auto-lang commit `718e94aa`,分支
+`fix/043-m5-bclass` 待合 master)**:`api.at` 的 `[][]T` 字段现在能进生成的 interface,
+但**不是**靠修 `parse_array_type`——而是修了 **lenient API 提取路径**:
+`api_gen.rs::parse_fields` 之前只认 `name: type`(带冒号)字段,把无冒号的
+`rows [][]RenderedCell`/`commands []ToolEntry` 等**静默丢弃**(生成的 interface 缺字段,
+调用方 TS2339)。这是 `auto build` 实际走的路径(`try_full_parse` 因 `use types:`
+模块解析失败回退到 lenient 正则提取)。修复后 `parse_fields` 同时接受 `name type`
+(空格)形式,`[][]T` 字段作为类型字符串原样进入 `ApiField`,`to_ts_type`/`auto_type_to_rust`
+本就支持 `[][]T`(→ `T[][]` / `Vec<T>`)。**注意**:full-parse 路径(不走 lenient 时)
+仍不支持 `[][]T`,此条 parser 级限制保留;推翻条件不变。
+
 ---
 
 ## auto-lang parser:store/widget 语法限制(2026-08-05 实测)
@@ -226,3 +237,23 @@ bug(用 5 模式 AST probe 验证,纠正了之前"RHS 跨行消费"的错误判�
 内联属性改成 `const ActionName = ...` 闭包变量(返回对象引用它),这样 action 互调
 (`RefreshGit()`)在闭包作用域里可见。验证:`useShellStoreStore.ts` vue-tsc 错误 **1 → 0**
 (整个 store-codegen 旅程:8 → 1(cat-1/2/4)→ 0(cat-3))。
+
+**043 M5 Phase 5.6 B 类(2026-08-06 已解决)**:auto-lang worktree 分支
+`fix/043-m5-bclass`(commit `718e94aa`,待合 master)修 6 个子类 codegen 问题,
+ash-gui-auto 的 vue-tsc 错误 **19 → 0**(+ vite build 成功)。分类与修法:
+
+| 子类 | 错误数 | 根因(实测) | 修法 |
+|---|---|---|---|
+| B-1 msg 回调签名 | 6 (TS2322) | `on_pick: msg` 的 defineProps 总是生成 `() => void`,msg 带 payload 时父传 `(name: any) => void` 不兼容 | `vue.rs::prop_to_ts_type`:按 `on_pick`↔`Pick` 约定查 msg variant,payload 生成 `(arg0: T) => void` |
+| B-2 类型 import | 4 (TS2304/2552) | `custom_types` 只收集 `Type::User` 直接类型,`List<Block>`/`[]ToolEntry`(容器内)和 defineEmits payload(`CompletionItem`)漏掉 | `vue.rs::collect_custom_types` 递归容器(GenericInstance/Slice/List/Option/...)+ defineEmits payload 收集,import 移到两段之后统一输出 |
+| B-3 handler 参数名 | 2 (TS2304) | 循环内 handler 模板调用 `OpenPath(b)`,函数签名用 loop var `b`,emit body 却引用 on-block 声明的 `path`(未绑定) | emit 参数优先用 loop var(仅当 handler 声明了参数;无参 `.Stop` 仍 emit 无参,否则 `Stop: []` 报 TS2769) |
+| B-4 [][]T 字段 | 2 (TS2339) | 见上 `[][]T` 条目:lenient `parse_fields` 只认冒号,无冒号字段静默丢弃 | `parse_fields` 支持 `name type` 空格形式 |
+| B-5 cthis/sthis | 2 (TS2339) | `parse_event_arg` 把 `.c.name` 拼成 `this.c`+`this.name`=`this.cthis.name`,Vue 剥 `this.` 后是未定义的 `cthis` | `parse_event_arg` 的 Dot 分支 `this.field` 后置 `prev_was_ident=true` → `.c.name`=`this.c.name` |
+| B-6 store BootSnapshot | 3 (TS2339) | 与 B-4 同根因:`commands []ToolEntry`/`smart_commands []SmartCommandEntry` 无冒号被 lenient 丢弃,interface 缺字段 | 同 B-4 |
+
+**关键认知修正**:B-4/B-6 之前被误判为 "codegen 的 to_ts_type 对 [][]T 不完整"。
+实测 `to_ts_type` 本就支持 `[][]T`;真正原因是 **lenient 提取路径的 `parse_fields`
+只认冒号字段** + api.at 里 5 个字段漏写冒号。修 lenient 路径后 `.at` 源码无需改动
+(`rows [][]RenderedCell` 等保持原样即可)。全量回归:auto-lang 2818 passed /
+22 pre-existing 失败不变(已在纯净 master 上验证同样的 22 个失败);auto-man
+178 passed / 1 flaky(HTTP 端口测试,重跑通过)。

@@ -411,11 +411,13 @@ body-chaining 的设计意图:`let x = A.new().b().c()`(方法链跨行)。它�
 
 ## 5.6 M5 收尾 Phase:widget props 声明 + api 类型定义(.at 源码补全)
 
-> **状态**:**进行中**(42→25)。widget props 参数列表 + back/api.at pub type 已补全
-> (参照 015-notes)。剩余 25 个错误分 .at 源码问题(未声明变量)和 auto-lang codegen
-> 问题(`[][]T` 字段不生成、msg 回调签名、handler 参数名)。详见下方"剩余 25 错误"。
-> **性质**:auto-shell 的 `.at` 源码补全(**不涉及 auto-lang worktree**),
-> 参照 015-notes 的既有先例。可能有 1 个 handler 参数名 codegen 问题需确认。
+> **状态**:**已完成**(19→0,2026-08-06)。widget props 参数列表 + back/api.at pub type
+> 已补全(参照 015-notes,A 类);剩余 B 类 19 个 codegen 问题在 auto-lang worktree
+> 分支 `fix/043-m5-bclass`(commit `718e94aa`,待合 master)修复,`auto build` 后
+> **vue-tsc 0 错误 + vite build 成功**。详见 DEBTS.md"043 M5 Phase 5.6 B 类"条目。
+> **性质**:A 类是 auto-shell 的 `.at` 源码补全(不涉及 auto-lang);B 类 6 个子类
+> 是 auto-lang codegen 修复(msg 回调签名 / 类型 import / handler 参数名 /
+> `[][]T`+无冒号字段 lenient 提取 / 循环变量 this.拼接 / store BootSnapshot 字段)。
 
 ### 问题(store codegen 清零后剩余的 42 个 vue-tsc 错误)
 
@@ -472,6 +474,11 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 
 ### 剩余 25 错误分类(实施后实测)
 
+> **2026-08-06 更新**:**全部解决**。A 类 14 个在 auto-shell 侧修(提交
+> `84c4858` 等,补 computed + 命名统一);B 类实际 19 个在 auto-lang worktree
+> `fix/043-m5-bclass`(commit `718e94aa`)修,`auto build` 后 vue-tsc **0 错误**。
+> 下方保留原始分类供追溯;根因与修法详见 DEBTS.md。
+
 **A. .at 源码问题(可继续在 auto-shell 修)**:
 - 未声明的组件内部变量(7 个 TS2339):`status_glyph`/`cwd_display`(BlockItem、PromptBar)、
   `matches`(HistorySearch)、`cthis`/`sthis`(ToolSidebar)。这些是反向生成时遗漏的 computed
@@ -496,6 +503,9 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 ### 风险
 - **A 类**(14 个):.at 源码补全,参照 015-notes,不涉及 auto-lang。
 - **B 类**(11 个):auto-lang codegen,需 worktree 调查 `to_ts_type`/msg prop 签名/store 类型。
+- **2026-08-06 更新**:B 类实际 19 个(6 子类,部分计数与最初 11 个的估计不同——
+  实测 `[][]T` 与 BootSnapshot 字段同根因:lenient `parse_fields` 只认冒号字段,
+  `to_ts_type` 本就支持 `[][]T`)。已全部修复。
 
 ---
 
