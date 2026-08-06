@@ -35,9 +35,9 @@ pub type RenderedOutput = {
     kind: str
     text: str
     columns: []str
-    rows List<List<RenderedCell>>
-    fields List<List<str>>
-    code_lines List<List<CodeSpan>>
+    rows [][]RenderedCell
+    fields [][]str
+    code_lines [][]CodeSpan
     language: str
     error_message: str
     atom_type: str
