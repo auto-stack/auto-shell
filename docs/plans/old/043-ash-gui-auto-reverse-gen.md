@@ -327,6 +327,87 @@ M5(对比验证) → 正向生成,逐文件 diff
 
 ---
 
+## 5.5 M5 收尾 Phase:cat-3 action 互调链式合并修复(parser)
+
+> **状态**:已调研 + 已验证修法,**待执行**(等近期 worktree 合并清理后开新 worktree 实施)。
+> **前置**:M5 的 store-codegen 架构(a96d4da2)与质量修复(cat-1/2/4 = 31c4b84d)已合 master。
+> **目标**:消除 `useShellStoreStore.ts` 最后 1 个 vue-tsc 错误(8→0)。
+
+### 问题
+
+store handler 里 action 互调(如 `.Init` 末尾的 `.RefreshGit()`)被 parser 错误地
+**链式合并**到上一条语句,生成无效 JS:
+- `.cwd = result.cwd` + `.RefreshGit()` → `result.cwd.RefreshGit()`(对字符串属性调用)
+- `.x = history()` + `.RefreshGit()` → `history().RefreshGit()`(对 Promise 属性调用)
+
+### 根因(已用 AST probe 验证,**纠正了上一轮的错误判断**)
+
+**不是** "dot_item 的 RHS `parse_expr` 跨行消费"(上一轮的错误结论;模式 B 证明 RHS
+不跨行消费)。**真正根因是 `parse_body` 的 body-chaining 逻辑(parser.rs:6020)有两个 bug**:
+
+body-chaining 的设计意图:`let x = A.new().b().c()`(方法链跨行)。它把以 `.` 开头的
+后续语句(self-dot-call)合并到前一个表达式。但它**无法区分**:
+- `.Method()` = 对上一行结果的**方法链**(合法,模式 D)
+- `.Method()` = 对 self 的 **action 调用**(应独立,模式 A/C/E)
+- `.field = expr` = 点前缀**赋值**(应独立,不是链式接收者)
+
+两个 bug(用 5 模式 AST probe 验证):
+
+**Bug 1 — target 搜索(parser.rs:6024-6037)**:链式目标候选包含点前缀赋值
+(`Stmt::Expr(Bina)`,`is_dot_self_call` 返回 false → 被当合法 target)。导致
+`.RefreshGit()` 链到 `.cwd = result.cwd`。
+
+**Bug 2 — pop 阶段(parser.rs:6054-6062)**:`chain_count = stmts_len - target_idx - 1`
+假设 target 之后全是 self-dot-call,pop 全部。中间夹杂的点前缀赋值被错误 pop + 卷入链。
+单独修 Bug 1(跳过点前缀 target)会让模式 C 更糟:target 跳过中间所有点前缀,找到更早的
+`let snap`,pop 把中间的点前缀赋值全卷进去 → `let snap = (.cwd = snap.cwd)`。
+
+### 修法(已用 probe 验证:**两个 guard 必须组合**)
+
+**Guard 1(target 搜索)**:候选筛选加门控,跳过 `stmt_starts_with_dot[i] == true` 的
+语句(点前缀语句不是合法链式接收者;真正的接收者 `let x = ...` 不以 `.` 开头)。
+
+**Guard 2(pop 阶段)**:pop 循环里,若 `stmts.last()` 不是 self-dot-call(`is_dot_self_call`
+为 false),立即停止链式(遇到点前缀赋值等独立语句不再 pop)。
+
+**两个 guard 组合的 probe 结果(5 模式)**:
+
+| 模式 | 源 | 修前 | 修后 | 正确? |
+|---|---|---|---|---|
+| A | `.cwd=x` + `.RefreshGit()` | ❌ 合并 | 2 条独立 | ✅ |
+| B | `let` + `.cwd` + `.home`(无 action) | 3 条 | 3 条 | ✅ |
+| C | `let` + `.cwd` + `.home` + `.RefreshGit()` | 末尾合并 | `let snap=command_list().RefreshGit` + 2 条赋值 | ⚠️ 残留 |
+| D | `let x=A.new()` + `.b()` + `.c()` | 链式 | 链式 | ✅ |
+| E | `.x=history()` + `.RefreshGit()` | ❌ 合并 | 2 条独立 | ✅ |
+
+**模式 C 残留**:`.RefreshGit()` 跳过中间两个点前缀赋值,找到最早的 `let snap`,
+链成 `command_list().RefreshGit()`。这是 `.Method()` 固有歧义(parser 无法区分 action
+调用 vs 方法链)。真实 Init handler 里 `.RefreshGit()` 后面紧跟 `for` 循环(非点前缀),
+会自然打断,实际影响小于 probe 的纯点前缀序列。**接受这个残留**(从"对字符串/Promise
+属性调用"降级为"对 API 结果属性调用",危害更小)。
+
+### 实施清单
+
+| 文件:位置 | 改动 |
+|---|---|
+| `auto-lang/crates/auto-lang/src/parser.rs:6024-6037`(target 搜索) | 循环开头加 `if *stmt_starts_with_dot.get(i).unwrap_or(&false) { continue; }` |
+| `auto-lang/crates/auto-lang/src/parser.rs:6054-6062`(pop 阶段) | pop 前 peek `stmts.last()`,非 self-dot-call 则 break;加 `stopped_early` 标志 |
+| 测试 | parser 加 `test_dot_prefix_assignment_not_chained`(5 模式 A/B/D/E 断言 + C 残留文档化) |
+| 回归 | 全量 `cargo test -p auto-lang`(重点:gdscript 方法链、a2r actor handler);22 pre-existing 失败不变 |
+
+### 验证(闭环)
+- `auto build` on ash-gui-auto → `useShellStoreStore.ts` vue-tsc 错误 **1 → 0**
+- (模式 C 残留若仍出现,记录为新 DEBT;真实 Init 的 `.RefreshGit()` 后跟 `for` 可能不触发)
+
+### 风险
+- **低-中**:body-chaining 是 parser 核心路径,但两个 guard 都是"收紧"(只减少合并,不新增)。
+  Guard 1 跳过点前缀 target;Guard 2 提前停止 pop。合法方法链(模式 D)不受影响(接收者
+  `let x` 不以 `.` 开头,pop 的都是 self-dot-call)。
+- **必须跑的回归**:gdscript 测试(方法链密集)、a2r actor handler 测试、015-notes 的
+  notes_store.at(有 action 互调的话)。
+
+---
+
 ## 6. 文件清单(预期产物)
 
 ### `.at` 源码(`ash-gui/ash-gui-auto/src/`)
