@@ -365,3 +365,32 @@ cat Cargo.toml Text 输出。测试脚本 `ash_gui_test.cjs`(playwright chromium
 影响 known sub-widget 的 `on_*` 回调 props。HistorySearch 的 `on_close` 在
 .at 里接了 `.ToggleHistorySearch` 但子组件从不 emit `Close` —— 潜在空接线,
 记录备查,不影响主链路。
+
+**043 M5 Phase 5.7 R4b(2026-08-06 已解决)**:Phase 1 组件的 PascalCase 兜底
+子组件事件名 — auto-lang master commit `6445b9c3`(已 push)。
+
+**现象**:R4 只覆盖 known_sub_widgets(Phase 2 app.at 经 with_sub_widgets 传入)。
+Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,兄弟
+子组件(HistorySearch/BlockItem)经 map_tag 的 PascalCase 兜底走 plain-element
+路径 → 事件仍用 DOM 兜底 `@_run`/`@_open_path`,与子组件 emit(Run/OpenPath/Stop)
+不匹配。对比生成/原生代码发现。
+
+**修法**:plain-element 事件发射处,`html_tag` 为 PascalCase(map_tag 兜底成
+的自定义组件)时用 `sub_widget_event_to_vue`(`on_*` → `@Pascal`);DOM 元素
+保持 `auto_event_to_vue`。新增回归测试
+`test_pascalcase_fallback_element_on_prop_binds_pascal_emit_name`。
+
+**验证**:干净 master 2829 passed / 22 pre-existing;ash-gui-auto vue-tsc 0;
+生成 PromptBar `<HistorySearch @Run @Close>`、BlockList `<BlockItem @Stop
+@OpenPath @Rerun>` 全部对齐子组件 emit;playwright 11 项全 PASS。
+
+**生成 vs 原生对比遗留缺口**(结构对比发现,记录待修):
+1. BlockItem 无 rerun 按钮:block_item.at 有 Rerun msg + handler,但 view 无
+   触发元素(原生有 rerun button)→ BlockList @Rerun 死绑定
+2. BlockBody 单元格不可点击:表格单元格无 onclick(原生 TableView 点击 emit
+   openPath)→ 点击文件/目录无法打开
+3. PromptBar 缺键盘快捷键:Ctrl+L 清屏/Ctrl+D 退出/↑↓ 历史/Ctrl+R 搜索未接线
+   (Injected/Clear/Exit msg 存在但无触发 → App @Clear/@Exit/@Injected 死监听)
+4. HistorySearch 缺 ESC 关闭:原生有 keydown 处理;生成的 Close 变体从不 emit
+5. 单元格无 tag 着色:生成的 cell 只用 text,无 cellStyle(tag→颜色)映射
+6. 表格用 row/col span 布局而非 <table>(原生用 shadcn Table,对齐列)
