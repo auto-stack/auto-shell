@@ -208,7 +208,19 @@ view None 比较 / else-if 链 / struct-literal init / handler 多参数)。
 `return {…}`(无效 JS)。验证:`auto build` 现输出 `✓ Store composable: useShellStoreStore.ts`,
 文件结构正确(refs + actions + getters)。
 
-**仍剩 store handler-body codegen 质量缺口(非阻塞,vue-tsc 报但语法合法)**:
-struct-literal `Block{…}` → `new Block()`(TS 端类型被擦除成 `any`,应发对象字面量 `{}`);
-`List.new([])` 未转译;action 互调 `.RefreshGit()` 被当成属性访问而非函数调用;
-`let x = []` 在严格模式需类型注解。这些是 `ts_adapter` 的转译能力缺口,单独处理。
+**store handler-body codegen 质量(2026-08-06 大部分已解决)**:auto-lang commit
+`31c4b84d`(分支 `fix/043-store-codegen-quality` 已合 master)在 `ts_adapter` 补了 3 个分支:
+- `List<T>.new([])` / `Array<T>.new()` → 数组字面量(原样输出 `List.new`)
+- struct-literal `Type{…}`(Expr::Node)→ 对象字面量 `{ field: val }`(原 `new Type()`)
+- `var x []str = []` / `let x int = 0` → 带 TS-builtin 类型注解(`let result: string[]`)
+  (原隐式 any[]);**用户自定义类型(Block 等)不注解**(TS 端擦除成 `any`)
+验证:`auto build` 的 `useShellStoreStore.ts` vue-tsc 错误 **8 → 1**。
+
+**仍剩 1 个 store codegen 错误(非阻塞,parser 层深问题)**:Init handler 里
+`persisted_history.value = await history().RefreshGit()` —— `.RefreshGit()` 这一行被
+parser 的 `parse_expr`(在 `dot_item` 的 RHS 解析里)消费进了上一行 `history()` 调用,
+变成对 Promise 的属性访问 `history().RefreshGit`。这不是 ts_adapter 的转译问题,而是
+**parser 表达式级的语句边界歧义**(`.field = expr` 的 RHS 跨行消费下一行 `.Method()`)。
+cat-3 曾尝试在 `parser.rs:6020` 收紧链式合并,但 Init 的目标 `let snap` 不以 `.` 开头、
+拦截不到;真正的修法要在表达式解析层(RHS 不跨行消费点前缀语句),风险较高,单独处理。
+临时绕过:把 `.RefreshGit()` 这类 action 互调放到独立语句、不紧跟在赋值/API 调用后。
