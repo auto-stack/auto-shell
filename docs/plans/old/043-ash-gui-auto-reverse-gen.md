@@ -516,6 +516,35 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 > **性质**:运行时验证(起 ash-server + 生成版 dev)发现 2 个功能性缺口,非类型错误。
 > G2 已修复;G1 需 auto-lang codegen 增强,方案见下。
 
+### 实测反馈修复(auto-lang worktree `fix/043-m5-runtime-bug` commit `1f11616b`,待合 master)
+
+用户手动实测(打开生成版 dev)发现 2 个问题,均已修复:
+
+**R1 — `ls` 输入后 block 内容区不显示结果**:根因是 struct-literal
+`Block{ id: id, command: cmd, ... }` 的字段被 `parse_node_body` 当语句解析
+(报 "Expected term, got RBrace" 收集后丢弃),codegen 收到**空 args** Node →
+生成 `let block = {}` → `RunResult` 的 `b.id == result.block_id` 永不匹配,
+结果永远回填不到 block。修复(UI scenario 专用):
+- `atom()` 构造分支 + `node_or_call_expr` 的 rhs 构造:用 `object()` 把
+  `{ field: value }` 解析为**命名 args**
+- 独立 helper `parse_braced_struct_args`(避免热路径栈帧增大——gdscript
+  dodge_player 勉强 2MB 栈,DEBTS 记录过同类回归;非 UI dialect 保持旧行为)
+- 验证:生成的 RunCommand 为
+  `let block = { id: id, command: cmd, cwd: cwd.value, status: { kind: 'Running', message: '' }, output: null, streamed_text: '', duration_ms: 0 }`
+
+**R2 — 样式丑/非黑色主题**:根因是生成的 `index.html` 无 `class="dark"`
+(shadcn 的 `.dark` tokens 不生效,落到浅色 `:root`),且
+`regenerate_source_files` 从不重写 index.html(只在初始脚手架写一次)。
+修复:
+- `generate_index_html` 加 `class="dark"`
+- `regenerate_source_files` 加入 index.html 重建
+- 验证:index.html 为 `<html lang="en" class="dark">`,vue-tsc 0 + build 成功
+
+**回归**:auto-lang lib 2823 passed / 22 failed = **精确 pre-existing 集合**
+(17 dstr + route::discovery + ark×2 + vue button + vm if_stmt,纯净 master 已验证),
+零新增失败。parser 改动同时修复了此前 master 上的 ark/vue/vm 个别失败
+(用户 VM 重构合并后已消失)。
+
 ### G2(已修复,auto-shell commit `2d88ae0`):PromptBar 输入交互
 
 **现象**:生成的 PromptBar 输入框完全不可用——`<input :name="input" @input="Run">`:
