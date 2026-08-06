@@ -43,13 +43,13 @@ view fn RenderTable(output TableOutput) {
                             if cell.Text != nil {
                                 text cell.Text {
                                     onclick: .OpenPath(cell.Text)
-                                    style: if idx == 0 { "cursor-pointer text-sky-400 hover:underline" } else { "cursor-pointer" }
+                                    style: "cursor-pointer text-foreground"
                                 }
                             }
                             if cell.Tagged != nil {
                                 text cell.Tagged.text {
                                     onclick: .OpenPath(cell.Tagged.text)
-                                    style: if idx == 0 { "cursor-pointer text-sky-400 hover:underline" } else { "cursor-pointer" }
+                                    style: if cell.Tagged.kind == "Dir" { "cursor-pointer text-sky-400 hover:underline" } else if cell.Tagged.kind == "CodeAtRs" { "cursor-pointer text-emerald-400 hover:underline" } else if cell.Tagged.kind == "Executable" { "cursor-pointer text-cyan-300 hover:underline" } else if cell.Tagged.kind == "Config" { "cursor-pointer text-amber-300 hover:underline" } else if cell.Tagged.kind == "Permission" { "cursor-pointer text-muted-foreground" } else { "cursor-pointer text-foreground" }
                                 }
                             }
                         }

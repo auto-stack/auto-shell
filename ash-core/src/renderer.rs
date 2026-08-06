@@ -70,13 +70,69 @@ pub struct CodeSpan {
 
 /// One cell of a rendered table. `Tagged` carries a semantic [`CellTag`] so a
 /// frontend can style/interact with it (e.g. make a filename clickable).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RenderedCell {
     /// A plain text cell with no special semantics.
     Text(String),
     /// A cell whose meaning is known (filename / path / …) — frontends may
     /// color or interact with it based on the tag.
     Tagged { text: String, tag: CellTag },
+}
+
+impl CellTag {
+    /// Flat string kind for styling — mirrors the per-extension coloring
+    /// conventions (auto-shell `cell_style`). `FileName(kind)` flattens to the
+    /// kind; unit tags flatten to themselves. Serialized as an extra `kind`
+    /// field on `RenderedCell::Tagged` so text-format frontends (the generated
+    /// Vue) can color by a plain `str` — the object form `{FileName: ...}` is
+    /// not expressible in Auto's .at templates.
+    pub fn flat_kind(&self) -> &'static str {
+        match self {
+            CellTag::Dir | CellTag::FileName(FileNameKind::Dir) => "Dir",
+            CellTag::Permission => "Permission",
+            CellTag::Plain | CellTag::FileName(FileNameKind::Plain) => "Plain",
+            CellTag::FileName(FileNameKind::CodeAtRs) => "CodeAtRs",
+            CellTag::FileName(FileNameKind::Executable) => "Executable",
+            CellTag::FileName(FileNameKind::Config) => "Config",
+        }
+    }
+}
+
+/// Serialize a `Tagged` cell as `{text, tag, kind}` — `kind` is the flat
+/// [`CellTag::flat_kind`], additive so existing consumers of `tag` (the
+/// hand-written Vue `cellStyle.ts`, which reads `tag.FileName`) keep working.
+struct SerializedTagged<'a> {
+    text: &'a str,
+    tag: &'a CellTag,
+}
+
+impl serde::Serialize for SerializedTagged<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("Tagged", 3)?;
+        st.serialize_field("text", self.text)?;
+        st.serialize_field("tag", self.tag)?;
+        st.serialize_field("kind", self.tag.flat_kind())?;
+        st.end()
+    }
+}
+
+impl serde::Serialize for RenderedCell {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        match self {
+            RenderedCell::Text(t) => {
+                let mut st = s.serialize_struct("RenderedCell", 1)?;
+                st.serialize_field("Text", t)?;
+                st.end()
+            }
+            RenderedCell::Tagged { text, tag } => {
+                let mut st = s.serialize_struct("RenderedCell", 1)?;
+                st.serialize_field("Tagged", &SerializedTagged { text, tag })?;
+                st.end()
+            }
+        }
+    }
 }
 
 /// Semantic tag for a [`RenderedCell`]. Frontend-agnostic — it carries *what*

@@ -404,5 +404,10 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
    组件静默丢弃条件样式)
 6. ✅ **已修复** 表格用 shadcn <Table> 布局:thead/tr/th/tbody/tr/td 结构,
    列对齐(依赖 R5 前已有的 table 标签映射)
-   注:tag 着色仍简化——仅首列恒蓝(原生按 tag 类型着色,FileName 对象 tag
-   需 .at 类型扩展,记录待修)
+   注:tag 按类型着色 2026-08-06 已补全——server 的 RenderedCell::Tagged
+   序列化附加扁平 `kind` 字段(ash-core renderer.rs 自定义 Serialize,枚举不
+   动 → iced/手写 vue 零影响),.at 用 `TaggedCell.kind` 多分支条件 style
+   镜像 cellStyle.ts 配色(Dir→sky / CodeAtRs→emerald / Executable→cyan /
+   Config→amber / Permission→muted / Plain→fg);依赖 auto-lang R6(a7c5b684)
+   的 else-if 链→嵌套三元。Ctrl+D 空输入退出:expose{ .Exit } 标记 used +
+   OnCtrlD 条件调用(浏览器无操作,Tauri 正确)。HistorySearch 退格关闭。

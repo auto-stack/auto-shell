@@ -34,6 +34,7 @@ pub type CodeSpan = {
 pub type TaggedCell = {
     text: str
     tag: str
+    kind: str
 }
 
 pub type RenderedCell = {

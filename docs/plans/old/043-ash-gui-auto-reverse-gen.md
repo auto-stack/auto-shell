@@ -656,6 +656,49 @@ if (!__streamConnected) {
 
 ---
 
+## 5.8 M5 收尾:tag 按类型着色 + 收尾小项(2026-08-06)
+
+> **性质**:对比缺口 #3-#6 已修(见 5.7 R4/R4b 后的实测记录与 auto-shell `c812ff0`);
+> 本节是剩余 3 项:完整 tag 着色、Ctrl+D 空输入退出、HistorySearch 退格关闭。
+
+### 调研结论
+
+1. **tag 着色**:线上 `CellTag` 是 serde externally-tagged 枚举
+   `"Dir" | "Permission" | "Plain" | {FileName: "Dir"|"CodeAtRs"|"Executable"|"Config"|"Plain"}`。
+   - iced 前端直接消费 Rust 枚举(不经 serde)→ 序列化改动零影响;
+   - 手写 vue `cellStyle.ts` 读 JSON(`tag.FileName`)→ 可用,无需改;
+   - **.at 无法访问对象 tag**:`.at` 联合类型在 `auto_type_to_ts_type` 落 `any`;
+     Vue 模板对 `string | {FileName}` 无法窄化 `.FileName` 访问。
+   - **条件 style codegen 只支持单 if/else**(extract_classes / push_style_class
+     只取 `branches.first()`,else-if 链被静默丢弃)。
+   - **方案**:ash-core 给 `RenderedCell::Tagged` 的序列化**附加**扁平
+     `kind` 字段(枚举不变 → iced/手写 vue 零影响):`{text, tag, kind}`,
+     `kind` = 扁平后的颜色类别(Dir/CodeAtRs/Executable/Config/Permission/Plain);
+     .at 的 `TaggedCell` 加 `kind: str`;codegen 的 style 处理升级为
+     else-if 链 → **嵌套三元**;block_body.at 用 `if kind == ... else if ...`
+     镜像 cellStyle.ts 配色。
+2. **Ctrl+D 空输入退出**:emit 无条件追加在 handler 尾部,条件 emit 不可达。
+   用 `expose { .Exit }` 把 `.Exit` 标记为 used(生成 `Exit()` 函数),再在
+   `.OnCtrlD` 里 `if .input.trim() == "" { .Exit() }` 条件调用。
+3. **HistorySearch 退格关闭**:`onkeydown.backspace: .OnBackspace`,`if .query == ""` 时 emit Close。
+
+### 修复清单
+
+| # | 位置 | 改动 |
+|---|---|---|
+| A | ash-core `renderer.rs` | `RenderedCell` 自定义 Serialize:Tagged 附加 `kind`(flat)字段 |
+| B | auto-lang vue.rs | `extract_classes` + `push_style_class` 的 Expr::If 处理:else-if 链 → 嵌套三元 |
+| C | api.at | `TaggedCell` 加 `kind: str` |
+| D | block_body.at | RenderTable 单元格 `style: if kind == "Dir" { sky } else if ... else { foreground }` |
+| E | history_search.at | `onkeydown.backspace` + `.OnBackspace` handler |
+| F | prompt_bar.at | `expose { .Exit }` + `.OnCtrlD` 条件调用 `.Exit()` |
+
+### 验证
+vue-tsc 0 + playwright(新增 tag 配色断言:name 列 Cargo.toml 应为 emerald、
+Config 类 amber、dir 为 sky;退格关弹层;Ctrl+D 浏览器无操作)。
+
+---
+
 ## 6. 文件清单(预期产物)
 
 ### `.at` 源码(`ash-gui/ash-gui-auto/src/`)

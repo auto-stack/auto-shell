@@ -40,6 +40,12 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         }
     }
 
+    // expose .Exit:让 .OnCtrlD 条件调用它(expose 会把 .Exit 标记为 used,
+    // 生成 Exit() 函数;否则无模板引用时函数不存在)
+    expose {
+        .Exit
+    }
+
     // props: cwd str, home str, command_names []str,
     //        history []str, injected_command str,
     //        on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg
@@ -92,7 +98,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     onenter: .Run(.input)
                     onkeydown.ctrl.r: .ToggleHistorySearch
                     onkeydown.ctrl.l: .Clear
-                    onkeydown.ctrl.d: .Exit
+                    onkeydown.ctrl.d: .OnCtrlD
                     onkeydown.ctrl.c: .OnCtrlC
                     onkeydown.up: .HistoryOlder
                     onkeydown.down: .HistoryNewer
@@ -142,6 +148,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .in_continuation = false
         }
 
+        // Ctrl+D:空输入时请求退出(像 bash);有输入时不动作
+        .OnCtrlD -> {
+            if .input.trim() == "" {
+                .Exit()
+            }
+        }
+
         // Tab:应用第一个补全候选
         .OnTab -> {
             if .suggestions.len() > 0 {
@@ -186,6 +199,9 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .history_open = false
             .in_continuation = false
         }
+
+        // 退出请求(Ctrl+D 空输入触发 → emit('Exit') → App 处理;浏览器无操作)
+        .Exit -> { }
 
         .AcceptGhost -> {
             // ghost text 接受逻辑(从 ghost_text computed 取值)

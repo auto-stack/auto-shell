@@ -31,6 +31,7 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
                         onkeydown.enter: .RunSelected
                         onkeydown.up: .Move(-1)
                         onkeydown.down: .Move(1)
+                        onkeydown.backspace: .OnBackspace
                         style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
                         placeholder: "搜索历史…"
                     }
@@ -72,6 +73,13 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
 
         .SelectIdx(idx) -> {
             .selected = idx
+        }
+
+        // 退格在空 query 时关闭(像 fzf-history)
+        .OnBackspace -> {
+            if .query == "" {
+                .Close()
+            }
         }
 
         // Enter:执行选中项
