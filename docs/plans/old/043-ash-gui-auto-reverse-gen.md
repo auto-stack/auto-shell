@@ -537,7 +537,7 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 Tab 接受补全——.at 有 stub(`AcceptGhost`/`HistoryOlder`/`ToggleHistorySearch` 等)
 但无 keydown 事件接线。输入→执行→补全主链路已通。
 
-### G1(已实施,auto-lang worktree `fix/043-m5-g1-sse` commit `91d02322`,待合 master):SSE 流式输出未接线
+### G1(已实施并合 master,merge `209f938c` 已 push origin):SSE 流式输出未接线
 
 **现象**:生成的 `useShellStoreStore.ts` 有 `RunOutput`/`RunResult` action
 (命令输出/结果处理器),但**没有 `EventSource('/api/stream')` 订阅**——命令执行后
