@@ -537,7 +537,7 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 Tab 接受补全——.at 有 stub(`AcceptGhost`/`HistoryOlder`/`ToggleHistorySearch` 等)
 但无 keydown 事件接线。输入→执行→补全主链路已通。
 
-### G1(方案已定,待实施):SSE 流式输出未接线
+### G1(已实施,auto-lang worktree `fix/043-m5-g1-sse` commit `91d02322`,待合 master):SSE 流式输出未接线
 
 **现象**:生成的 `useShellStoreStore.ts` 有 `RunOutput`/`RunResult` action
 (命令输出/结果处理器),但**没有 `EventSource('/api/stream')` 订阅**——命令执行后
@@ -548,12 +548,12 @@ Tab 接受补全——.at 有 stub(`AcceptGhost`/`HistoryOlder`/`ToggleHistorySe
 ——与生成版 BlockBody 渲染器的数据契约完全吻合。之前 :3000 上跑的是**过期二进制**
 (SSE 无输出),误导排查。
 
-**修法(auto-lang codegen,`generate_store_composable`)**:当
+**修法(auto-lang codegen,`generate_store_composable`,已实施)**:当
 `store.api_imports` 含 `stream` 且 store 有 `RunOutput`+`RunResult` action 时,注入:
 ```ts
 // 模块级(单例守卫,多个 widget 各自 reactive(useStore()) 只连一次)
 let __streamConnected = false;
-// 函数体内(action 声明之后):
+// 函数体内(action 声明之后,return 之前):
 if (!__streamConnected) {
   __streamConnected = true;
   const es = new EventSource('/api/stream');
@@ -569,10 +569,11 @@ if (!__streamConnected) {
 **判据**:`stream` api 函数 + `RunOutput`/`RunResult` action 命名(Store 消费
 `~Stream` 的实用模式;待 codegen 正式支持 `~Stream<T>` 后替换为类型驱动)。
 
-**备选方案(否决)**:手写逃逸(ext_component)——破坏"源码驱动"的正向生成一致性。
+**验证(已做)**:生成 store 含 EventSource 订阅;vue-tsc 0 + vite build 成功;
+回归 auto-lang lib 2821 passed / 23 failed(均 pre-existing)。**浏览器实测未做**
+(当前环境 IAB 不可用),命令执行后 blocks 实时更新待浏览器验证。
 
-**验收**:生成 store 含 EventSource 订阅;`auto build` 后 vue-tsc 0;
-命令执行后 blocks 列表实时更新(需浏览器实测,当前环境 IAB 不可用,以代码级+HTTP 级验证)。
+**备选方案(否决)**:手写逃逸(ext_component)——破坏"源码驱动"的正向生成一致性。
 
 ---
 
