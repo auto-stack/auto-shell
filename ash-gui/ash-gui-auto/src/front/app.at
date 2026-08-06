@@ -9,7 +9,7 @@ use prompt_bar: PromptBar
 use tool_sidebar: ToolSidebar
 
 widget App {
-    msg Msg { Init, Pick(str), RunSmart(str), Rerun(str), Stop, Clear, Exit,
+    msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
               ToggleSidebar }
 
     model {
@@ -98,6 +98,11 @@ widget App {
         }
 
         .Rerun(cmd) -> {
+            store.RunCommand(cmd)
+        }
+
+        // PromptBar 的 on_run 回调:输入框执行命令
+        .RunCommand(cmd) -> {
             store.RunCommand(cmd)
         }
 

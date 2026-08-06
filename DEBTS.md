@@ -79,6 +79,30 @@ Windows `taskkill /T /F`)终止进程。但走 `shell.execute()` 阻塞路径的
 
 **推翻条件**:auto-lang parser 的 `parse_array_type` 支持递归嵌套 `[][]T`。
 
+### 比较运算符(`>` `<` `==`)在表达式上下文中导致 stack overflow
+
+**来源**:Plan 043 M5(正向生成验证)。
+
+**现状**:`fn f() { x > 0 }` 或 `if x > 0 { ... }` 在任何 body 中解析时,
+触发 `expr_pratt_with_left` 的无限递归 → stack overflow。`x = 0`(赋值)和
+`x + 0`(加法)可以正常解析,但 `>` `<` `==` `!=` 等比较运算符不行。
+
+**根因**:`expr_pratt_with_left` 的 infix loop 在处理比较运算符时,RHS 解析
+`expr_pratt(power.r)` 返回后 token 流不推进,导致循环无限重复。具体原因未定位
+(可能在 `self.next()` skip binary op 与 RHS 解析的交互中有 bug)。
+
+**已知部分修复**:auto-lang master 上已有 `dot_item` 中对 `=` (Asn) 的拦截
+(parser.rs ~line 1970,标注 "Plan 043"),但仅覆盖赋值,不覆盖比较运算符。
+
+**影响**:Plan 043 的 `shell_store.at` 无法解析(on handler 里有 `if .x > 0`),
+M5(正向生成验证)被阻塞。所有使用比较运算符的 Auto UI 代码都受影响。
+
+**临时绕过**:在 .at 源码中避免在 body/computed 中使用比较运算符。
+将条件逻辑移到前端 Vue 组件中(手写逃逸)。
+
+**推翻条件**:auto-lang parser 的 `expr_pratt_with_left` 正确处理比较运算符
+的 RHS 解析(不无限递归)。
+
 **2026-08-06 部分解决(B 类修复,auto-lang commit `718e94aa`,分支
 `fix/043-m5-bclass` 待合 master)**:`api.at` 的 `[][]T` 字段现在能进生成的 interface,
 但**不是**靠修 `parse_array_type`——而是修了 **lenient API 提取路径**:

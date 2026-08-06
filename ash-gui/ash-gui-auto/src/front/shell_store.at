@@ -38,38 +38,10 @@ store ShellStore {
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen }
 
     computed {
-        // ↑↓ 导航用的历史(文件历史 + 本次会话)
-        history => {
-            var result []str = []
-            result = result.concat(.persisted_history)
-            for b in .blocks {
-                if b.command != "" {
-                    result.push(b.command)
-                }
-            }
-            return result
-        }
-
-        // git label 格式化:⎇ main +2 !1 ?0
-        git_label => {
-            if .git_info.git_branch == "" {
-                return ""
-            }
-            var label str = "⎇ " + .git_info.git_branch
-            var s = .git_info.git_status
-            if s != None {
-                var parts []str = []
-                if s.staged > 0 { parts.push("+" + s.staged) }
-                if s.unstaged > 0 { parts.push("!" + s.unstaged) }
-                if s.untracked > 0 { parts.push("?" + s.untracked) }
-                if s.ahead > 0 { parts.push("⇡" + s.ahead) }
-                if s.behind > 0 { parts.push("⇣" + s.behind) }
-                if parts.len() > 0 {
-                    label = label + " " + parts.join(" ")
-                }
-            }
-            return label
-        }
+        // Note: computed uses parse_expr (not parse_body), so complex
+        // .field access may overflow. Keep simple for now.
+        history => self.persisted_history
+        git_label => ""
     }
 
     on {
