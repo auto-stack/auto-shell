@@ -18,34 +18,40 @@ use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 // 参数是窄化后的 TableOutput(view fn 只替换裸 Ident 参数,把 .output.Table
 // 传进来即可在 body 里用 output.columns)。
 view fn RenderTable(output TableOutput) {
-    col {
-        style: "text-sm font-mono-ash"
+    table {
+        style: "w-full text-sm font-mono-ash border-collapse"
         // 表头
-        row {
-            style: "gap-4 px-2 py-1 border-b border-border text-muted-foreground text-xs"
-            for col in output.columns {
-                text col { }
+        thead {
+            tr {
+                style: "border-b border-border text-muted-foreground text-xs"
+                for col in output.columns {
+                    th {
+                        style: "px-3 py-1.5 text-left font-medium whitespace-nowrap"
+                        text col { }
+                    }
+                }
             }
         }
-        // 表行
-        for row in output.rows {
-            row {
-                style: "gap-4 px-2 py-1 border-b border-border/50"
-                for cell in row {
-                    // tagged-union:Text/Tagged 恰有一个变体,用两个并列 if
-                    // 而非 else-if(widget-tree 解析器对 for 体内的 else-if
-                    // 解析不稳定,见 DEBTS)。
-                    // 单元格可点击:onclick 触发 .OpenPath(文本)→ 一路 emit
-                    // 到 App 的 open_path API(OS 打开文件/目录)。非路径单元
-                    // 格点击会无害失败(服务端忽略错误)。
-                    if cell.Text != nil {
-                        text cell.Text {
-                            onclick: .OpenPath(cell.Text)
-                        }
-                    }
-                    if cell.Tagged != nil {
-                        text cell.Tagged.text {
-                            onclick: .OpenPath(cell.Tagged.text)
+        // 表行(首列是名称/路径,用蓝色 + 下划线提示可点击)
+        tbody {
+            for row in output.rows {
+                tr {
+                    style: "border-b border-border/50"
+                    for idx, cell in row {
+                        td {
+                            style: "px-3 py-1.5 align-top"
+                            if cell.Text != nil {
+                                text cell.Text {
+                                    onclick: .OpenPath(cell.Text)
+                                    style: if idx == 0 { "cursor-pointer text-sky-400 hover:underline" } else { "cursor-pointer" }
+                                }
+                            }
+                            if cell.Tagged != nil {
+                                text cell.Tagged.text {
+                                    onclick: .OpenPath(cell.Tagged.text)
+                                    style: if idx == 0 { "cursor-pointer text-sky-400 hover:underline" } else { "cursor-pointer" }
+                                }
+                            }
                         }
                     }
                 }

@@ -28,6 +28,18 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         var suggestions []CompletionItem = []
     }
 
+    // 侧栏点击工具 → 填入输入框(原生 PromptBar 的 injectedCommand watch)
+    watch {
+        .injected_command -> {
+            if .injected_command != "" {
+                .input = .injected_command
+                .history_cursor = -1
+                .suggestions = []
+                .history_open = false
+            }
+        }
+    }
+
     // props: cwd str, home str, command_names []str,
     //        history []str, injected_command str,
     //        on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg
@@ -70,12 +82,21 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 }
 
                 // 输入框:value+oninput → v-model 双向绑定;Enter 执行;
-                // onkeyup 触发补全(v-model 会吞 oninput 事件,用 keyup 兜底)
+                // onkeyup 触发补全(v-model 会吞 oninput 事件,用 keyup 兜底);
+                // 键盘快捷键:Ctrl+R 搜索 / Ctrl+L 清屏 / Ctrl+D 退出 /
+                // Ctrl+C 清输入 / ↑↓ 历史 / Tab 补全。
                 input {
                     value: .input
                     oninput: .OnInput
                     onkeyup: .OnInput
                     onenter: .Run(.input)
+                    onkeydown.ctrl.r: .ToggleHistorySearch
+                    onkeydown.ctrl.l: .Clear
+                    onkeydown.ctrl.d: .Exit
+                    onkeydown.ctrl.c: .OnCtrlC
+                    onkeydown.up: .HistoryOlder
+                    onkeydown.down: .HistoryNewer
+                    onkeydown.tab.prevent: .OnTab
                     style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
                     placeholder: "type a command…"
                 }
@@ -110,6 +131,52 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
 
         .ToggleHistorySearch -> {
             .history_open = !.history_open
+        }
+
+        // Ctrl+C:清空当前输入
+        .OnCtrlC -> {
+            .input = ""
+            .history_cursor = -1
+            .suggestions = []
+            .history_open = false
+            .in_continuation = false
+        }
+
+        // Tab:应用第一个补全候选
+        .OnTab -> {
+            if .suggestions.len() > 0 {
+                .PickCompletion(.suggestions[0])
+            }
+        }
+
+        // ↑ 历史(older):向上翻历史
+        .HistoryOlder -> {
+            if .history.len() > 0 {
+                var cur int = .history_cursor
+                if cur < 0 {
+                    cur = .history.len()
+                }
+                if cur > 0 {
+                    .history_cursor = cur - 1
+                    .input = .history[.history_cursor]
+                }
+            }
+        }
+
+        // ↓ 历史(newer):向下翻历史(到最新则清空)
+        .HistoryNewer -> {
+            if .history.len() > 0 {
+                if .history_cursor >= 0 {
+                    var next int = .history_cursor + 1
+                    if next >= .history.len() {
+                        .history_cursor = -1
+                        .input = ""
+                    } else {
+                        .history_cursor = next
+                        .input = .history[next]
+                    }
+                }
+            }
         }
 
         .Clear -> {

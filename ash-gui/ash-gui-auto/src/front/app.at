@@ -10,7 +10,7 @@ use tool_sidebar: ToolSidebar
 
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
-              ToggleSidebar, OpenPath(str) }
+              ToggleSidebar, OpenPath(str), ClearScreen }
 
     model {
         var sidebar_open bool = true
@@ -76,7 +76,7 @@ widget App {
                     injected_command: .injected_command,
                     on_run: .RunCommand,
                     on_injected: .Clear,
-                    on_clear: .Clear,
+                    on_clear: .ClearScreen,
                     on_exit: .Exit
                 )
             }
@@ -119,6 +119,11 @@ widget App {
 
         .Clear -> {
             .injected_command = ""
+        }
+
+        // Ctrl+L 清屏:归档所有 blocks(PromptBar on_clear 回调)
+        .ClearScreen -> {
+            store.ClearScreen()
         }
 
         .Exit -> {

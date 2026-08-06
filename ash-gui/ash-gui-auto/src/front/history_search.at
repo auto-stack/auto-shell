@@ -1,18 +1,15 @@
 // front/history_search.at — Ctrl+R 历史搜索弹层 widget
 // Plan 043 M4: 反向生成自 HistorySearch.vue
 //
-// fzf 风格的历史搜索面板:模糊过滤、↑↓ 导航、Enter 执行。
+// fzf 风格的历史搜索面板:输入过滤、↑↓ 导航、Enter 执行、Esc/退格关闭。
 
 widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
     msg Msg { Run(str), Close, Move(int) }
 
-    computed {
-        matches => .history
-    }
-
     model {
         var query str = ""
         var selected int = 0
+        var matches []str = []
     }
 
     view {
@@ -26,20 +23,30 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
                     text "⌕" {
                         style: "text-xs text-amber-400 font-mono-ash select-none shrink-0"
                     }
-                    input .query {
-                        oninput: .Move
+                    input {
+                        value: .query
+                        oninput: .OnQuery
+                        onkeyup: .OnQuery
+                        onkeydown.esc: .Close
+                        onkeydown.enter: .RunSelected
+                        onkeydown.up: .Move(-1)
+                        onkeydown.down: .Move(1)
                         style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
                         placeholder: "搜索历史…"
                     }
+                    text "↑↓ 选择 · ⏎ 执行 · Esc 关闭" {
+                        style: "text-[10px] text-muted-foreground/50 select-none shrink-0"
+                    }
                 }
 
-                // 匹配列表
+                // 匹配列表(选中项高亮)
                 col {
                     style: "overflow-y-auto py-1"
-                    for entry in .matches {
+                    for idx, entry in .matches {
                         button .entry {
                             onclick: .Run(.entry)
-                            style: "w-full text-left px-3 py-1 text-sm font-mono-ash"
+                            onmousemove: .SelectIdx(idx)
+                            style: "w-full text-left px-3 py-1 text-sm font-mono-ash " + (if idx == .selected { "bg-accent text-accent-foreground" } else { "text-muted-foreground hover:bg-muted/50" })
                         }
                     }
                     if .matches.len() == 0 {
@@ -55,8 +62,40 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
     on {
         .Run(cmd) -> { }
         .Close -> { }
+
+        // ↑↓ 移动选中(循环)
         .Move(delta) -> {
-            .selected = .selected + delta
+            if .matches.len() > 0 {
+                .selected = (.selected + delta + .matches.len()) % .matches.len()
+            }
+        }
+
+        .SelectIdx(idx) -> {
+            .selected = idx
+        }
+
+        // Enter:执行选中项
+        .RunSelected -> {
+            if .selected < .matches.len() {
+                .Run(.matches[.selected])
+            }
+        }
+
+        // 输入变化 → 过滤历史(大小写不敏感子串)
+        .OnQuery -> {
+            if .query.trim() != "" {
+                var out []str = []
+                for h in .history {
+                    if h.contains(.query) {
+                        out.push(h)
+                    }
+                }
+                .matches = out
+                .selected = 0
+            } else {
+                .matches = .history
+                .selected = 0
+            }
         }
     }
 }

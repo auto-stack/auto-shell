@@ -392,8 +392,17 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
    BlockBody emit → BlockItem → BlockList → App .OpenPath → store.OpenPath →
    POST /api/open_path(OS 打开);playwright 实测点击 Cargo.toml 触发。所有
    单元格可点击,非路径点击无害失败(服务端忽略)
-3. PromptBar 缺键盘快捷键:Ctrl+L 清屏/Ctrl+D 退出/↑↓ 历史/Ctrl+R 搜索未接线
-   (Injected/Clear/Exit msg 存在但无触发 → App @Clear/@Exit/@Injected 死监听)
-4. HistorySearch 缺 ESC 关闭:原生有 keydown 处理;生成的 Close 变体从不 emit
-5. 单元格无 tag 着色:生成的 cell 只用 text,无 cellStyle(tag→颜色)映射
-6. 表格用 row/col span 布局而非 <table>(原生用 shadcn Table,对齐列)
+3. ✅ **已修复** PromptBar 键盘快捷键:Ctrl+R 历史搜索 / Ctrl+L 清屏 /
+   Ctrl+C 清输入 / ↑↓ 历史 / Tab 补全(依赖 auto-lang R5 之前的 R4b 事件绑定)。
+   watch 块处理 injected_command 填输入框。Ctrl+D 退出仍无条件 emit(浏览器
+   无操作;Tauri 会误退,记录待修)
+4. ✅ **已修复** HistorySearch 过滤 + 键盘:输入过滤(大小写不敏感子串)、
+   ↑↓ 选中、Enter 执行、Esc 关闭;选中项高亮(bg-accent)
+5. ✅ **已修复** 首列着色:单元格条件样式(
+   if idx == 0 { sky } else { cursor })。依赖 auto-lang R5(b4ab6d4c):
+   shadcn 路径支持 Expr::If → :class 三元(此前 text/span 等 registry
+   组件静默丢弃条件样式)
+6. ✅ **已修复** 表格用 shadcn <Table> 布局:thead/tr/th/tbody/tr/td 结构,
+   列对齐(依赖 R5 前已有的 table 标签映射)
+   注:tag 着色仍简化——仅首列恒蓝(原生按 tag 类型着色,FileName 对象 tag
+   需 .at 类型扩展,记录待修)
