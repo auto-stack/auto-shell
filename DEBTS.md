@@ -439,3 +439,41 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
    Config→amber / Permission→muted / Plain→fg);依赖 auto-lang R6(a7c5b684)
    的 else-if 链→嵌套三元。Ctrl+D 空输入退出:expose{ .Exit } 标记 used +
    OnCtrlD 条件调用(浏览器无操作,Tauri 正确)。HistorySearch 退格关闭。
+
+---
+
+## Plan 043 §5.9 归档前复审发现的功能缺口(2026-08-06)
+
+> **性质**:归档前按 plan-archiver 技能 Step 2.5 做的 debt-review pass 发现。playwright
+> 覆盖的 ls/cat/stat/date/version/sys mem 成功路径通过,但**相邻用户可见功能有真实缺口**。
+> 这些推翻了此前"无遗留 workaround"的说法——§5.9 解决了原列 3 项权衡,但复审又发现下列
+> 🔴/🟡 项。**Plan 043 不应按"100% 对等"归档**,这些是遗留待修。
+
+### 🔴 高风险(功能错误或缺失,codegen/.at 双方都有)
+
+| # | 缺口 | 根因 | 位置 |
+|---|---|---|---|
+| H1 | **状态字形(✓/✗/⊘/…)永不渲染** | codegen 把 `status_glyph` 的 `if/else-if` 表达式生成成 IIFE 但**漏了 `return`**:`(() => { if(...) { '✓'; } ... })()` → `undefined`。.at 源码正确。 | 生成 `BlockItem.vue:8-9`;属 auto-lang `expr_to_js` 的 `Expr::If` 分支(此前 92314c2d 加的 IIFE 漏 return) |
+| H2 | **重跑(↻)/单元格点击打开失效** | 父级 `BlockList` 用 `@Rerun="Rerun(b)"` / `@OpenPath="OpenPath(b)"` 把 v-for 的 block 对象 `b` 当参数转发,**丢弃**子组件 emit 的命令字符串/路径。应为 `@Rerun="Rerun($event)"`。codegen msg-forwarding 把 loop var 当 emit payload。 | 生成 `BlockList.vue:47` |
+| H3 | **失败命令不显示错误信息** | `.at` 的 `CommandResult.failed_message: str` 字段在服务端**不存在**——服务端用 `status: CommandStatus::Failed(String)` 枚举变体携带消息。`result.failed_message` 永远 `undefined`。源码层契约错误。 | `back/api.at:121`;服务端 `ash-server/src/types.rs:83-96` |
+| H4 | **SmartCommand 永无输出** | store 的 `RunSmart` action 丢弃 `run_smart()` 返回值,且不推 block。源码注释说"result 直接更新 block"但实际 no-op。 | `front/shell_store.at:121-124`;生成 `useShellStoreStore.ts:63-65` |
+| H5 | **`show` 命令语法高亮丢失** | `block_body.at` 的 `RenderCode` 指定 `style: "color: rgb(...)"`,但 codegen 对 `text span.text` 元素**未绑定 style** → 输出单色。 | 生成 `BlockBody.vue:75-81`;src `block_body.at:65-78` |
+| H6 | **HistorySearch 选中项无高亮** | `selected` ref 更新但行无 `:class` 绑定,用户看不到当前选中。 | 生成 `HistorySearch.vue:74` |
+
+### 🟡 一致性遗漏(功能可用但与手写版不一致)
+
+- **BlockItem 缺 duration 标签**(手写版显示 `123ms` Badge)、**cwd 未缩写**(手写用 `abbrevPath`)、**copy 无错误兜底**(`navigator.clipboard` 无 `?.`/`.catch`,非安全上下文抛异常)。
+- **HistorySearch**:大小写敏感(手写不敏感)、最旧在前(手写最新在前且 cap 50)、无自动聚焦/执行后关闭/计数。
+- **ToolSidebar 丢弃命令描述**(手写有 `:title` tooltip + 内联描述,生成只有名字)。
+- **PromptBar 补全无 debounce**(每次 keyup 即触发,手写 80ms debounce + 序列号防竞态)。
+- **SSE 无 onerror/无重连**:`__streamConnected` 永久 latch;EventSource 关闭后不重连(手写同样无 onerror,但无 latch)。`Number(field[1].Text)` 无 `isFinite`/剥 `%`(`"75%"` → NaN)。
+
+### 🟢 已知限制(设计权衡,手写版有但生成版暂缺)
+
+- **PromptBar ghost text 自动补全**:`.at` 有 `AcceptGhost`/`HistoryOlder` stub 但无 keydown 接线;无内联补全预览、Ctrl+F 接受全词、Ctrl+Right 接受单词。
+- **PromptBar 语法高亮 overlay + 多行续行**:生成版是单行 `<input>`,无 `tokenize()` overlay、无 `·` 续行提示。
+- **store 全 `any` 类型**:10 个 ref + ~25 个 handler 参数为 `any`,掩盖了上述类型契约错误(H3)。这是 codegen 的有意简化(用户自定义类型在 TS 端擦除)。
+
+### 推翻条件
+- H1-H6 全部修复后,Plan 043 可按"功能对等"归档。
+- 验证方式:扩展 playwright 覆盖到失败命令、SmartCommand、重跑、点击打开、状态字形、`show` 高亮(当前只测了 6 条成功路径)。
