@@ -216,11 +216,13 @@ view None 比较 / else-if 链 / struct-literal init / handler 多参数)。
   (原隐式 any[]);**用户自定义类型(Block 等)不注解**(TS 端擦除成 `any`)
 验证:`auto build` 的 `useShellStoreStore.ts` vue-tsc 错误 **8 → 1**。
 
-**仍剩 1 个 store codegen 错误(非阻塞,parser 层深问题)**:Init handler 里
-`persisted_history.value = await history().RefreshGit()` —— `.RefreshGit()` 这一行被
-parser 的 `parse_expr`(在 `dot_item` 的 RHS 解析里)消费进了上一行 `history()` 调用,
-变成对 Promise 的属性访问 `history().RefreshGit`。这不是 ts_adapter 的转译问题,而是
-**parser 表达式级的语句边界歧义**(`.field = expr` 的 RHS 跨行消费下一行 `.Method()`)。
-cat-3 曾尝试在 `parser.rs:6020` 收紧链式合并,但 Init 的目标 `let snap` 不以 `.` 开头、
-拦截不到;真正的修法要在表达式解析层(RHS 不跨行消费点前缀语句),风险较高,单独处理。
-临时绕过:把 `.RefreshGit()` 这类 action 互调放到独立语句、不紧跟在赋值/API 调用后。
+**cat-3 action 互调链式合并(2026-08-06 已解决)**:auto-lang commit `654ba12e`
+(Plan 043 Phase 5.5,已合 master)。根因是 `parse_body` 的 body-chaining 逻辑有 3 个
+bug(用 5 模式 AST probe 验证,纠正了之前"RHS 跨行消费"的错误判断):
+- **Guard 1**:target 搜索跳过点前缀语句(`.field = expr` 不是合法链式接收者)
+- **Guard 2**:pop 阶段遇非 self-dot-call 立即停止(不把点前缀赋值卷进链)
+- **Guard 3**:若回溯找 target 时跨过了任何点前缀语句,放弃链式(方法链接收者必须是紧邻的上一行)
+另修 store composable 的 action 可见性:`generate_store_composable` 把 action 从返回对象的
+内联属性改成 `const ActionName = ...` 闭包变量(返回对象引用它),这样 action 互调
+(`RefreshGit()`)在闭包作用域里可见。验证:`useShellStoreStore.ts` vue-tsc 错误 **1 → 0**
+(整个 store-codegen 旅程:8 → 1(cat-1/2/4)→ 0(cat-3))。

@@ -329,7 +329,8 @@ M5(对比验证) → 正向生成,逐文件 diff
 
 ## 5.5 M5 收尾 Phase:cat-3 action 互调链式合并修复(parser)
 
-> **状态**:已调研 + 已验证修法,**待执行**(等近期 worktree 合并清理后开新 worktree 实施)。
+> **状态**:**已完成**(auto-lang commit `654ba12e`,已合 master)。实施时在原方案
+> (双 guard)基础上发现需要 **3 个 guard + store composable 重构**,详见 DEBTS。
 > **前置**:M5 的 store-codegen 架构(a96d4da2)与质量修复(cat-1/2/4 = 31c4b84d)已合 master。
 > **目标**:消除 `useShellStoreStore.ts` 最后 1 个 vue-tsc 错误(8→0)。
 
