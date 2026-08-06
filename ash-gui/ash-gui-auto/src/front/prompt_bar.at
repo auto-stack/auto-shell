@@ -6,6 +6,7 @@
 
 use shell_store: ShellStore
 use history_search: HistorySearch
+use back.api: complete
 use types: CompletionItem
 
 widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {
@@ -68,9 +69,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     style: "text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate"
                 }
 
-                // 输入框(ghost text + 语法高亮在 Vue 版用 overlay 实现)
-                input .input {
-                    oninput: .Run
+                // 输入框:value+oninput → v-model 双向绑定;Enter 执行;
+                // onkeyup 触发补全(v-model 会吞 oninput 事件,用 keyup 兜底)
+                input {
+                    value: .input
+                    oninput: .OnInput
+                    onkeyup: .OnInput
+                    onenter: .Run(.input)
                     style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
                     placeholder: "type a command…"
                 }
@@ -79,11 +84,19 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
     }
 
     on {
+        // 纯转发:清状态后由自动 emit('Run', cmd) 发给父级(App.RunCommand 执行)
         .Run(cmd) -> {
+            .input = ""
+            .history_cursor = -1
+            .suggestions = []
+        }
+
+        // 输入变化 → 后端补全(v-model 已把 .input 更新为当前文本)
+        .OnInput -> {
             if .input.trim() != "" {
-                store.RunCommand(.input)
-                .input = ""
-                .history_cursor = -1
+                var items []CompletionItem = complete(.input, .input.len())
+                .suggestions = items
+            } else {
                 .suggestions = []
             }
         }

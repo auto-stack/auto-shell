@@ -101,9 +101,11 @@ widget App {
             store.RunCommand(cmd)
         }
 
-        // PromptBar 的 on_run 回调:输入框执行命令
+        // PromptBar 的 on_run 回调:输入框执行命令(空命令忽略)
         .RunCommand(cmd) -> {
-            store.RunCommand(cmd)
+            if cmd.trim() != "" {
+                store.RunCommand(cmd)
+            }
         }
 
         .Stop -> {
