@@ -10,7 +10,7 @@ use tool_sidebar: ToolSidebar
 
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
-              ToggleSidebar }
+              ToggleSidebar, OpenPath(str) }
 
     model {
         var sidebar_open bool = true
@@ -62,7 +62,7 @@ widget App {
                 BlockList(
                     blocks: .store.blocks,
                     home: .store.home,
-                    on_open_path: .Pick,
+                    on_open_path: .OpenPath,
                     on_rerun: .Rerun,
                     on_stop: .Stop
                 )
@@ -110,6 +110,11 @@ widget App {
 
         .Stop -> {
             store.Cancel()
+        }
+
+        // 点击表格单元格中的文件/目录:用 OS 默认程序打开
+        .OpenPath(path) -> {
+            store.OpenPath(path)
         }
 
         .Clear -> {

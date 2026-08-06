@@ -35,11 +35,18 @@ view fn RenderTable(output TableOutput) {
                     // tagged-union:Text/Tagged 恰有一个变体,用两个并列 if
                     // 而非 else-if(widget-tree 解析器对 for 体内的 else-if
                     // 解析不稳定,见 DEBTS)。
-                    if cell.Tagged != nil {
-                        text cell.Tagged.text { }
-                    }
+                    // 单元格可点击:onclick 触发 .OpenPath(文本)→ 一路 emit
+                    // 到 App 的 open_path API(OS 打开文件/目录)。非路径单元
+                    // 格点击会无害失败(服务端忽略错误)。
                     if cell.Text != nil {
-                        text cell.Text { }
+                        text cell.Text {
+                            onclick: .OpenPath(cell.Text)
+                        }
+                    }
+                    if cell.Tagged != nil {
+                        text cell.Tagged.text {
+                            onclick: .OpenPath(cell.Tagged.text)
+                        }
                     }
                 }
             }

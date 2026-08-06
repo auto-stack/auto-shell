@@ -35,7 +35,8 @@ store ShellStore {
     msg Msg { Init, RunCommand(str), RunResult(CommandResult), RunOutput(CommandOutput),
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
-              SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen }
+              SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen,
+              OpenPath(str) }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -137,6 +138,11 @@ store ShellStore {
         // ── 侧栏 ──
         .ToggleSidebar -> {
             .sidebar_open = !.sidebar_open
+        }
+
+        // ── 用 OS 默认程序打开路径(点击表格单元格) ──
+        .OpenPath(path) -> {
+            open_path(path)
         }
 
         // ── 清屏(归档所有 blocks) ──

@@ -384,11 +384,14 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 生成 PromptBar `<HistorySearch @Run @Close>`、BlockList `<BlockItem @Stop
 @OpenPath @Rerun>` 全部对齐子组件 emit;playwright 11 项全 PASS。
 
-**生成 vs 原生对比遗留缺口**(结构对比发现,记录待修):
-1. BlockItem 无 rerun 按钮:block_item.at 有 Rerun msg + handler,但 view 无
-   触发元素(原生有 rerun button)→ BlockList @Rerun 死绑定
-2. BlockBody 单元格不可点击:表格单元格无 onclick(原生 TableView 点击 emit
-   openPath)→ 点击文件/目录无法打开
+**生成 vs 原生对比遗留缺口**(结构对比发现;1-2 已于 2026-08-06 修复):
+1. ✅ **已修复** BlockItem rerun 按钮:block_item.at 加悬停显示的 ⧉ 复制(调
+   navigator.clipboard)+ ↻ 重跑(onclick .Rerun(.block.command))→ BlockList
+   @Rerun 激活,playwright 实测点击触发 POST /run_command
+2. ✅ **已修复** BlockBody 单元格可点击:单元格 onclick .OpenPath(text) →
+   BlockBody emit → BlockItem → BlockList → App .OpenPath → store.OpenPath →
+   POST /api/open_path(OS 打开);playwright 实测点击 Cargo.toml 触发。所有
+   单元格可点击,非路径点击无害失败(服务端忽略)
 3. PromptBar 缺键盘快捷键:Ctrl+L 清屏/Ctrl+D 退出/↑↓ 历史/Ctrl+R 搜索未接线
    (Injected/Clear/Exit msg 存在但无触发 → App @Clear/@Exit/@Injected 死监听)
 4. HistorySearch 缺 ESC 关闭:原生有 keydown 处理;生成的 Close 变体从不 emit
