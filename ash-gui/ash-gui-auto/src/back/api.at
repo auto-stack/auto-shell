@@ -16,107 +16,105 @@ use types: BootSnapshot, CompletionItem, PromptContext, ShellEvent, SmartResult
 // 导致生成的 api.ts 引用了未定义的类型名。复制到这里作为 pub type。
 // ═══════════════════════════════════════════════════════════
 
-pub alias AtomType = str
-pub alias CellTag = str
 
 pub type CodeSpan = {
-    text str
-    r int
-    g int
-    b int
-    bold bool
-    italic bool
+    text: str
+    r: int
+    g: int
+    b: int
+    bold: bool
+    italic: bool
 }
 
 pub type RenderedCell = {
-    text str
-    tag CellTag
+    text: str
+    tag: str
 }
 
 pub type RenderedOutput = {
-    kind str
-    text str
-    columns []str
+    kind: str
+    text: str
+    columns: []str
     rows List<List<RenderedCell>>
     fields List<List<str>>
     code_lines List<List<CodeSpan>>
-    language str
-    error_message str
-    atom_type AtomType
+    language: str
+    error_message: str
+    atom_type: str
 }
 
 pub type BlockStatus = {
-    kind str
-    message str
+    kind: str
+    message: str
 }
 
 pub type Block = {
-    id int
-    command str
-    cwd str
-    status BlockStatus
-    output RenderedOutput
-    streamed_text str
-    duration_ms int
+    id: int
+    command: str
+    cwd: str
+    status: BlockStatus
+    output: RenderedOutput
+    streamed_text: str
+    duration_ms: int
 }
 
 pub type GitStatusInfo = {
-    staged int
-    unstaged int
-    untracked int
-    conflicted int
-    ahead int
-    behind int
+    staged: int
+    unstaged: int
+    untracked: int
+    conflicted: int
+    ahead: int
+    behind: int
 }
 
 pub type PromptContext = {
-    git_branch str
-    git_status GitStatusInfo
+    git_branch: str
+    git_status: GitStatusInfo
 }
 
 pub type CompletionItem = {
-    replacement str
-    display str
-    description str
-    kind str
+    replacement: str
+    display: str
+    description: str
+    kind: str
 }
 
 pub type SmartResult = {
-    output str
-    error str
+    output: str
+    error: str
 }
 
 pub type CommandResult = {
-    block_id int
-    status str
-    cwd str
-    output str
-    duration_ms int
-    failed_message str
+    block_id: int
+    status: str
+    cwd: str
+    output: str
+    duration_ms: int
+    failed_message: str
 }
 
 pub type ShellEvent = {
-    event str
-    block_id int
-    chunk str
-    result CommandResult
+    event: str
+    block_id: int
+    chunk: str
+    result: CommandResult
 }
 
 pub type ToolEntry = {
-    name str
-    description str
-    usage str
+    name: str
+    description: str
+    usage: str
 }
 
 pub type SmartCommandEntry = {
-    name str
-    description str
-    args []str
+    name: str
+    description: str
+    args: []str
 }
 
 pub type BootSnapshot = {
-    cwd str
-    home str
+    cwd: str
+    home: str
     commands []ToolEntry
     smart_commands []SmartCommandEntry
 }
