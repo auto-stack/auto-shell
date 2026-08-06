@@ -411,7 +411,9 @@ body-chaining 的设计意图:`let x = A.new().b().c()`(方法链跨行)。它�
 
 ## 5.6 M5 收尾 Phase:widget props 声明 + api 类型定义(.at 源码补全)
 
-> **状态**:**待执行**。M5 验收标准(`vue-tsc --noEmit` 通过)的最后障碍。
+> **状态**:**进行中**(42→25)。widget props 参数列表 + back/api.at pub type 已补全
+> (参照 015-notes)。剩余 25 个错误分 .at 源码问题(未声明变量)和 auto-lang codegen
+> 问题(`[][]T` 字段不生成、msg 回调签名、handler 参数名)。详见下方"剩余 25 错误"。
 > **性质**:auto-shell 的 `.at` 源码补全(**不涉及 auto-lang worktree**),
 > 参照 015-notes 的既有先例。可能有 1 个 handler 参数名 codegen 问题需确认。
 
@@ -465,12 +467,35 @@ function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
 需在 auto-lang 调查(可能涉及 worktree)。
 
 ### 验证
-- `auto build` → `vue-tsc` 错误 42 → 0(M5 验收标准达成)
+- `auto build` → `vue-tsc` 错误 42 → 25(props + pub type 补全后),剩 25 见下
 - 对照:015-notes 的子组件 + api 类型生成的 vue-tsc 是通过的(既有先例)
 
+### 剩余 25 错误分类(实施后实测)
+
+**A. .at 源码问题(可继续在 auto-shell 修)**:
+- 未声明的组件内部变量(7 个 TS2339):`status_glyph`/`cwd_display`(BlockItem、PromptBar)、
+  `matches`(HistorySearch)、`cthis`/`sthis`(ToolSidebar)。这些是反向生成时遗漏的 computed
+  或命名不一致(如 PromptBar 用 `.cwd_display` 但 App 传的是 `cwd`)。修法:补 computed 或
+  统一命名。
+- 类型未 import(5 个 TS2304/2552):`Block`/`CompletionItem`/`ToolEntry`/`SmartCommandEntry`
+  在组件 defineProps 里引用但组件没 `use types` import。修法:确认组件 use types。
+- handler 参数名不匹配(2 个 TS2304):BlockList 的 `.Rerun(cmd)` 参数名 `cmd` vs 生成的
+  emit-wrapper 参数 `b`。修法待定(可能需 codegen 修)。
+
+**B. auto-lang codegen 问题(需 worktree)**:
+- `[][]T` 字段不生成 interface(2 个 TS2339):`RenderedOutput.rows`/`code_lines` 是
+  `[][]RenderedCell`/`[][]CodeSpan`,parser 不报错但 codegen 的 `to_ts_type` 不生成
+  这些字段(生成的 interface 里缺了它们)。
+- msg 回调签名不匹配(6 个 TS2322):`on_pick: msg`(msg 带 str payload)生成的 defineProps
+  类型是 `() => void`,但 App 传的是 `(name: any) => void`。codegen 对带 payload 的 msg prop
+  没生成正确的函数签名。
+- BootSnapshot 字段在 store 不可见(3 个 TS2339):interface 有 `commands` 字段,但
+  `useShellStoreStore.ts` 里 `snap.commands` 报不存在——可能是 store composable 的类型
+  上下文问题。
+
 ### 风险
-- **低**:都是 .at 源码补全,参照 015-notes 既有先例,不改动 auto-lang。
-- handler 参数名(C)如果需 auto-lang 修,单独 worktree 处理。
+- **A 类**(14 个):.at 源码补全,参照 015-notes,不涉及 auto-lang。
+- **B 类**(11 个):auto-lang codegen,需 worktree 调查 `to_ts_type`/msg prop 签名/store 类型。
 
 ---
 
