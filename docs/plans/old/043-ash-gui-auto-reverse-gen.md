@@ -574,6 +574,27 @@ parser 161 + gdscript 63 + aura 46 全过;ash-gui-auto vue-tsc 0 + build 成功;
 output.Table.columns"` + `cell.Tagged.text`;SSE 实测 `status:"Success"` /
 `Table{columns,rows}` / `Tagged{text,tag}` 与 api.at 契约完全吻合。
 
+**R4 — 子组件回调事件名不匹配(playwright 实测发现,已修复,auto-lang master
+commit `2456a18b`,已 push)**:R1-R3 修完后 playwright-cli 实测仍无反应——
+命令 block 不出现、无 /api/run_command 请求。根因:生成的**父组件**监听
+`@_run`(vue.rs `base_event_to_dom` 兜底 `on_run` → strip "on" → `_run`),而
+**子组件** emit PascalCase msg 变体名(`Run`/`OpenPath`/`Stop`)——两边永不匹配,
+PromptBar 回车从未触发 App.RunCommand。这是"ls -al 没有反应"的真正直接元凶
+(之前误判为 RenderedOutput 契约;R1-R3 修契约、R4 修事件接线,缺一不可)。
+修复(vue.rs 两处):
+1. `sub_widget_event_to_vue`:known sub-widget 的 `on_*` 回调 prop 绑定为
+   `@Pascal`(msg 变体名,与 prop_to_ts_type 的 on_pick↔Pick 约定一致);
+   非 `on_` 事件保持 DOM 映射。
+2. `prop_is_emitted_callback`:有匹配 msg 变体的 `on_*: msg` 回调 prop 从
+   defineProps 移除(回调经 emit 到达,Vue 把 `@Run` 转 onRun fallthrough;
+   保留必需 on_run 会让父级对象缺字段 → TS2345)。无匹配变体的 `on_*` prop
+   仍是真实 prop(`:on_xxx` 绑定)。
+验证:3 个新回归测试 + B-1 测试改新契约(Pick: [string] 在 defineEmits);
+干净 master 2828 passed / 22 pre-existing;ash-gui-auto vue-tsc 0;**playwright
+实测全 PASS**:ls -al 表格渲染(5 列头 + Cargo.toml 数据行)+ cat Cargo.toml
+Text 输出。测试脚本:`C:\Users\zhaop\AppData\Local\Temp\ash_gui_test.cjs`
+(playwright chromium 1228 headless)。
+
 ### G2(已修复,auto-shell commit `2d88ae0`):PromptBar 输入交互
 
 **现象**:生成的 PromptBar 输入框完全不可用——`<input :name="input" @input="Run">`:

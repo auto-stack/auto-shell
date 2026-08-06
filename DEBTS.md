@@ -331,3 +331,37 @@ output.Table.columns"` + `cell.Tagged.text`;SSE 实测 `status:"Success"` /
 对象,stat/date/version 命令走此分支会显示 `[object Object]`);单元格 `tag`
 类型简化为 `str`(实际为 `"Dir" | {FileName: Kind}`)。均不影响当前 ls/Table
 链路,后续如需 Record/着色可再补。
+
+**043 M5 Phase 5.7 R4(2026-08-06 已解决)**:子组件回调事件名不匹配 —
+auto-lang master commit `2456a18b`(已 push)。
+
+**现象**:R1-R3 修完契约后 playwright-cli 实测仍无反应——block 不出现、
+无 /api/run_command 请求。`text=ls -al` 匹配到的是输入框自身的值(假阳性)。
+
+**根因**:生成的父组件监听 `@_run`,子组件 emit `Run`——事件名永不匹配。
+vue.rs `base_event_to_dom` 兜底把 `on_run` strip "on" → `_run`(本是为 DOM
+事件 `onclick`→`click` 设计的);而子组件从 msg 变体 emit PascalCase 名
+(`Run`/`OpenPath`/`Stop`)。PromptBar 回车从未触发 App.RunCommand —— 这才是
+"ls -al 没有反应"的直接元凶(R1-R3 修的是 RenderedOutput 契约,两者叠加)。
+
+**修法**(vue.rs 两处):
+1. `sub_widget_event_to_vue`:known sub-widget 的 `on_*` 回调 prop 绑定为
+   `@Pascal`(msg 变体名,与 prop_to_ts_type 的 `on_pick`↔`Pick` 约定一致);
+   非 `on_` 事件保持 DOM 映射(`onkeyup`→`@keyup` 等)。
+2. `prop_is_emitted_callback`:有匹配 msg 变体的 `on_*: msg` 回调 prop 从
+   defineProps 移除——回调经 emit 到达(Vue 把 `@Run` 转 onRun fallthrough),
+   保留必需 `on_run` 会让父级对象缺字段 → TS2345。无匹配变体的 `on_*` prop
+   仍是真实 prop(`:on_xxx="..."` 绑定)。
+
+**验证**:3 个新回归测试(`test_sub_widget_on_prop_binds_pascal_emit_name` /
+`test_sub_widget_omits_emitted_callback_prop_from_define_props` /
+`test_custom_type_import_in_define_props`)+ B-1 测试改新契约(`Pick: [string]`
+在 defineEmits)。干净 master **2828 passed / 22 pre-existing**。ash-gui-auto
+vue-tsc 0。**playwright-cli 实测全 PASS**:ls -al 表格(5 列头 + 数据行)、
+cat Cargo.toml Text 输出。测试脚本 `ash_gui_test.cjs`(playwright chromium
+1228 headless,指定 executablePath;ESM 需 file:// 或 CJS require)。
+
+**注意**:事件绑定 `@_run` 的 DOM 兜底仍保留(用于真正的 DOM 事件);R4 只
+影响 known sub-widget 的 `on_*` 回调 props。HistorySearch 的 `on_close` 在
+.at 里接了 `.ToggleHistorySearch` 但子组件从不 emit `Close` —— 潜在空接线,
+记录备查,不影响主链路。
