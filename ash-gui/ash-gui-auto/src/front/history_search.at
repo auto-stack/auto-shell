@@ -6,6 +6,10 @@
 widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
     msg Msg { Run(str), Close, Move(int) }
 
+    computed {
+        matches => .history
+    }
+
     model {
         var query str = ""
         var selected int = 0

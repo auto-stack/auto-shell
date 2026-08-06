@@ -15,6 +15,10 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
               ToggleHistorySearch,
               AcceptGhost, AcceptGhostWord }
 
+    computed {
+        cwd_display => .cwd
+    }
+
     model {
         var input str = ""
         var history_cursor int = -1
