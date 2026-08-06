@@ -196,7 +196,19 @@ gdscript 等其他 dialect 复用 atom(),放开会重解释它们的 `Ident {` �
 6 项 Plan 043 M5 auto-lang 限制全部解决(msg 多参数 / computed 多行 body /
 view None 比较 / else-if 链 / struct-literal init / handler 多参数)。
 
-**剩余观察(非 parser 阻塞,记录备查)**:store 声明(`store ShellStore`)解析通过,
-但 codegen **未生成** `@/stores/useShellStoreStore.ts` 模块(App.vue/PromptBar.vue
-引用它,导致 `vue-tsc` 报 `Cannot find module`)。这是 codegen 的 store→TS 模块
-发射功能缺失,与本次 parser 修复无关,单独处理。
+**剩余观察(非 parser 阻塞,记录备查)**:store 声明(`store ShellStore`)解析通过。
+**2026-08-06 架构层已解决**(auto-lang commit `a96d4da2`,分支 `fix/043-store-codegen`
+已合 master):根因是 `STORE_EXTRA_FILES` thread-local 在 `generate_component_from_file`
+开头被 clear(api.rs:181),多文件 workspace 里只有最后一个 .at 的 store 幸存 →
+`prepare_vue_sources` drain 到空 Vec → store 文件没写盘。修复:`VueProject` 加
+`store_files` 显式字段,`from_workspace` 三个编译点(app.at/pages/front_dir)直接
+从 `result.store_composables` 收集,`generate`/`regenerate_source_files` 显式写盘。
+顺带修:`all_tags` 注入加 `has_notes` 门控(015-notes 专用,ShellStore 无 notes);
+`store_init_to_js` 认 `List<T>.new([])` → `[]`;computed 多行 body getter 不再用
+`return {…}`(无效 JS)。验证:`auto build` 现输出 `✓ Store composable: useShellStoreStore.ts`,
+文件结构正确(refs + actions + getters)。
+
+**仍剩 store handler-body codegen 质量缺口(非阻塞,vue-tsc 报但语法合法)**:
+struct-literal `Block{…}` → `new Block()`(TS 端类型被擦除成 `any`,应发对象字面量 `{}`);
+`List.new([])` 未转译;action 互调 `.RefreshGit()` 被当成属性访问而非函数调用;
+`let x = []` 在严格模式需类型注解。这些是 `ts_adapter` 的转译能力缺口,单独处理。
