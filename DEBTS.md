@@ -447,17 +447,23 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 > **性质**:归档前按 plan-archiver 技能 Step 2.5 做的 debt-review pass 发现。playwright
 > 覆盖的 ls/cat/stat/date/version/sys mem 成功路径通过,但**相邻用户可见功能有真实缺口**。
 > 这些推翻了此前"无遗留 workaround"的说法——§5.9 解决了原列 3 项权衡,但复审又发现下列
-> 🔴/🟡 项。**Plan 043 不应按"100% 对等"归档**,这些是遗留待修。
+> 🔴/🟡 项。
+>
+> **2026-08-07 更新**:**H1/H2/H5 已修复**(auto-lang `db384870`,worktree
+> `auto-shell-043-codegen-parity`)。这 3 项是 auto-lang codegen bug(.at 源码正确),
+> 已用 `auto-shell-` 前缀 worktree 修复合 master + push。playwright 实测:状态字形 ✓
+> 渲染、`show` 语法高亮(75 个着色 span)、重跑按钮 + `$event` 转发、ls/cat/stat 不回归。
+> **剩余 🔴:H3/H4/H6**(均在 auto-shell 侧,待修)。
 
 ### 🔴 高风险(功能错误或缺失,codegen/.at 双方都有)
 
 | # | 缺口 | 根因 | 位置 |
 |---|---|---|---|
-| H1 | **状态字形(✓/✗/⊘/…)永不渲染** | codegen 把 `status_glyph` 的 `if/else-if` 表达式生成成 IIFE 但**漏了 `return`**:`(() => { if(...) { '✓'; } ... })()` → `undefined`。.at 源码正确。 | 生成 `BlockItem.vue:8-9`;属 auto-lang `expr_to_js` 的 `Expr::If` 分支(此前 92314c2d 加的 IIFE 漏 return) |
-| H2 | **重跑(↻)/单元格点击打开失效** | 父级 `BlockList` 用 `@Rerun="Rerun(b)"` / `@OpenPath="OpenPath(b)"` 把 v-for 的 block 对象 `b` 当参数转发,**丢弃**子组件 emit 的命令字符串/路径。应为 `@Rerun="Rerun($event)"`。codegen msg-forwarding 把 loop var 当 emit payload。 | 生成 `BlockList.vue:47` |
+| ~~H1~~ ✅ | ~~状态字形永不渲染~~ | ~~codegen IIFE 漏 return~~ → **已修**(auto-lang `db384870`:`transpile_body_as_return` 给 Expr::If IIFE 的分支加 return) | 生成 `BlockItem.vue:8-9` |
+| ~~H2~~ ✅ | ~~重跑/点击打开失效~~ | ~~msg-forwarding 用 loop var~~ → **已修**(auto-lang `db384870`:`msg_payload_arities` 索引;带 payload 的 handler 转发 `$event`,无 payload 的保留 loop var) | 生成 `BlockList.vue:47` |
 | H3 | **失败命令不显示错误信息** | `.at` 的 `CommandResult.failed_message: str` 字段在服务端**不存在**——服务端用 `status: CommandStatus::Failed(String)` 枚举变体携带消息。`result.failed_message` 永远 `undefined`。源码层契约错误。 | `back/api.at:121`;服务端 `ash-server/src/types.rs:83-96` |
 | H4 | **SmartCommand 永无输出** | store 的 `RunSmart` action 丢弃 `run_smart()` 返回值,且不推 block。源码注释说"result 直接更新 block"但实际 no-op。 | `front/shell_store.at:121-124`;生成 `useShellStoreStore.ts:63-65` |
-| H5 | **`show` 命令语法高亮丢失** | `block_body.at` 的 `RenderCode` 指定 `style: "color: rgb(...)"`,但 codegen 对 `text span.text` 元素**未绑定 style** → 输出单色。 | 生成 `BlockBody.vue:75-81`;src `block_body.at:65-78` |
+| ~~H5~~ ✅ | ~~`show` 语法高亮丢失~~ | ~~push_style_class 丢弃 Expr::Bina 拼接~~ → **已修**(auto-lang `db384870`:动态 style 表达式渲染为 `:style="<expr>"`) | 生成 `BlockBody.vue:78` |
 | H6 | **HistorySearch 选中项无高亮** | `selected` ref 更新但行无 `:class` 绑定,用户看不到当前选中。 | 生成 `HistorySearch.vue:74` |
 
 ### 🟡 一致性遗漏(功能可用但与手写版不一致)
@@ -475,5 +481,8 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 - **store 全 `any` 类型**:10 个 ref + ~25 个 handler 参数为 `any`,掩盖了上述类型契约错误(H3)。这是 codegen 的有意简化(用户自定义类型在 TS 端擦除)。
 
 ### 推翻条件
-- H1-H6 全部修复后,Plan 043 可按"功能对等"归档。
-- 验证方式:扩展 playwright 覆盖到失败命令、SmartCommand、重跑、点击打开、状态字形、`show` 高亮(当前只测了 6 条成功路径)。
+- ~~H1/H2/H5 已修(auto-lang `db384870`)~~ ✅
+- 剩余 **H3/H4/H6** 修复后,Plan 043 可按"功能对等"归档。这 3 项均在 auto-shell 侧
+  (.at 源码契约错误 H3/H4 + HistorySearch 选中高亮 H6)。
+- 验证方式:扩展 playwright 覆盖到失败命令、SmartCommand、选中高亮(状态字形/show 高亮/
+  重跑/点击打开 已在 `ash_gui_parity_test.cjs` 覆盖,全 PASS)。
