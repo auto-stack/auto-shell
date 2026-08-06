@@ -281,3 +281,17 @@ ash-gui-auto 的 vue-tsc 错误 **19 → 0**(+ vite build 成功)。分类与修
 (`rows [][]RenderedCell` 等保持原样即可)。全量回归:auto-lang 2818 passed /
 22 pre-existing 失败不变(已在纯净 master 上验证同样的 22 个失败);auto-man
 178 passed / 1 flaky(HTTP 端口测试,重跑通过)。
+
+**043 M5 Phase 5.6 B 类合 master + 功能修复(2026-08-06)**:
+- `fix/043-m5-bclass` 已合 auto-lang master(merge `e4fd405d`)。
+- **功能缺口补修**(完整性核查发现,非类型错误):
+  1. **App.at `on_run: .RunCommand` 空桩**:view 引用了未声明的 `.RunCommand`,
+     codegen 生成 `function RunCommand(){}` → PromptBar 回车不执行命令。补
+     `msg Msg` 加 `RunCommand(str)` + on-block 加 `.RunCommand(cmd)` 处理器。
+  2. **computed 的 if/else-if 表达式生成 `undefined`**:`status_glyph`/`status_cls`
+     落 `expr_to_js` 兜底(Expr::If 无分支)→ `computed<any>(() => undefined)`,
+     状态图标/颜色类静默丢失。auto-lang master commit `92314c2d` 给 `expr_to_js`
+     加 `Expr::If` 分支(镜像 ts_adapter 的 IIFE 方案):
+     `(() => { if (c1) { v1 } else if (c2) { v2 } else { v3 } })()`。
+  验证:生成的 BlockItem.vue 状态字形/类正确,App.vue RunCommand 带
+  `store.RunCommand(cmd)`,vue-tsc 0 + vite build 成功。

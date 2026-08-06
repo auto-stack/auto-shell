@@ -411,13 +411,15 @@ body-chaining 的设计意图:`let x = A.new().b().c()`(方法链跨行)。它�
 
 ## 5.6 M5 收尾 Phase:widget props 声明 + api 类型定义(.at 源码补全)
 
-> **状态**:**已完成**(19→0,2026-08-06)。widget props 参数列表 + back/api.at pub type
-> 已补全(参照 015-notes,A 类);剩余 B 类 19 个 codegen 问题在 auto-lang worktree
-> 分支 `fix/043-m5-bclass`(commit `718e94aa`,待合 master)修复,`auto build` 后
-> **vue-tsc 0 错误 + vite build 成功**。详见 DEBTS.md"043 M5 Phase 5.6 B 类"条目。
-> **性质**:A 类是 auto-shell 的 `.at` 源码补全(不涉及 auto-lang);B 类 6 个子类
-> 是 auto-lang codegen 修复(msg 回调签名 / 类型 import / handler 参数名 /
-> `[][]T`+无冒号字段 lenient 提取 / 循环变量 this.拼接 / store BootSnapshot 字段)。
+> **状态**:**已完成**(2026-08-06)。vue-tsc 错误 **19→0**,vite build 成功。
+> 历程:A 类 14 个 .at 源码补全(提交 `84c4858` 等);B 类 19 个 codegen 问题
+> 在 auto-lang worktree `fix/043-m5-bclass`(commit `718e94aa`)**已合 master**
+> (merge `e4fd405d`)。完整性核查另发现并修复 2 个功能性缺口(非类型错误):
+> App.at `on_run` 空桩(codegen 生成 `function RunCommand(){}`,回车不执行命令)+
+> computed 的 if/else-if 表达式生成 `undefined`(状态图标丢失,auto-lang master
+> `92314c2d` 给 `expr_to_js` 加 `Expr::If` → IIFE)。详见 DEBTS.md。
+> **剩余 M5 验收项**:运行时验证(`npm run dev` 浏览器版连 ash-server,核对
+> `ls`/`cat`/`show`/补全/历史/ghost text 与手写版一致)——尚未执行,待做。
 
 ### 问题(store codegen 清零后剩余的 42 个 vue-tsc 错误)
 
