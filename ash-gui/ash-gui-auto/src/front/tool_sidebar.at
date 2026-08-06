@@ -5,11 +5,8 @@
 
 use types: ToolEntry, SmartCommandEntry
 
-widget ToolSidebar {
+widget ToolSidebar(commands: List<ToolEntry>, smart_commands: List<SmartCommandEntry>, on_pick: msg, on_run_smart: msg) {
     msg Msg { Pick(str), RunSmart(str) }
-
-    // props: commands []ToolEntry, smart_commands []SmartCommandEntry,
-    //        on_pick: msg, on_run_smart: msg
 
     view {
         col {

@@ -7,11 +7,8 @@
 use block_body: BlockBody
 use types: Block
 
-widget BlockItem {
+widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg) {
     msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand }
-
-    // props: block Block, home str,
-    //        on_open_path: msg, on_rerun: msg, on_stop: msg
 
     view {
         col {

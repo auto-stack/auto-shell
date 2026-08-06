@@ -8,7 +8,7 @@ use shell_store: ShellStore
 use history_search: HistorySearch
 use types: CompletionItem
 
-widget PromptBar {
+widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {
     msg Msg { Run(str), Injected, Clear, Exit,
               HistoryOlder, HistoryNewer,
               PickCompletion(CompletionItem),

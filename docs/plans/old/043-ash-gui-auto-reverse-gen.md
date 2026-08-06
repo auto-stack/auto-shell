@@ -409,6 +409,71 @@ body-chaining 的设计意图:`let x = A.new().b().c()`(方法链跨行)。它�
 
 ---
 
+## 5.6 M5 收尾 Phase:widget props 声明 + api 类型定义(.at 源码补全)
+
+> **状态**:**待执行**。M5 验收标准(`vue-tsc --noEmit` 通过)的最后障碍。
+> **性质**:auto-shell 的 `.at` 源码补全(**不涉及 auto-lang worktree**),
+> 参照 015-notes 的既有先例。可能有 1 个 handler 参数名 codegen 问题需确认。
+
+### 问题(store codegen 清零后剩余的 42 个 vue-tsc 错误)
+
+| 类型 | 数量 | 根因 |
+|---|---|---|
+| TS2339(Property does not exist) | 33 | 子组件 widget 声明缺参数列表 → 无 `defineProps` |
+| TS2304(Cannot find name) | 8 | `back/api.at` 用 `use types:` 导入类型但没声明 → api.ts 无 interface |
+| TS2552(Cannot find name) | 1 | 同 TS2304(`ShellEvent`) |
+
+### 根因对照(015-notes vs auto-shell)
+
+**TS2339 — widget props**:
+- 015-notes 子组件声明带参数列表 → 生成 `defineProps<{...}>()`:
+  `widget NavTree(active_folder: str, active_id: int, ...) { ... }`
+- auto-shell 子组件**无参数列表** → 不生成 defineProps:
+  `widget BlockBody { ... }`(模板用了 `output` 但未声明为 prop)
+- 这是 **M3/M4 反向生成的遗漏**(当时只写了 widget 体,没写 props 签名)。
+
+**TS2304 — api 类型**:
+- 015-notes 的 `back/api.at` 有 `pub type Note = {...}` → api.ts 生成 `export interface Note`
+- auto-shell 的 `back/api.at` 用 `use types: BootSnapshot, ...` 导入,但**没声明**
+  (`pub type BootSnapshot = {...}` 缺失) → api.ts 零个 interface
+- 类型都在 `front/types.at`(纯前端,api codegen 不读它)
+
+### 修复清单(auto-shell 侧 .at 源码,不涉及 auto-lang)
+
+**A. 子组件 widget 声明补参数列表**(参照调用点传参):
+
+| widget | 当前 | 补成(从调用点反推) |
+|---|---|---|
+| `BlockBody` | `widget BlockBody {` | `widget BlockBody(output: RenderedOutput, on_open_path: msg) {` |
+| `BlockItem` | `widget BlockItem {` | `widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg) {` |
+| `BlockList` | `widget BlockList {` | `widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg) {` |
+| `PromptBar` | `widget PromptBar {` | `widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {` |
+| `ToolSidebar` | `widget ToolSidebar {` | `widget ToolSidebar(commands: List<ToolEntry>, smart_commands: List<SmartCommandEntry>, on_pick: msg, on_run_smart: msg) {` |
+| `HistorySearch` | `widget HistorySearch {` | `widget HistorySearch(open: bool, matches: []str, on_run: msg, on_move: msg) {`(参数从模板用法反推) |
+
+**B. `back/api.at` 补 `pub type` 声明**:把 `front/types.at` 里被 api 函数引用的类型
+(`BootSnapshot`/`CompletionItem`/`PromptContext`/`SmartResult`/`ShellEvent`/`Stream`)
+复制成 `back/api.at` 的 `pub type X = {...}`(参照 015-notes 的 `pub type Note = {...}`)。
+
+**C. handler 参数名不匹配(待确认是否 codegen bug)**:
+`BlockList.at` 的 `.Rerun(cmd)` 声明参数名 `cmd`,但生成的 vue 函数签名用 `b`(来自 emit
+调用点 `Rerun(b)`),body 里 `emit('Rerun', cmd)` 用的是声明的 `cmd`。生成:
+```ts
+function Rerun(b: any): void { emit('Rerun', cmd) }  // cmd 未定义!
+```
+这可能是 codegen 把 handler 参数名和 emit-wrapper 参数名搞混了。如果补 props 后仍存在,
+需在 auto-lang 调查(可能涉及 worktree)。
+
+### 验证
+- `auto build` → `vue-tsc` 错误 42 → 0(M5 验收标准达成)
+- 对照:015-notes 的子组件 + api 类型生成的 vue-tsc 是通过的(既有先例)
+
+### 风险
+- **低**:都是 .at 源码补全,参照 015-notes 既有先例,不改动 auto-lang。
+- handler 参数名(C)如果需 auto-lang 修,单独 worktree 处理。
+
+---
+
 ## 6. 文件清单(预期产物)
 
 ### `.at` 源码(`ash-gui/ash-gui-auto/src/`)

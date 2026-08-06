@@ -3,11 +3,8 @@
 //
 // fzf 风格的历史搜索面板:模糊过滤、↑↓ 导航、Enter 执行。
 
-widget HistorySearch {
+widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
     msg Msg { Run(str), Close, Move(int) }
-
-    // props: history []str, open bool,
-    //        on_run: msg, on_close: msg
 
     model {
         var query str = ""

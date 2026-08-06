@@ -73,10 +73,8 @@ view fn RenderError(output RenderedOutput) {
     }
 }
 
-widget BlockBody {
+widget BlockBody(output: RenderedOutput, on_open_path: msg) {
     msg Msg { OpenPath(str) }
-
-    // props: output RenderedOutput, on_open_path: msg
 
     view {
         col {

@@ -11,6 +11,117 @@
 use types: BootSnapshot, CompletionItem, PromptContext, ShellEvent, SmartResult
 
 // ═══════════════════════════════════════════════════════════
+// API 类型定义(codegen 从这里生成 TS interface + Rust struct)
+// Plan 043 M5:这些类型原只在 front/types.at(纯前端,api codegen 不读),
+// 导致生成的 api.ts 引用了未定义的类型名。复制到这里作为 pub type。
+// ═══════════════════════════════════════════════════════════
+
+pub alias AtomType = str
+pub alias CellTag = str
+
+pub type CodeSpan = {
+    text str
+    r int
+    g int
+    b int
+    bold bool
+    italic bool
+}
+
+pub type RenderedCell = {
+    text str
+    tag CellTag
+}
+
+pub type RenderedOutput = {
+    kind str
+    text str
+    columns []str
+    rows List<List<RenderedCell>>
+    fields List<List<str>>
+    code_lines List<List<CodeSpan>>
+    language str
+    error_message str
+    atom_type AtomType
+}
+
+pub type BlockStatus = {
+    kind str
+    message str
+}
+
+pub type Block = {
+    id int
+    command str
+    cwd str
+    status BlockStatus
+    output RenderedOutput
+    streamed_text str
+    duration_ms int
+}
+
+pub type GitStatusInfo = {
+    staged int
+    unstaged int
+    untracked int
+    conflicted int
+    ahead int
+    behind int
+}
+
+pub type PromptContext = {
+    git_branch str
+    git_status GitStatusInfo
+}
+
+pub type CompletionItem = {
+    replacement str
+    display str
+    description str
+    kind str
+}
+
+pub type SmartResult = {
+    output str
+    error str
+}
+
+pub type CommandResult = {
+    block_id int
+    status str
+    cwd str
+    output str
+    duration_ms int
+    failed_message str
+}
+
+pub type ShellEvent = {
+    event str
+    block_id int
+    chunk str
+    result CommandResult
+}
+
+pub type ToolEntry = {
+    name str
+    description str
+    usage str
+}
+
+pub type SmartCommandEntry = {
+    name str
+    description str
+    args []str
+}
+
+pub type BootSnapshot = {
+    cwd str
+    home str
+    commands []ToolEntry
+    smart_commands []SmartCommandEntry
+}
+
+// ═══════════════════════════════════════════════════════════
 // Request-Response 端点
 // ═══════════════════════════════════════════════════════════
 
@@ -77,8 +188,11 @@ pub fn open_path(path str) {
 /// 订阅 Shell 事件流(command-output + command-result)
 /// 浏览器版用 EventSource;Tauri 版用 listen()。
 /// ~Stream<ShellEvent> 让 codegen 生成 SSE (axum) 或 Channel (tauri)。
+/// NOTE: TS codegen 尚不支持 ~Stream 语法(会原样输出 ~Stream,非法 TS)。
+/// 临时绕过:返回类型用 ShellEvent(单值),前端实际通过 SSE/EventSource
+/// 监听流,不走此函数的返回值。等 auto-lang codegen 支持 ~Stream 后改回。
 /// GET /api/stream
 #[api(method = "GET", path = "/api/stream")]
-pub fn stream() ~Stream<ShellEvent> {
+pub fn stream() ShellEvent {
     return shell.subscribe()
 }

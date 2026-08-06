@@ -7,11 +7,8 @@
 use block_item: BlockItem
 use types: Block
 
-widget BlockList {
+widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg) {
     msg Msg { OpenPath(str), Rerun(str), Stop }
-
-    // props: blocks List<Block>, home str,
-    //        on_open_path: msg, on_rerun: msg, on_stop: msg
 
     view {
         col {
