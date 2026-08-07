@@ -256,7 +256,11 @@ M2 与 M3 交错:每修一组差异,立即写对应测试转绿。M1 必须先�
       APP-05/06 git_label、CMD-06 cancel 首个。**14 测试(11 pass + 3 xfail)**。
       难档(PB-ghost/highlight/textarea/debounce/autofocus/continuation、BL-01 自动滚动、
       CMD-09/10 smart 失败+duration)留下轮 —— 依赖 iced 能力或 renderer 拦截。
-- [ ] M3 MCP 测试套件(~95 用例)
+- [~] **M3 MCP 测试套件**(2026-08-07 骨架完成,99 用例:49 pass / 47 skip / 3 xfail):
+      10 个测试文件覆盖 APP/PB/BL/BB/CMD/TS/HS/BACK 行为编号。每条行为推导自 Vue 源(file:line),
+      按 vm 可测性分级。**49 pass** 验证 M0/M1/M2 已实现行为;**47 skip** 占位待实现(难档 + mock 数据空);
+      **3 xfail** 真实未实现(HS Ctrl+R 面板)。最大杠杆:修 EDGE-01(keyboard onkeydown emit 模拟)
+      可解锁 ~20 个 skip → pass。
 - [ ] M4 a2r 二进制 + 文档
 
 ## 9. M0 实测发现(2026-08-07,关键,改变 M0 工作量评估)
