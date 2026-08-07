@@ -16,7 +16,8 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
         status_cls => if .block.status.kind == "Success" { "text-emerald-500" } else if .block.status.kind == "Failed" { "text-red-500" } else { "text-amber-500" }
         // BL-08..10:duration badge。对齐 Vue BlockItem.vue:36-41。
         // < 1000ms 显示 "Nms",否则 "N.Ns"。duration_ms 为 0(Running/未记)时不显示。
-        duration_label => if .block.duration_ms > 0 { if .block.duration_ms < 1000 { (.block.duration_ms + "ms") } else { (((.block.duration_ms / 1000) + "s")) } } else { "" }
+        // int 用 .str() 转 str(auto.int.str)再拼接 —— int + str 直接拼接会出错。
+        duration_label => if .block.duration_ms > 0 { if .block.duration_ms < 1000 { (.block.duration_ms.str() + "ms") } else { ((.block.duration_ms / 1000).str() + "s") } } else { "" }
     }
 
     view {

@@ -60,9 +60,9 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
                             style: "px-3 py-4 text-center text-xs text-muted-foreground/50"
                         }
                     }
-                    // HS-13:匹配计数。
+                    // HS-13:匹配计数。int.str() 转换避免 int+str 拼接错误。
                     if .matches.len() > 0 {
-                        text (.matches.len() + " matches") {
+                        text (.matches.len().str() + " matches") {
                             style: "px-3 py-1 text-center text-[10px] text-muted-foreground/50"
                         }
                     }

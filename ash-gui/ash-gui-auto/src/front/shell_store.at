@@ -18,22 +18,22 @@ fn format_git_label(branch str, staged int, unstaged int, untracked int, conflic
     }
     var label str = "⎇ " + branch
     if staged > 0 {
-        label = label + " +" + staged
+        label = label + " +" + staged.str()
     }
     if unstaged > 0 {
-        label = label + " !" + unstaged
+        label = label + " !" + unstaged.str()
     }
     if untracked > 0 {
-        label = label + " ?" + untracked
+        label = label + " ?" + untracked.str()
     }
     if conflicted > 0 {
-        label = label + " ✗" + conflicted
+        label = label + " ✗" + conflicted.str()
     }
     if ahead > 0 {
-        label = label + " ⇡" + ahead
+        label = label + " ⇡" + ahead.str()
     }
     if behind > 0 {
-        label = label + " ⇣" + behind
+        label = label + " ⇣" + behind.str()
     }
     return label
 }
