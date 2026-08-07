@@ -15,8 +15,8 @@
 
 ## 需要谨慎评估的架构项
 
-- [ ] **`.at` 复刻**:把 ash-gui-vue 的前端组件用 Auto 语言重写(组件命名/导入已对齐 `VueMode::Shadcn` 生成器输出,迁移 = 换生成器输出)。后端 `#[tauri::command]` 可被 `api/targets/tauri.rs` 的 `#[api]` 替代。这是 Plan 039 的既定衔接方向,但工作量未评估。
-- [ ] **iced 版去留**:`ash-gui-bin`(iced 原型)保留为参考。当 Vue 版达到功能等价后,评估是否归档。
+- [x] **`.at` 复刻**:ash-gui-auto 已完成 .at 复刻(VM 模式可跑)。VM 模式下命令执行闭环已打通(SSE 桥)、12 处 Vue→Auto 差异已对齐、99 测试用例(49 pass)。详见 `designs/ash-gui-native-plan.md`。**a2r(可分发二进制)路径待 codegen 修复**(99 个编译错误,见归档文档 §4)。
+- [ ] **iced 版去留**:`ash-gui-bin`(iced 原型)保留为参考。当 Vue 版达到功能等价后,评估是否归档。ash-gui-auto 的 VM 模式已用 iced 原生渲染器,是 ash-gui-bin 的后继。
 - [ ] **跨后端一致性**:TUI / iced / Vue 三端的配色与状态语义应统一到单一来源(当前分散在各前端)。可能抽一个共享 token 定义。
 
 ## 与外部生态的协同
