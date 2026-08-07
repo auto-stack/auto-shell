@@ -3,7 +3,7 @@
 //
 // 根据 RenderedOutput 的 serde tagged-union 变体(Table/Record/Code/Text/Error)
 // 分发到对应渲染器。服务端序列化为 {"Table":{...}} | {"Text":"..."} 等,字段
-// 是可选变体 key(RenderedOutput.Table: ?TableOutput),前端用 `!= nil` 判断
+// 是可选变体 key(RenderedOutput.Table: ?TableOutput),前端用 `!= None` 判断
 // 并窄化类型(等价于 Vue 里 discriminated union 的 'Table' in o 检查)。
 //
 // 渲染器(view fn)与 widget 同文件定义——与 015-notes 的 NoteItem 模式一致。
@@ -42,12 +42,12 @@ view fn RenderTable(output TableOutput) {
                             style: "px-3 py-1.5 align-top"
                             // BB-08:仅 Dir/FileName 可点(Vue cellStyle.ts:22-26 isClickable)。
                             // Text(Plain)不可点;Tagged 仅 Dir/FileName 绑 onclick + cursor。
-                            if cell.Text != nil {
+                            if cell.Text != None {
                                 text cell.Text {
                                     style: "text-foreground"
                                 }
                             }
-                            if cell.Tagged != nil {
+                            if cell.Tagged != None {
                                 if cell.Tagged.kind == "Dir" {
                                     text cell.Tagged.text {
                                         onclick: .OpenPath(cell.Tagged.text)
@@ -114,13 +114,13 @@ view fn RenderRecord(output RecordOutput) {
         if output.atom_type == "MemoryInfo" {
             for idx, field in output.fields {
                 if field.0 == "usage_percent" {
-                    if field.1.Text != nil {
+                    if field.1.Text != None {
                         progress {
                             value: field.1.Text
                             max: 100
                         }
                     }
-                    if field.1.Tagged != nil {
+                    if field.1.Tagged != None {
                         progress {
                             value: field.1.Tagged.text
                             max: 100
@@ -131,13 +131,13 @@ view fn RenderRecord(output RecordOutput) {
             // BB-11 回退:无 usage_percent 时用 usage 字段。
             for idx, field in output.fields {
                 if field.0 == "usage" {
-                    if field.1.Text != nil {
+                    if field.1.Text != None {
                         progress {
                             value: field.1.Text
                             max: 100
                         }
                     }
-                    if field.1.Tagged != nil {
+                    if field.1.Tagged != None {
                         progress {
                             value: field.1.Tagged.text
                             max: 100
@@ -154,12 +154,12 @@ view fn RenderRecord(output RecordOutput) {
                 text field.0 {
                     style: "text-muted-foreground"
                 }
-                if field.1.Text != nil {
+                if field.1.Text != None {
                     text field.1.Text {
                         style: "text-foreground/90"
                     }
                 }
-                if field.1.Tagged != nil {
+                if field.1.Tagged != None {
                     text field.1.Tagged.text {
                         style: "text-foreground/90"
                     }
@@ -174,17 +174,17 @@ widget BlockBody(output: RenderedOutput, on_open_path: msg) {
 
     view {
         col {
-            if .output.Table != nil {
+            if .output.Table != None {
                 RenderTable(output: .output.Table)
-            } else if .output.Record != nil {
+            } else if .output.Record != None {
                 RenderRecord(output: .output.Record)
-            } else if .output.Code != nil {
+            } else if .output.Code != None {
                 RenderCode(output: .output.Code)
-            } else if .output.Text != nil {
+            } else if .output.Text != None {
                 text .output.Text {
                     style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words"
                 }
-            } else if .output.Error != nil {
+            } else if .output.Error != None {
                 RenderError(output: .output.Error)
             } else {
                 text "(no output)" {
