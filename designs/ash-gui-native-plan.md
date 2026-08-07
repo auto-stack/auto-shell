@@ -344,3 +344,77 @@ stub app.at(无 store/children)+ 极简 store(只 .Init)+ mock shell.at + 完整
 - `designs/ash-gui-native-plan.md`:本节(§9)发现归档。
 - `tests/`:下轮搭骨架(本轮因 link 阻塞,先在 /tmp 探针验证 MCP 方法)。
 
+### 9.7 三轮二分(2026-08-07):定位到 3 个**真实 VM bug**,非"级联"
+
+> 本轮(第三轮)从二轮 harness 起逐项加回,推翻了"级联多重缺陷"的模糊判断,
+> 精确定位到 **3 个独立、可绕过的 VM bug**。harness 方法有效——每修一个就前进一步。
+
+**已排除的假因(本轮证伪)**:
+- ❌ store handler body 的 struct-fix 模式(`Block{}`+字段赋值、循环变量 `b.status=st`)
+  → 单独测全部 link OK(tests E/F/G)。
+- ❌ 后端模块名 `shell` vs `db`(rename 仍失败)、`use types:` vs `use api:`(都试过)。
+- ❌ store 在 stub app 上(完整所有 handler)→ 完全 link OK(test G)。
+- ❌ ash-gui api.at 本身(stub app 上完整 19 type 全 link)。
+
+**真因(3 个独立 VM bug,每个都有 workaround)**:
+
+**BUG-A:App 调 store.X() 时,store 的 `back.api` 导入不在 App 作用域 ❌→✅ 已绕过**
+- 症状:`Undefined symbol: api.command_list in module App`(逐个 back.api fn 报)。
+- 真因:VM 把 store handler body 链接到 App 模块作用域,store 的 `use back.api: ...`
+  导入**不透传**到 App。015-notes 的 app.at **自己也 `use back.api: list_notes`**
+  (第 7 行)——所以它能跑。ash-gui app.at 没加,故崩。
+- **正解**:给 `app.at` 加 `use back.api: command_list, history, complete, run_command,
+  run_smart, prompt_context, open_path`(列 app 经 store 间接用到的所有 fn)。已验证:
+  加上后 back.api 类错误消失。
+- 性质:**文档/惯例缺口**(auto-ui-creator skill 的 U1 应补此条)。
+
+**BUG-B:store handler 调用**另一个** store handler `.X()` → `<Store>_State.X` 未定义 ❌**
+- 症状:`Undefined symbol: ShellStore_State.RefreshGit in module App`。
+- 触发:`shell_store.at` 的 `.Init` 与 `.RunResult` 内部调 `.RefreshGit()`(store 自己
+  的另一个 handler)。VM 把 store handler 调用解析成 `ShellStore_State.RefreshGit`
+  state-struct 符号,但该符号未生成 → link 失败。
+- **正解(workaround)**:不要在 store handler 里调 `.SiblingHandler()`。把 RefreshGit
+  的 body **内联**到 Init/RunResult 里(或抽成普通 module fn 由两处调用)。已验证:
+  删掉两处 `.RefreshGit()` 调用,此错误消失,前进到下一个。
+- 性质:**真 VM bug**(store handler 间互调未支持)。应上报 auto-lang:
+  `crates/auto-lang/src/ui/vm_bridge.rs`(handler dispatch)。
+
+**BUG-C:子组件 handler 仅被内部引用(非模板)→ `<Child>_State.<Handler>` 未定义 ❌**
+- 症状:`Undefined symbol: PromptBar_State.Exit` → 修一个变 `PromptBar_State.PickCompletion`
+  → 逐个 PromptBar 内部 handler 都报。**系统性**,非单点。
+- 触发:PromptBar 的 `expose { .Exit }` + 内部 `.Exit()` 调用;以及所有仅在 handler
+  逻辑里被调、模板未直接绑定的 handler(`PickCompletion`、`AcceptGhost` 等)。
+  VM 对子组件的 state-struct handler 查找要求该 handler 被**模板直接引用**,否则
+  `Child_State.Handler` 符号不生成 → App 链接失败。
+- **正解(workaround,重)**:每个 PromptBar 内部 handler 都要"模板可见"——要么在
+  view 里加一个隐藏的 dummy 引用(如 `if false { button { onclick: .PickCompletion(...) } }`),
+  要么重构把这些逻辑挪到模板直接绑定的 handler。**这是大改**,因为 PromptBar 有
+  ~10 个此类 handler(ghost/completion/keyboard 全套)。
+- 性质:**真 VM bug**(与 `expose` 的设计意图冲突——`expose` 本该解决这个,但 VM
+  没实现透传)。应上报 auto-lang;短期靠 workaround。
+
+**对 M0 的结论**:
+- BUG-A 已有 clean workaround(加 use back.api),下轮直接应用。
+- BUG-B workaround 简单(内联 RefreshGit),下轮应用。
+- **BUG-C 是真正的 M0 阻塞**:PromptBar(最复杂的组件)在 vm 模式几乎不可用,除非
+  大改或修 VM。两条路:
+  1. **短期**:vm 模式先跑一个 **PromptBar 简化版**(去掉 ghost/completion/highlight,
+     只留基本 input + run + history),让 UI 能开;复杂功能留给 a2r/HTTP 模式。
+  2. **中期**:上报 auto-lang 修 BUG-C(子组件 handler state-struct 符号生成,
+     让 `expose` 真正生效),这是让 vm 模式对真实应用可用的关键修复。
+
+**下轮 M0 精确步骤(基于本轮)**:
+1. app.at 加 `use back.api: ...`(BUG-A workaround,5 分钟)。
+2. shell_store.at 内联 RefreshGit、去掉 `.SiblingHandler()` 调用(BUG-B,10 分钟)。
+3. 决策点(BUG-C):选"简化 PromptBar"(快速通 UI)还是"上报修 VM"(彻底但慢)。
+   建议先简化通 UI(MCP 连通 + smoke),修 VM 列为 M1 并行任务。
+4. 通 UI 后立即搭 tests 骨架(M0.6)。
+
+**本轮 harness 复现脚本(下轮直接用)**:
+```
+stub app.at(无 store/children)+ 完整 store + mock shell.at → link OK(基准)。
+加 use back.api 到 app → back.api 错误消失。
+逐个加回子组件 → 命中 BUG-C 的 `<Child>_State.<Handler>`。
+```
+
+
