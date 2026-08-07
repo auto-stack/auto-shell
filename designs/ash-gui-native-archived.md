@@ -92,10 +92,11 @@ Tauri(listen)下消费,但 iced 原生路径(renderer.rs)无 SSE 客户端,也�
 | CMD-09/10 | smart 失败 + duration | 需 renderer 拦截(类似 RunCommand) |
 | APP-11 | Ctrl+D window.close | 需 iced window::close task |
 
-### 最大杠杆
+### 最大杠杆(原以为,实际更复杂)
 
-修复 **EDGE-01**(keyboard onkeydown emit 模拟)可解锁 ~20 个 skip → pass:
-所有 PB 键绑定(↑↓/Tab/Ctrl+R/L/C/D)+ HS 面板打开。
+修复 **EDGE-01**(keyboard onkeydown emit 模拟)原以为可解锁 ~20 个 skip → pass。
+深度调研后发现 EDGE-01 不是简单的 emit 模拟,而是 **vm/rust 后端根本不支持元素属性
+形式的 onkeydown**(如 `onkeydown.up: .HistoryOlder`)。详见 §5 EDGE-01。
 
 ## 3. 测试覆盖矩阵(M3)
 
@@ -157,9 +158,46 @@ a2r codegen(trans/rust.rs)需要:
 
 | 编号 | 限制 | 影响 | 状态 |
 |---|---|---|---|
-| EDGE-01 | MCP keyboard 发全局 key,非 input onkeydown | 阻塞 PB 键绑定 + HS 面板 | 待修(最大杠杆) |
+| EDGE-01 | MCP keyboard 发全局 key,非 input onkeydown | 阻塞 PB 键绑定 + HS 面板 | 待修(见下方深度诊断) |
 | EDGE-02 | VM 无法 struct 作 handler 参数 | push_value 占位 0 | ✅ 已绕过(__sse_* 预置字段) |
 | EDGE-03 | VM 嵌套 struct 赋值崩溃 | Stack Underflow | ✅ 已绕过(renderer Rust 构造) |
-| EDGE-04 | boot api 触发 Invalid instance ID | TS/PB-hist 数据空 | ⚠️ 静态值绕过 |
+| EDGE-04 | boot api 触发 Invalid instance ID | TS/PB-hist 数据空 | ⚠️ 静态值绕过(shell.at struct 构造崩) |
 | EDGE-05 | VM handler 读 .blocks 为 nil | for 循环空操作 | ✅ renderer Rust 处理 |
 | EDGE-07 | int+str 拼接 | duration/count 显示错 | ✅ 已修(.str()) |
+
+### EDGE-01 深度诊断:onkeydown.* 元素属性在 vm/rust 后端完全不支持
+
+`.at` 的 `onkeydown.up: .HistoryOlder`(元素属性形式,非 `bind {}` 块)在 **vm 和 rust
+后端都不会触发 handler**。4 个缺失环节:
+
+1. **未收集**:`extract_key_bindings`(extract.rs:610)只扫 `bind {}` 块,不扫元素属性
+   形式的 `onkeydown.*`。元素属性 `onkeydown.up` 进了 AuraNode.events(extract.rs:703),
+   但从未被转入 `AuraWidget::key_bindings`(后者只含 bind 块)。
+2. **View 层丢弃**:aura_view_builder.rs:1831-1876 `convert_input` 只读
+   `onchange/oninput→on_change` 和 `onenter→on_submit`,完全忽略 `onkeydown.*`。
+   View::Input(view.rs:257-265)也没有 keydown 字段。
+3. **iced widget 限制**:iced 0.14 的 TextInput 只有 `on_input/on_submit/on_paste`,
+   **没有 `on_key_press`**(iced_widget-0.14.2 text_input.rs:172-218)。renderer.rs
+   的 Input 渲染(6697-6724)也只接 on_change/on_submit。
+4. **聚焦态屏蔽 + key 名不匹配**:keyboard_subscription(renderer.rs:2588-2695)用
+   `iced::event::listen_with` 全局监听,但 input 聚焦时 `Status::Captured`
+   (renderer.rs:2611)会屏蔽。且 key 名是 `"ArrowUp"`(renderer.rs:2630)而非 `.at` 的 `up`。
+   MCP keyboard 工具(mcp_server.rs:1523)发 `key_<lower>`,与 handler 名不匹配。
+
+**对照**:Vue 后端完整支持(ui_gen/vue.rs:9007-9028 把 `onkeydown.up.prevent` 翻成
+`@keydown.up.prevent`,测试 vue.rs:12730-12748 验证)。所以这是 vm/rust 后端的实现 gap。
+
+**修复方向**(auto-lang 层面,超出 ash-gui-native 范围):
+- extract 阶段把元素属性 `onkeydown.<suffix>` 并入 key_bindings(规范化 key 名)
+- keyboard_subscription 在 Captured 检查前派发 input-scope 绑定
+- 或用支持 on_key_press 的 widget / 包 keyboard_area
+
+### EDGE-04 深度诊断:shell.at struct 构造触发 Invalid instance ID
+
+`command_list()`(shell.at)返回 BootSnapshot 时,struct 字段赋值触发 vm
+"Invalid instance ID: 0"(heap id 0 访问)。M2 已修 List 声明(List<T>.new),但
+BootSnapshot/ToolEntry 的 struct 字段操作仍崩。format_git_label 的嵌套 struct 访问
+(`.git_info.git_status.staged`)也报 "Field index out of bounds for primitive"。
+
+**当前绕过**:Init 用静态值(cwd=".", 空 commands/history, git_label=format_git_label("",0,...))。
+真实 boot 数据待 vm 嵌套 struct 修复(auto-lang 层面)。

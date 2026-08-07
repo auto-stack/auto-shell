@@ -111,10 +111,11 @@ store ShellStore {
             .smart_commands = List<SmartCommandEntry>.new([])
             .command_names = names
             .persisted_history = List<str>.new([])
-            // APP-05/06:计算 git_label(用默认 git_info,全零 GitStatusInfo)。
-            .git_label = format_git_label(.git_info.git_branch, .git_info.git_status.staged, .git_info.git_status.unstaged, .git_info.git_status.untracked, .git_info.git_status.conflicted, .git_info.git_status.ahead, .git_info.git_status.behind)
-            // prompt_context 曾触发 Invalid instance ID(git_status 默认零值)。
-            // 用 store model 的默认 git_info(已是全零 GitStatusInfo),不再覆盖。
+            // APP-05/06:计算 git_label。vm 对嵌套 struct 字段访问(.git_info.git_status.staged)
+            // 报 "Field index out of bounds for primitive" —— git_info 默认值的 git_status
+            // 未正确初始化为 struct。暂用静态值(空 branch + 全 0),format_git_label 逻辑
+            // 已验证(空 branch → "")。真实 git 数据待 vm 嵌套 struct 修复。
+            .git_label = format_git_label("", 0, 0, 0, 0, 0, 0)
         }
 
         // ── 命令执行 ──
@@ -249,9 +250,8 @@ store ShellStore {
 
         // ── 刷新 git 信息 ──
         .RefreshGit -> {
-            // prompt_context() 在 vm 曾触发 Invalid instance ID(M1 诊断),
-            // 暂跳过后端调用,只重算 git_label(用现有 git_info)。
-            .git_label = format_git_label(.git_info.git_branch, .git_info.git_status.staged, .git_info.git_status.unstaged, .git_info.git_status.untracked, .git_info.git_status.conflicted, .git_info.git_status.ahead, .git_info.git_status.behind)
+            // vm 嵌套 struct 访问限制(见 Init 注释),暂用静态值。
+            .git_label = format_git_label("", 0, 0, 0, 0, 0, 0)
         }
 
         // ── 侧栏 ──
