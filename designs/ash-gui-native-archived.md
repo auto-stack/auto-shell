@@ -110,9 +110,9 @@ Tauri(listen)下消费,但 iced 原生路径(renderer.rs)无 SSE 客户端,也�
 | test_blockbody.py | BB-01..14 | 3 | 10 | — |
 | test_tool_sidebar.py | TS-01..05 | 2 | 3 | — |
 | test_backend.py | BACK-01..12 | 6 | 7 | — |
-| test_prompt_input.py | PB-01..15 | 3 | 12 | — |
-| test_history_search.py | HS-01..13 | — | — | 3 |
-| **总计** | | **49** | **47** | **3** |
+| test_prompt_input.py | PB-01..15 | 7 | 8 | — |
+| test_history_search.py | HS-01..13 | 3 | — | — |
+| **总计** | | **56** | **43** | **0** |
 
 skip 分类:
 - **难档**(M2 未做):PB-ghost/highlight/textarea/debounce/autofocus/continuation/键绑定
@@ -161,10 +161,11 @@ a2r codegen(trans/rust.rs)需要:
 
 | 编号 | 限制 | 影响 | 状态 |
 |---|---|---|---|
-| EDGE-01 | MCP keyboard 发全局 key,非 input onkeydown | 阻塞 PB 键绑定 + HS 面板 | 待修(见下方深度诊断) |
+| EDGE-01 | MCP keyboard 发全局 key,非 input onkeydown | 阻塞 PB 键绑定 + HS 面板 | ✅ 已修(collect_onkeydown_bindings + tool_keyboard widget-aware 派发) |
 | EDGE-02 | VM 无法 struct 作 handler 参数 | push_value 占位 0 | ✅ 已绕过(__sse_* 预置字段) |
 | EDGE-03 | VM 嵌套 type 字段赋值崩溃(block.status = BlockStatus{}) | Stack Underflow | ✅ 已绕过(renderer Rust 构造) |
-| EDGE-04 | VM 嵌套 type 字面量初始化 + 字段访问缺陷 | TS/PB-hist 数据空 | ⚠️ 静态值绕过(见下方诊断) |
+| EDGE-04-A | store model 嵌套 type 字面量初始化(eval_expr_to_value) | git_label 等访问崩 | ✅ 已修(eval_expr_to_value 加 Expr::Node/Call 物化到堆) |
+| EDGE-04-B | store handler 调 back api 返回 type 实例崩 | boot 数据(command_list)空 | ⚠️ 静态值绕过(跨函数返回 type,更深问题) |
 | EDGE-05 | VM handler 读 .blocks 为 nil | for 循环空操作 | ✅ renderer Rust 处理 |
 | EDGE-07 | int+str 拼接 | duration/count 显示错 | ✅ 已修(.str()) |
 
