@@ -163,8 +163,8 @@ a2r codegen(trans/rust.rs)需要:
 |---|---|---|---|
 | EDGE-01 | MCP keyboard 发全局 key,非 input onkeydown | 阻塞 PB 键绑定 + HS 面板 | 待修(见下方深度诊断) |
 | EDGE-02 | VM 无法 struct 作 handler 参数 | push_value 占位 0 | ✅ 已绕过(__sse_* 预置字段) |
-| EDGE-03 | VM 嵌套 struct 赋值崩溃 | Stack Underflow | ✅ 已绕过(renderer Rust 构造) |
-| EDGE-04 | boot api 触发 Invalid instance ID | TS/PB-hist 数据空 | ⚠️ 静态值绕过(shell.at struct 构造崩) |
+| EDGE-03 | VM 嵌套 type 字段赋值崩溃(block.status = BlockStatus{}) | Stack Underflow | ✅ 已绕过(renderer Rust 构造) |
+| EDGE-04 | VM 嵌套 type 字面量初始化 + 字段访问缺陷 | TS/PB-hist 数据空 | ⚠️ 静态值绕过(见下方诊断) |
 | EDGE-05 | VM handler 读 .blocks 为 nil | for 循环空操作 | ✅ renderer Rust 处理 |
 | EDGE-07 | int+str 拼接 | duration/count 显示错 | ✅ 已修(.str()) |
 
@@ -195,12 +195,25 @@ a2r codegen(trans/rust.rs)需要:
 - keyboard_subscription 在 Captured 检查前派发 input-scope 绑定
 - 或用支持 on_key_press 的 widget / 包 keyboard_area
 
-### EDGE-04 深度诊断:shell.at struct 构造触发 Invalid instance ID
+### EDGE-04 深度诊断:vm 嵌套 type 字段访问 + 字面量初始化缺陷
 
-`command_list()`(shell.at)返回 BootSnapshot 时,struct 字段赋值触发 vm
-"Invalid instance ID: 0"(heap id 0 访问)。M2 已修 List 声明(List<T>.new),但
-BootSnapshot/ToolEntry 的 struct 字段操作仍崩。format_git_label 的嵌套 struct 访问
-(`.git_info.git_status.staged`)也报 "Field index out of bounds for primitive"。
+> 注意:Auto 用 `type` 关键字声明结构体(如 `type PromptContext { git_branch str; git_status GitStatusInfo }`),
+> 没有 `struct` 关键字。这里的"嵌套 type"指 type 字段类型为另一个 type(如 git_status: GitStatusInfo)。
+
+两个相关 vm 运行时缺陷(语法合法,vm 执行崩):
+
+**缺陷 A:嵌套 type 字面量初始化未物化内层实例**
+
+model 默认值 `var git_info PromptContext = PromptContext{ git_branch: "", git_status: GitStatusInfo{...} }`
+语法合法,但 vm 把内层 `GitStatusInfo{...}` 字面量存成了 primitive(而非堆上的实例引用)。
+导致 `.git_info.git_status` 取到的是 primitive,再访问 `.staged`(field_index>0)时,
+GET_FIELD(engine.rs:3752-3758)对 primitive 报 "Field index out of bounds for primitive"。
+
+**缺陷 B:shell.at 的 type 实例构造触发 Invalid instance ID**
+
+`command_list()` 返回 BootSnapshot 时,`var snap BootSnapshot = BootSnapshot{}`;
+`snap.commands = cmds` 等字段赋值触发 "Invalid instance ID: 0"(heap id 0 访问)。
+可能是空字面量 `BootSnapshot{}` 的某字段初始化为无效 heap id。
 
 **当前绕过**:Init 用静态值(cwd=".", 空 commands/history, git_label=format_git_label("",0,...))。
-真实 boot 数据待 vm 嵌套 struct 修复(auto-lang 层面)。
+真实 boot 数据待 vm 修复嵌套 type 字面量初始化(engine.rs GET_FIELD / 字面量物化路径)。
