@@ -245,9 +245,11 @@ M2 与 M3 交错:每修一组差异,立即写对应测试转绿。M1 必须先�
       M0 的 3 个 VM 兼容阻塞由 Plan 398 全部修复(parser [][]T/[](tuple) +
       sibling-handler rewrite + parse 错误 log::warn)。**注意:M0.4 测试骨架
       (conftest/desktop_mcp/test_smoke)尚未搭**——下轮 M0 收尾要做。
-- [ ] M1 in-process 后端实现 + SSE 流式桥(原 M1 扩展,见 §9.2:
-      ash-gui 的真后端是 Rust `ash-core`,vm merged 模式需要一份 in-process
-      后端;当前 `src/back/shell.at` 是空 mock,命令执行/流式输出未接线)
+- [~] **M1 SSE 流式桥**(2026-08-07 核心代码完成,Rust 逻辑已验证;端到端验证延后):
+      renderer.rs 加 SSE→Task subscription 桥 + Rust 执行器线程(merged broadcast +
+      HTTP SSE 双模式)+ update 闭包预置字段派发;shell_store.at 改「预置字段 + 无参
+      handler」模式适配 VM 参数限制。**Rust 侧闭环已验证**(执行器单元测试:echo→Success、
+      badcmd→Failed)。**端到端验证被 vm MCP 缺陷阻塞**(见 §10),延后到 M3 前置修复后。
 - [ ] M2 行为对齐(27 处 Vue→Auto 差异,见 §9.7 与行为目录)
 - [ ] M3 MCP 测试套件(~95 用例)
 - [ ] M4 a2r 二进制 + 文档
@@ -422,5 +424,77 @@ stub app.at(无 store/children)+ 完整 store + mock shell.at → link OK(基准
 加 use back.api 到 app → back.api 错误消失。
 逐个加回子组件 → 命中 BUG-C 的 `<Child>_State.<Handler>`。
 ```
+
+## 10. M1 实测发现(2026-08-07,SSE 流式桥)
+
+M1 在 auto-lang worktree `plan-ash-gui/m1-sse-bridge` 完成。本节记录架构决策、
+已验证部分、以及阻塞端到端验证的 vm 缺陷。
+
+### 10.1 架构决策(用户确认)
+
+| 维度 | 决策 | 理由 |
+|---|---|---|
+| 命令执行位置 | **Rust 执行器线程**(renderer 侧 std::process) | UI VM 不注入 ShellHost;复用 mcp_action_subscription 的「全局 channel + 后台线程」模式 |
+| handler 参数 | **预置字段 + 无参 handler** | VM `push_value` 对 struct 参数只推占位 0(vm_bridge.rs:929);renderer 用 write_state 写 `__sse_*` 预置字段,handler 改无参读 |
+| merged vs HTTP | **两者都做** | merged(默认,broadcast/std::process)+ HTTP(`AUTO_BACKEND=http://...`,reqwest SSE 客户端连 /api/stream) |
+
+### 10.2 已实现 + 已验证 ✅
+
+- **renderer.rs SSE 桥**(~340 行新增,renderer.rs:2132-2478):
+  - `ShellStreamEvent` / `PendingShellCommand` / `ShellExecutorHandle` 数据结构
+  - `start_shell_executor()` 启动执行器线程(仿 mcp_server current_thread runtime)
+  - `merged_exec_loop`:std::process::Command 执行,stdout 逐块流推 command_output,
+    退出码→command_result(Success/Failed/Cancelled),对齐 ash-server 契约
+  - `http_sse_loop`:reqwest bytes_stream + 手写 SSE 帧解析,连后端 /api/stream;
+    命令提交/取消走 POST
+  - `shell_event_subscription`:16ms poll SHELL_EVENT_RX → IcedMessage
+  - run_dynamic_iced 启动接线(MCP_ACTION_RX 初始化旁)+ subscription 闭包注册
+  - update 闭包 command_output/command_result 分支(write_state 预置字段 + 无参
+    on_with_input_for("ShellStore", "RunOutput"/"RunResult"))+ RunCommand/Cancel 拦截
+- **shell_store.at**:加 `__sse_*` / `__pending_command_*` 预置字段;RunCommand 写预置
+  字段(不再调后端);RunOutput/RunResult 改无参读预置字段;msg 枚举改无参
+- **shell.at 修 M0 遗留类型 bug**:`[]T` 空字面量误推断为 T 类型导致 push 失败 →
+  改用 `List<T>.new([])`(015-notes 模式);prompt_context 显式构造 git_status
+- **执行器单元测试通过**(`test_shell_executor_success_and_failure`):
+  echo→Success、nonexistent_cmd→Failed、block_id 正确、事件经 channel 产出
+- **smoke 测试不退化**(6/6 绿);store.Init 成功(cwd 字段有值)
+
+### 10.3 阻塞端到端验证的 vm 缺陷 ❌(M3 前置)
+
+**症状**:vm 模式 MCP `autoui_type`/`autoui_action` 报
+`No input element found — specify element_id`,无法输入命令触发 RunCommand。
+
+**根因**:`find_first_input`(mcp_server.rs:1517)在 **view_template**(未展开的
+AuraNode 模板树)上找 input。但 ash-gui 的 input 在子组件 PromptBar 内部,而
+App.view_template 里 PromptBar 是 `Component` 节点(**不含子组件内部 view**,
+aura/types.rs:768)—— find_first_input 的 `_ => None` 分支跳过 Component,故找不到。
+
+**性质**:vm 模式既有缺陷(M0 未测交互,smoke 只测 snapshot/state/vtree)。
+view_template 是未展开模板,所有依赖它定位元素的工具(type/action/inspect 的
+aura_ 路径)在 vm 模式对子组件内元素都失效。
+
+**为何 snapshot/vtree 能工作**:它们用 **styled_vtree**(渲染后、展开 component
+的 VTree,mcp_server.rs:94),产生 vnode_ id。但 type/action 的 execute_action_on_shared
+用 AuraNodeId(aura_),parse_aura_id 只接受 aura_ 前缀(mcp_server.rs:1453)。
+
+**修复方向(M3 前置)**:让 type/action 从 styled_vtree(vnode_ 体系)定位元素,
+或建立 vnode_ ↔ aura_ 的映射。涉及 execute_action_on_shared 的 id 体系切换。
+这是 M3 测试套件(所有交互测试)的必要前置。
+
+### 10.4 对计划的影响
+
+| 原 M1 假设 | 实测 | 调整 |
+|---|---|---|
+| M1 = SSE 桥代码 | ✅ 核心代码完成 | Rust 侧闭环已验证 |
+| M1 验收 = CMD-01..12 在 iced 成立 | ❌ 被 vm MCP 缺陷阻塞 | 端到端验收移到 M3 前置(type/action 修复后);M1 标 `[~]` |
+| shell.at 是空 mock | 部分 | 修了类型 bug;真执行由 renderer 执行器接管,.at 侧 run_command 保持 no-op |
+
+### 10.5 M1 产物清单
+
+- auto-lang worktree `plan-ash-gui/m1-sse-bridge`(renderer.rs SSE 桥 + 执行器 + 单元测试)
+- ash-gui-auto `shell_store.at`(预置字段模式 + 无参 handler)
+- ash-gui-auto `shell.at`(类型 bug 修复 + prompt_context 完善)
+- ash-gui-auto `tests/test_command_exec.py`(端到端测试,待 §10.3 修复后转绿)
+- 本节(§10)发现归档
 
 

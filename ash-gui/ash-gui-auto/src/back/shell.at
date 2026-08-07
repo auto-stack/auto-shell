@@ -7,27 +7,30 @@
 // 函数签名必须与 api.at 调用点一致。返回最简 mock 数据,避免复杂方法链
 // (VM handler/codegen 对部分 stdlib 方法支持有限)。
 
-use types: BootSnapshot, CompletionItem, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
+use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
 
 // ── command_list:返回最小工具表 ──
 pub fn command_list() BootSnapshot {
     var snap BootSnapshot = BootSnapshot{}
     snap.cwd = "/home/user"
     snap.home = "/home/user"
-    var cmds []ToolEntry = []
+    // VM 类型推断:用 List<T>.new([]) 显式容器类型(015-notes db.at 模式)。
+    // 直接 `var cmds []ToolEntry = []` 会被误推断为 ToolEntry 类型 →
+    // cmds.push 报 "no function 'ToolEntry.push'"。
+    var cmds List<ToolEntry> = List<ToolEntry>.new([])
     var ls ToolEntry = ToolEntry{}
     ls.name = "ls"
     ls.description = "list files"
     cmds.push(ls)
     snap.commands = cmds
-    var smart []SmartCommandEntry = []
+    var smart List<SmartCommandEntry> = List<SmartCommandEntry>.new([])
     snap.smart_commands = smart
     return snap
 }
 
 // ── read_history:返回几条示例历史 ──
 pub fn read_history() []str {
-    var h []str = []
+    var h List<str> = List<str>.new([])
     h.push("ls -al")
     h.push("echo hello")
     h.push("git status")
@@ -36,7 +39,7 @@ pub fn read_history() []str {
 
 // ── complete:返回与 line 前缀匹配的命令(mock:不过滤,全返) ──
 pub fn complete(line str, cursor int) []CompletionItem {
-    var items []CompletionItem = []
+    var items List<CompletionItem> = List<CompletionItem>.new([])
     var ls CompletionItem = CompletionItem{}
     ls.replacement = "ls"
     ls.display = "ls"
@@ -50,6 +53,15 @@ pub fn complete(line str, cursor int) []CompletionItem {
 pub fn prompt_context() PromptContext {
     var pc PromptContext = PromptContext{}
     pc.git_branch = "main"
+    // 显式构造 git_status,避免默认零值(Invalid instance ID)。
+    var gs GitStatusInfo = GitStatusInfo{}
+    gs.staged = 0
+    gs.unstaged = 0
+    gs.untracked = 0
+    gs.conflicted = 0
+    gs.ahead = 0
+    gs.behind = 0
+    pc.git_status = gs
     return pc
 }
 

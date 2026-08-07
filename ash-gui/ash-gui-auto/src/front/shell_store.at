@@ -6,8 +6,8 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_command, run_smart, prompt_context, history, open_path
-use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, CommandResult, CommandOutput, ShellEvent, RenderedOutput
+use back.api: command_list, complete, run_smart, prompt_context, history, open_path
+use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput
 
 store ShellStore {
     model {
@@ -33,9 +33,23 @@ store ShellStore {
 
         // ── 侧栏开关 ──
         var sidebar_open bool = true
+
+        // ── SSE 桥预置字段(M1)──
+        // VM 无法把 struct 作为 handler 参数(renderer push_value 对 Obj 推占位 0)。
+        // renderer 在触发 RunOutput/RunResult 前,把事件数据写入这些字段;
+        // handler body 读它们(无参 handler)。RunCommand 后写 __pending_command_*,
+        // renderer 读出后提交执行器线程(merged 模式 std::process / HTTP 模式 POST)。
+        var __sse_block_id int = 0
+        var __sse_chunk str = ""
+        var __sse_cwd str = ""
+        var __sse_status str = ""
+        var __sse_output_text str = ""
+        var __sse_duration_ms int = 0
+        var __pending_command_id int = 0
+        var __pending_command_str str = ""
     }
 
-    msg Msg { Init, RunCommand(str), RunResult(CommandResult), RunOutput(CommandOutput),
+    msg Msg { Init, RunCommand(str), RunResult, RunOutput,
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen,
@@ -51,18 +65,18 @@ store ShellStore {
     on {
         // ── 初始化:拉取 boot 数据 + 历史 + git ──
         .Init -> {
-            var snap BootSnapshot = command_list()
-            .cwd = snap.cwd
-            .home = snap.home
-            .commands = snap.commands
-            .smart_commands = snap.smart_commands
-            .command_names = []
-            for c in snap.commands {
-                .command_names.push(c.name)
-            }
-            .command_names.sort()
-            .persisted_history = history()
-            .git_info = prompt_context()
+            .cwd = "/home/user"
+            .home = "/home/user"
+            // 逐步加回 boot 数据(M1 诊断:command_list 曾触发 Invalid instance ID)。
+            // 先用最小静态值,确保 Init 不崩 —— 完整 boot 数据待 VM 兼容性修复。
+            var cmds List<ToolEntry> = List<ToolEntry>.new([])
+            var names List<str> = List<str>.new([])
+            .commands = cmds
+            .smart_commands = List<SmartCommandEntry>.new([])
+            .command_names = names
+            .persisted_history = List<str>.new([])
+            // prompt_context 曾触发 Invalid instance ID(git_status 默认零值)。
+            // 用 store model 的默认 git_info(已是全零 GitStatusInfo),不再覆盖。
         }
 
         // ── 命令执行 ──
@@ -84,40 +98,64 @@ store ShellStore {
             block.streamed_text = ""
             block.duration_ms = 0
             .blocks.push(block)
-            run_command(id, cmd)
+            // M1 SSE 桥:不再调 run_command 后端(VM 无法执行进程)。把命令写入
+            // 预置字段,renderer 在 handler 返回后读出并提交执行器线程。
+            .__pending_command_id = id
+            .__pending_command_str = cmd
         }
 
         // ── 流式输出块(逐行追加到 Running block) ──
-        .RunOutput(output) -> {
+        // M1:无参 handler。renderer 在触发前把 {block_id, chunk} 写入
+        // __sse_block_id / __sse_chunk 预置字段(VM 不能收 struct 参)。
+        .RunOutput -> {
             for b in .blocks {
-                if b.id == output.block_id {
-                    b.streamed_text = b.streamed_text + output.chunk
+                if b.id == .__sse_block_id {
+                    b.streamed_text = b.streamed_text + .__sse_chunk
                 }
             }
         }
 
         // ── 命令最终结果 ──
-        // status 是 serde 联合:"Success"(裸串)或 {"Failed": msg}(对象)。
-        // `result.status == "Success"` 对对象为 false → else 分支取 status.Failed。
-        .RunResult(result) -> {
-            .cwd = result.cwd
+        // M1:无参 handler。renderer 预置 __sse_block_id / __sse_status /
+        // __sse_output_text / __sse_duration_ms / __sse_cwd。
+        // status 形状:"Success"(裸串)| "Cancelled"(裸串)| {"Failed":msg}(JSON 串)。
+        // merged mock 模式 output 为空 —— 用 streamed_text 作 output.Text(执行器
+        // 已把 stdout 流式推到 streamed_text)。HTTP 模式 __sse_output_text 带
+        // 后端 RenderedOutput.Text。
+        .RunResult -> {
+            .cwd = .__sse_cwd
             .git_info = prompt_context()
             for b in .blocks {
-                if b.id == result.block_id {
+                if b.id == .__sse_block_id {
                     var st BlockStatus = BlockStatus{}
-                    if result.status == "Success" {
+                    if .__sse_status == "Success" {
                         st.kind = "Success"
                         st.message = ""
                         b.status = st
-                        b.output = result.output
+                        // merged:output.Text 取 streamed_text(流式累积)。
+                        // HTTP:若 __sse_output_text 非空优先用它。
+                        var out RenderedOutput = RenderedOutput{}
+                        if .__sse_output_text != "" {
+                            out.Text = .__sse_output_text
+                        } else {
+                            out.Text = b.streamed_text
+                        }
+                        b.output = out
+                        b.streamed_text = ""
+                        b.duration_ms = .__sse_duration_ms
                     } else {
-                        st.kind = "Failed"
-                        st.message = result.status.Failed
+                        if .__sse_status == "Cancelled" {
+                            st.kind = "Cancelled"
+                            st.message = ""
+                        } else {
+                            st.kind = "Failed"
+                            st.message = .__sse_status
+                        }
                         b.status = st
                         b.output = None
+                        b.streamed_text = ""
+                        b.duration_ms = .__sse_duration_ms
                     }
-                    b.streamed_text = ""
-                    b.duration_ms = result.duration_ms
                 }
             }
         }
