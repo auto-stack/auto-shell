@@ -1,16 +1,42 @@
 """Command execution tests for ash-gui VM mode (M1 — SSE bridge).
 
-These verify the core M1 loop: typing a command + Enter → streamedText grows
+These verify the core M1 loop: typing a command + submit → streamedText grows
 → block reaches Success (or Failed/Cancelled). This depends on the renderer-side
-SSE bridge (auto-lang renderer.rs) + the "preset field" handler pattern
-(shell_store.at __sse_* fields).
+SSE bridge (auto-lang renderer.rs) + the MCP type/submit/action fixes that let
+the bridge locate the PromptBar input (inside a child widget) and trigger Run.
 
 Run:
     cd ash-gui/ash-gui-auto
     AUTO_BIN=<path-to-auto.exe> python -m pytest tests/test_command_exec.py -v
 """
 
+import re
+
 import pytest
+
+
+import re
+
+import pytest
+
+
+def _find_prompt_input_vnode(mcp):
+    """Find the PromptBar input vnode id dynamically.
+
+    Scans autoui_find output for an Input node whose context shows
+    'onsubmit' / 'PromptBar.Run'. Returns the vnode_N string, or None.
+    The vnode id is content-hashed and stable per .at source, but we discover
+    it at runtime to avoid hardcoding.
+    """
+    raw = mcp.call("autoui_find", kind="input", limit=10)
+    # Each match block looks like: "... input vnode_NNN { ... onsubmit ... }".
+    # Find vnode ids that appear in a block mentioning onsubmit/PromptBar.Run.
+    for m in re.finditer(r"vnode_(\d+)", raw):
+        vid = "vnode_" + m.group(1)
+        info = mcp.call("autoui_inspect", element_id=vid)
+        if "onsubmit" in info.lower() or "PromptBar.Run" in info:
+            return vid
+    return None
 
 
 def _block_state(mcp):
@@ -19,59 +45,55 @@ def _block_state(mcp):
 
 
 def _has_block_with_status(mcp, status_kind):
-    """True if any block in state has status.kind == status_kind.
+    """True if any block in state has status.kind == status_kind."""
+    return status_kind in _block_state(mcp)
 
-    The autoui_state output is AURA/Atom text; we substring-match the status
-    kind (e.g. 'Success', 'Failed', 'Cancelled', 'Running').
+
+def _submit_command(mcp, cmd_text):
+    """Type a command into PromptBar and submit it (Enter equivalent).
+
+    Uses autoui_type (writes the input field via the registry-aware
+    input_state_map) + autoui_action submit (fires PromptBar.Run, which the
+    renderer's emit simulation forwards to store.RunCommand → SSE executor).
     """
-    text = _block_state(mcp)
-    return status_kind in text
+    vnode = _find_prompt_input_vnode(mcp)
+    assert vnode, "Could not find PromptBar input vnode (with onsubmit)"
+    # The input_state_map (registry-aware) is built during view(); on a freshly
+    # launched VM the first view() may not have completed when the test starts.
+    # Wait until type actually writes the input field before submitting.
+    import time
+    for _attempt in range(10):
+        mcp.call("autoui_type", text=cmd_text, clear_first=True)
+        time.sleep(0.4)
+        if mcp.state("input").strip().endswith(f'"{cmd_text}"'):
+            break
+    sub = mcp.call("autoui_action", element_id=vnode, action="submit")
 
 
-def test_run_ls_reaches_success(mcp):
-    """Type `ls` + Enter → a block appears and reaches Success.
+def test_run_echo_reaches_success(mcp):
+    """Type `echo` + submit → a block reaches Success with the echoed output.
 
     This is the headline M1 acceptance test: command execution closes the loop
-    (Running → Success with output). Tolerates either streamed_text growth or
-    direct output.Text population (merged mock uses streamed_text).
+    (Running → Success with output).
     """
-    # Type a command and submit.
-    mcp.type_into("ls", clear_first=True)
-    mcp.key("Enter")
-
-    # Wait for a Success block (executor runs std::process, should be fast).
-    ok = mcp.wait_until(
-        lambda c: _has_block_with_status(c, "Success"),
-        timeout=15,
-        interval=0.5,
-    )
-    assert ok, f"ls did not reach Success. State:\n{_block_state(mcp)[:800]}"
-
-
-def test_run_echo_shows_output(mcp):
-    """`echo hello` → Success block with output containing 'hello'."""
-    mcp.type_into("echo M1_bridge_smoke", clear_first=True)
-    mcp.key("Enter")
+    _submit_command(mcp, "echo M1_bridge_smoke")
 
     ok = mcp.wait_until(
         lambda c: _has_block_with_status(c, "Success"),
         timeout=15,
         interval=0.5,
     )
-    assert ok, "echo did not reach Success"
-    # The output text should contain the echoed string (in streamed_text or output).
-    state_text = _block_state(mcp)
-    assert "M1_bridge_smoke" in state_text, (
-        f"echo output missing 'M1_bridge_smoke'. State:\n{state_text[:800]}"
+    assert ok, f"echo did not reach Success. State:\n{_block_state(mcp)[:800]}"
+    # The output should contain the echoed string.
+    assert "M1_bridge_smoke" in _block_state(mcp), (
+        f"echo output missing expected text. State:\n{_block_state(mcp)[:800]}"
     )
 
 
 def test_failed_command_reaches_failed(mcp):
     """A command that exits non-zero → Failed status."""
-    # `false` exits 1 on Unix; on Windows use a cmd that fails.
-    # Use a nonexistent command to guarantee failure on both platforms.
-    mcp.type_into("nonexistent_command_xyz_m1", clear_first=True)
-    mcp.key("Enter")
+    # nonexistent command guarantees failure on both Unix and Windows.
+    _submit_command(mcp, "nonexistent_command_xyz_m1")
 
     ok = mcp.wait_until(
         lambda c: _has_block_with_status(c, "Failed"),

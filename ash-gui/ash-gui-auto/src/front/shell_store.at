@@ -65,8 +65,10 @@ store ShellStore {
     on {
         // ── 初始化:拉取 boot 数据 + 历史 + git ──
         .Init -> {
-            .cwd = "/home/user"
-            .home = "/home/user"
+            // cwd 用 "."(当前工作目录)而非 mock 的 /home/user —— M1 执行器
+            // 会在此 cwd 执行 std::process::Command,/home/user 在 Windows 无效。
+            .cwd = "."
+            .home = "."
             // 逐步加回 boot 数据(M1 诊断:command_list 曾触发 Invalid instance ID)。
             // 先用最小静态值,确保 Init 不崩 —— 完整 boot 数据待 VM 兼容性修复。
             var cmds List<ToolEntry> = List<ToolEntry>.new([])
@@ -84,22 +86,12 @@ store ShellStore {
         // struct literals for state structs ("Undefined variable: self").
         // Build via empty literal + field assignment (verified pattern).
         .RunCommand(cmd) -> {
+            // M1:VM 对嵌套 struct 字段赋值(block.status = BlockStatus{...})
+            // 在 handler 连续调用路径下崩溃(Stack Underflow)。故 store 只记
+            // pending{block_id, cmd},block 由 renderer 的 RunCommand 拦截在
+            // Rust 侧构造(含 Running status)后 push 进 blocks。
             var id int = .next_id
             .next_id = .next_id + 1
-            var block Block = Block{}
-            block.id = id
-            block.command = cmd
-            block.cwd = .cwd
-            var st BlockStatus = BlockStatus{}
-            st.kind = "Running"
-            st.message = ""
-            block.status = st
-            block.output = None
-            block.streamed_text = ""
-            block.duration_ms = 0
-            .blocks.push(block)
-            // M1 SSE 桥:不再调 run_command 后端(VM 无法执行进程)。把命令写入
-            // 预置字段,renderer 在 handler 返回后读出并提交执行器线程。
             .__pending_command_id = id
             .__pending_command_str = cmd
         }
