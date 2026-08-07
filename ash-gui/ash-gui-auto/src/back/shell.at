@@ -1,0 +1,78 @@
+// back/shell.at — VM-mode in-process mock backend for ash-gui (M0)
+//
+// 为什么有这个文件:VM merged 模式没有 in-process 后端(api.at 调 shell.X(),
+// 真实现在 ash-core Rust crate 里)。这份纯 .at mock 让 UI 能在 vm 模式独立
+// 跑起来(M0:开窗 + MCP + smoke)。真 shell 留给 a2r/HTTP(M1/M4)。
+//
+// 函数签名必须与 api.at 调用点一致。返回最简 mock 数据,避免复杂方法链
+// (VM handler/codegen 对部分 stdlib 方法支持有限)。
+
+use types: BootSnapshot, CompletionItem, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
+
+// ── command_list:返回最小工具表 ──
+pub fn command_list() BootSnapshot {
+    var snap BootSnapshot = BootSnapshot{}
+    snap.cwd = "/home/user"
+    snap.home = "/home/user"
+    var cmds []ToolEntry = []
+    var ls ToolEntry = ToolEntry{}
+    ls.name = "ls"
+    ls.description = "list files"
+    cmds.push(ls)
+    snap.commands = cmds
+    var smart []SmartCommandEntry = []
+    snap.smart_commands = smart
+    return snap
+}
+
+// ── read_history:返回几条示例历史 ──
+pub fn read_history() []str {
+    var h []str = []
+    h.push("ls -al")
+    h.push("echo hello")
+    h.push("git status")
+    return h
+}
+
+// ── complete:返回与 line 前缀匹配的命令(mock:不过滤,全返) ──
+pub fn complete(line str, cursor int) []CompletionItem {
+    var items []CompletionItem = []
+    var ls CompletionItem = CompletionItem{}
+    ls.replacement = "ls"
+    ls.display = "ls"
+    ls.description = "list files"
+    ls.kind = "command"
+    items.push(ls)
+    return items
+}
+
+// ── prompt_context:mock git 信息 ──
+pub fn prompt_context() PromptContext {
+    var pc PromptContext = PromptContext{}
+    pc.git_branch = "main"
+    return pc
+}
+
+// ── run_command:mock,只记历史(无真 shell) ──
+pub fn run_command(block_id int, cmd str) {
+    // no-op in mock; real streaming arrives in M1
+}
+
+// ── run_smart:同步返回 mock 文本 ──
+pub fn run_smart(block_id int, name str, args []str) str {
+    return "(mock smart: " + name + ")"
+}
+
+pub fn cancel() {
+    // mock no-op
+}
+
+pub fn open_path(path str) {
+    // mock no-op
+}
+
+// ── subscribe:SSE 流。M0 临时注释:VM 无法链接 ~Stream<T>(见 api.at 注释)。
+// M1 SSE 桥恢复。
+// pub fn subscribe() ~Stream<ShellEvent> {
+//     return Stream<ShellEvent>.empty()
+// }

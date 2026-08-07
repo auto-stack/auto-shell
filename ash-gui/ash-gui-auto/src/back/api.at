@@ -7,8 +7,12 @@
 //   - Tauri commands (Rust): Tauri IPC,Tauri 版用
 //
 // 业务逻辑(Shell 执行、补全引擎等)在 auto-shell/ash-core 里,不在此文件。
+//
+// VM merged 模式:`use shell` 指向同目录 mock 后端 shell.at(纯 .at 模拟),
+// 让 UI 能在 vm 模式独立跑起来做测试。真 shell 走 a2r/HTTP(M1/M4)。
 
 use types: BootSnapshot, CompletionItem, PromptContext, ShellEvent, SmartResult
+use shell
 
 // ═══════════════════════════════════════════════════════════
 // API 类型定义(codegen 从这里生成 TS interface + Rust struct)
@@ -226,7 +230,11 @@ pub fn open_path(path str) {
 /// `EventSource('/api/stream')` 并把每条 SSE 消息按 `data.event` 判别派发到
 /// `RunOutput`/`RunResult` action。api.ts 里不再生成(永不调用的)`stream()` fetch fn。
 /// GET /api/stream
-#[api(method = "GET", path = "/api/stream")]
-pub fn stream() ~Stream<ShellEvent> {
-    return shell.subscribe()
-}
+//
+// M0 临时注释:VM 路径目前无法链接 ~Stream<T> 返回类型(整个 api 模块因此 link
+// 失败,所有 api.X 变 undefined)。M1 SSE 桥会恢复此端点。vm 模式下流式输出
+// 暂不可用——block 会停在 Running(smoke 测试只验证 UI 能开 + MCP 能连)。
+// #[api(method = "GET", path = "/api/stream")]
+// pub fn stream() ~Stream<ShellEvent> {
+//     return shell.subscribe()
+// }
