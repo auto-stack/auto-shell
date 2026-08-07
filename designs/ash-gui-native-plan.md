@@ -245,11 +245,11 @@ M2 与 M3 交错:每修一组差异,立即写对应测试转绿。M1 必须先�
       M0 的 3 个 VM 兼容阻塞由 Plan 398 全部修复(parser [][]T/[](tuple) +
       sibling-handler rewrite + parse 错误 log::warn)。**注意:M0.4 测试骨架
       (conftest/desktop_mcp/test_smoke)尚未搭**——下轮 M0 收尾要做。
-- [~] **M1 SSE 流式桥**(2026-08-07 核心代码完成,Rust 逻辑已验证;端到端验证延后):
-      renderer.rs 加 SSE→Task subscription 桥 + Rust 执行器线程(merged broadcast +
-      HTTP SSE 双模式)+ update 闭包预置字段派发;shell_store.at 改「预置字段 + 无参
-      handler」模式适配 VM 参数限制。**Rust 侧闭环已验证**(执行器单元测试:echo→Success、
-      badcmd→Failed)。**端到端验证被 vm MCP 缺陷阻塞**(见 §10),延后到 M3 前置修复后。
+- [x] **M1 SSE 流式桥**(2026-08-07 完成,端到端闭环验证通过):
+      renderer.rs SSE→Task subscription 桥 + Rust 执行器线程(merged std::process /
+      HTTP SSE 双模式)+ vm MCP 子组件交互修复(type/submit/input_state_map/emit模拟/
+      Rust 侧 block 构造更新)。**端到端闭环已验证**:type echo + submit → Success + output;
+      badcmd → Failed(ash-gui 全部 8 测试绿:smoke 6 + command_exec 2)。
 - [ ] M2 行为对齐(27 处 Vue→Auto 差异,见 §9.7 与行为目录)
 - [ ] M3 MCP 测试套件(~95 用例)
 - [ ] M4 a2r 二进制 + 文档
@@ -459,35 +459,35 @@ M1 在 auto-lang worktree `plan-ash-gui/m1-sse-bridge` 完成。本节记录架�
   echo→Success、nonexistent_cmd→Failed、block_id 正确、事件经 channel 产出
 - **smoke 测试不退化**(6/6 绿);store.Init 成功(cwd 字段有值)
 
-### 10.3 阻塞端到端验证的 vm 缺陷 ❌(M3 前置)
+### 10.3 vm MCP 子组件交互修复(2026-08-07,5 个互补修复)✅
 
-**症状**:vm 模式 MCP `autoui_type`/`autoui_action` 报
-`No input element found — specify element_id`,无法输入命令触发 RunCommand。
+原 §10.3 记录的阻塞已解决。vm 模式命令执行端到端闭环跑通,需要 5 个互补修复
+(auto-lang worktree `plan-ash-gui/mcp-vnode-action`):
 
-**根因**:`find_first_input`(mcp_server.rs:1517)在 **view_template**(未展开的
-AuraNode 模板树)上找 input。但 ash-gui 的 input 在子组件 PromptBar 内部,而
-App.view_template 里 PromptBar 是 `Component` 节点(**不含子组件内部 view**,
-aura/types.rs:768)—— find_first_input 的 `_ => None` 分支跳过 Component,故找不到。
-
-**性质**:vm 模式既有缺陷(M0 未测交互,smoke 只测 snapshot/state/vtree)。
-view_template 是未展开模板,所有依赖它定位元素的工具(type/action/inspect 的
-aura_ 路径)在 vm 模式对子组件内元素都失效。
-
-**为何 snapshot/vtree 能工作**:它们用 **styled_vtree**(渲染后、展开 component
-的 VTree,mcp_server.rs:94),产生 vnode_ id。但 type/action 的 execute_action_on_shared
-用 AuraNodeId(aura_),parse_aura_id 只接受 aura_ 前缀(mcp_server.rs:1453)。
-
-**修复方向(M3 前置)**:让 type/action 从 styled_vtree(vnode_ 体系)定位元素,
-或建立 vnode_ ↔ aura_ 的映射。涉及 execute_action_on_shared 的 id 体系切换。
-这是 M3 测试套件(所有交互测试)的必要前置。
+1. **tool_type 支持 vnode_**(mcp_server.rs):parse_element_id 替代 parse_aura_id
+   (支持 aura_N + vnode_N);无 element_id 时从 styled_vtree 找首个 Input vnode
+   (find_first_input_vnode),而非未展开的 view_template。
+2. **submit action**(mcp_types.rs + mcp_server.rs + action_mapper.rs):UiActionType::Submit
+   触发 Input on_submit(Enter 语义);execute_action_vnode 从 target_view 读 value
+   作 handler 参数(模拟 `onenter: .Run(.input)`)。
+3. **input_state_map 递归子组件**(dynamic.rs):extract_input_state_map_with_registry
+   扫描 root + 所有注册子组件 view_tree;scan_node_for_inputs 支持
+   `Expr::Dot(Ident("self"), field)`(.input 解析形式,非 Expr::Ident)。
+4. **emit 模拟**(renderer.rs):handler_codegen 剥离子组件 callback prop 调用
+   (handler_codegen.rs:996 Plan 370 D-GAP-4),PromptBar.Run → App.RunCommand 的自动
+   emit 在 vm 不发生;renderer 在 PromptBar.Run 后用 cmd 值直接触发 store.RunCommand。
+5. **Rust 侧 block 构造/更新**(renderer.rs):VM 对嵌套 struct 赋值
+   (`block.status = BlockStatus{}`)在连续 handler 调用下崩溃(Stack Underflow);
+   store.RunCommand 只记 pending{block_id,cmd},block 由 renderer 用 auto_val::Obj
+   构造 + update_block_in_state 直接更新(streamed_text/status/output)。
 
 ### 10.4 对计划的影响
 
 | 原 M1 假设 | 实测 | 调整 |
 |---|---|---|
-| M1 = SSE 桥代码 | ✅ 核心代码完成 | Rust 侧闭环已验证 |
-| M1 验收 = CMD-01..12 在 iced 成立 | ❌ 被 vm MCP 缺陷阻塞 | 端到端验收移到 M3 前置(type/action 修复后);M1 标 `[~]` |
-| shell.at 是空 mock | 部分 | 修了类型 bug;真执行由 renderer 执行器接管,.at 侧 run_command 保持 no-op |
+| M1 = SSE 桥代码 | ✅ 完成 + 5 个 vm 交互修复 | 端到端闭环验证通过 |
+| M1 验收 = CMD-01..12 在 iced 成立 | ✅ 核心(CMD-01/02 Success/Failed) | 其余 CMD 用例留 M3 测试套件 |
+| shell.at 是空 mock | 部分 | 修了类型 bug;真执行由 renderer 执行器接管 |
 
 ### 10.5 M1 产物清单
 
