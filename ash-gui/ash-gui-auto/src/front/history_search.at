@@ -10,6 +10,7 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
         var query str = ""
         var selected int = 0
         var matches []str = []
+        var match_count str = ""
     }
 
     view {
@@ -60,9 +61,10 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
                             style: "px-3 py-4 text-center text-xs text-muted-foreground/50"
                         }
                     }
-                    // HS-13:匹配计数。int.str() 转换避免 int+str 拼接错误。
+                    // HS-13:匹配计数。用 match_count computed(a2r 解析器对 text
+                    // 后的括号表达式支持不稳定,改用 computed 字段)。
                     if .matches.len() > 0 {
-                        text (.matches.len().str() + " matches") {
+                        text .match_count {
                             style: "px-3 py-1 text-center text-[10px] text-muted-foreground/50"
                         }
                     }
@@ -124,6 +126,7 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
             }
             .matches = out
             .selected = 0
+            .match_count = out.len().str() + " matches"
         }
     }
 }
