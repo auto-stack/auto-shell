@@ -2,9 +2,39 @@
 
 > 目的:让任何会话/任何人在**修完已发现的 VM bug 后**,能从当前断点无缝继续诊断,
 > 不需要重走三轮二分。本文是「断点快照」;VM 兼容性修复计划在
-> `designs/ash-gui-vm-fix-plan.md`(改 bug 的方案)。
+> `designs/ash-gui-vm-fix-plan.md`(改 bug 的方案),auto-lang 侧的计划是
+> `auto-lang/docs/plans/398-vm-expose-and-store-sibling-handler.md`(Plan 398)。
 
-## 0. 一句话现状(2026-08-07 三轮诊断后)
+## 0. 一句话现状(最新,2026-08-07 Plan 398 深入诊断后)
+
+> ⚠️ **本文 §1–§6 的"3 个 VM bug(BUG-A/B/C)"框架部分已被 Plan 398 §11 修正**。
+> 深入诊断(加 eprintln)后发现:ash-gui vm 启动失败主要是 **.at parse 错误被
+> 静默吞掉**,不是 VM 链接/作用域 bug。**以本节及 Plan 398 §11 为准;§1–§6 作历史。**
+
+**真正的根因(Plan 398 §11,已验证)**:
+1. `collect_module_imports`(`auto-lang/lib.rs:2290`)的 `Err(_) => return` 静默吞
+   parse 错误 → 整模块符号消失 → 下游误导性 `Undefined symbol: api.X`。**已修
+   (Plan 398 commit `25642f91`,改 log::warn)**。
+2. **ash-gui 侧两个 .at parse 错误**(下一步修):
+   - `back/api.at`:`[][]T`(`rows: [][]RenderedCell`)与 `[](tuple)`
+     (`fields: [](str, RenderedCell)`)不被 Core parser 支持 → 改 `[]T` 即可 parse。
+   - `front/shell_store.at:29`:`git_status: None` 与 `GitStatusInfo` 类型不匹配 →
+     改空 struct 或 `?GitStatusInfo`。
+3. **真正的 BUG-C**(`PromptBar_State.Exit`):修了上面两个 parse 错误后才暴露。
+   §2 诊断已确认 synthesize 为 PromptBar 生成了全部 13 handler + `expose=["Exit"]`
+   被 parser 正确填充 → BUG-C 根因在 **linker/vm_bridge 的 `<Child>_State.<Handler>`
+   符号查找**,不在 synthesize。
+
+**修正后的续接步骤(替换 §4)**:
+1. (已做)Plan 398 lib.rs parse 错误改 log::warn。
+2. (下一步,ash-gui .at)修 api.at 的 `[][]`/`[](tuple)` → `[]T`;修 shell_store.at
+   的 `git_status: None`。
+3. (Plan 398 §2 BUG-C)修 `<Child>_State.<Handler>` 符号查找。
+4. ash-gui vm 启动验证 → 回 ash-gui-native-plan M0.5。
+
+---
+
+## 0.历史 一句话现状(2026-08-07 三轮诊断后,已被上文 §0 修正)
 
 ash-gui-auto 在 `auto run -r vm` 下**仍无法启动**,但已定位到 **3 个独立 VM bug**
 (BUG-A/B/C)。其中 BUG-A/B 的 .at workaround 已应用(已提交),BUG-C + 残留
