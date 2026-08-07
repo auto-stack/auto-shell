@@ -250,7 +250,12 @@ M2 与 M3 交错:每修一组差异,立即写对应测试转绿。M1 必须先�
       HTTP SSE 双模式)+ vm MCP 子组件交互修复(type/submit/input_state_map/emit模拟/
       Rust 侧 block 构造更新)。**端到端闭环已验证**:type echo + submit → Success + output;
       badcmd → Failed(ash-gui 全部 8 测试绿:smoke 6 + command_exec 2)。
-- [ ] M2 行为对齐(27 处 Vue→Auto 差异,见 §9.7 与行为目录)
+- [~] **M2 行为对齐**(2026-08-07 纯逻辑组完成,约 12 处;难档留下轮):
+      BL-08..10 duration badge、BB-08 点击范围、BB-12 bold/italic、BB-11 usage 回退、
+      TS-01 描述、HS-04 不敏感+倒序+cap50、HS-13 计数、PB-11 Ctrl+L、PB-comp-07 description、
+      APP-05/06 git_label、CMD-06 cancel 首个。**14 测试(11 pass + 3 xfail)**。
+      难档(PB-ghost/highlight/textarea/debounce/autofocus/continuation、BL-01 自动滚动、
+      CMD-09/10 smart 失败+duration)留下轮 —— 依赖 iced 能力或 renderer 拦截。
 - [ ] M3 MCP 测试套件(~95 用例)
 - [ ] M4 a2r 二进制 + 文档
 
