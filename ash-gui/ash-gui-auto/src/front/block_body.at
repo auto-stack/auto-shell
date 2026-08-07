@@ -40,16 +40,30 @@ view fn RenderTable(output TableOutput) {
                     for idx, cell in row {
                         td {
                             style: "px-3 py-1.5 align-top"
+                            // BB-08:仅 Dir/FileName 可点(Vue cellStyle.ts:22-26 isClickable)。
+                            // Text(Plain)不可点;Tagged 仅 Dir/FileName 绑 onclick + cursor。
                             if cell.Text != nil {
                                 text cell.Text {
-                                    onclick: .OpenPath(cell.Text)
-                                    style: "cursor-pointer text-foreground"
+                                    style: "text-foreground"
                                 }
                             }
                             if cell.Tagged != nil {
-                                text cell.Tagged.text {
-                                    onclick: .OpenPath(cell.Tagged.text)
-                                    style: if cell.Tagged.kind == "Dir" { "cursor-pointer text-sky-400 hover:underline" } else if cell.Tagged.kind == "CodeAtRs" { "cursor-pointer text-emerald-400 hover:underline" } else if cell.Tagged.kind == "Executable" { "cursor-pointer text-cyan-300 hover:underline" } else if cell.Tagged.kind == "Config" { "cursor-pointer text-amber-300 hover:underline" } else if cell.Tagged.kind == "Permission" { "cursor-pointer text-muted-foreground" } else { "cursor-pointer text-foreground" }
+                                if cell.Tagged.kind == "Dir" {
+                                    text cell.Tagged.text {
+                                        onclick: .OpenPath(cell.Tagged.text)
+                                        style: "cursor-pointer text-sky-400 hover:underline"
+                                    }
+                                } else {
+                                    if cell.Tagged.kind == "FileName" {
+                                        text cell.Tagged.text {
+                                            onclick: .OpenPath(cell.Tagged.text)
+                                            style: "cursor-pointer text-sky-400 hover:underline"
+                                        }
+                                    } else {
+                                        text cell.Tagged.text {
+                                            style: if cell.Tagged.kind == "CodeAtRs" { "text-emerald-400" } else if cell.Tagged.kind == "Executable" { "text-cyan-300" } else if cell.Tagged.kind == "Config" { "text-amber-300" } else if cell.Tagged.kind == "Permission" { "text-muted-foreground" } else { "text-foreground" }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -61,7 +75,7 @@ view fn RenderTable(output TableOutput) {
 }
 
 /// 代码渲染器(show 命令的语法高亮输出)
-/// CodeSpan 携带 RGB + bold/italic,前端直接渲染为着色文本。
+/// CodeSpan 携带 RGB + bold/italic,前端渲染为着色 + 粗/斜体文本(BB-12)。
 view fn RenderCode(output CodeOutput) {
     col {
         style: "text-sm font-mono-ash overflow-x-auto"
@@ -69,7 +83,9 @@ view fn RenderCode(output CodeOutput) {
             row {
                 for span in line {
                     text span.text {
-                        style: "color: rgb(" + span.r + "," + span.g + "," + span.b + ")"
+                        // BB-12:bold/italic 对齐 Vue CodeView.vue:16-24。
+                        // 颜色 + font-weight + font-style 拼成内联 style。
+                        style: "color: rgb(" + span.r + "," + span.g + "," + span.b + ");font-weight:" + (if span.bold { "bold" } else { "normal" }) + ";font-style:" + (if span.italic { "italic" } else { "normal" })
                     }
                 }
             }
@@ -94,11 +110,27 @@ view fn RenderError(output ErrorOutput) {
 view fn RenderRecord(output RecordOutput) {
     col {
         style: "space-y-3 px-1 py-1"
-        // MemoryInfo 进度条:遍历找 usage_percent/usage 字段,就地渲染 Progress。
-        // value 传 cell 文本(如 "42" 或 "75%"),Progress 组件接受数值。
+        // MemoryInfo 进度条:优先 usage_percent,回退 usage(Vue RecordView.vue:17-26)。
         if output.atom_type == "MemoryInfo" {
             for idx, field in output.fields {
                 if field.0 == "usage_percent" {
+                    if field.1.Text != nil {
+                        progress {
+                            value: field.1.Text
+                            max: 100
+                        }
+                    }
+                    if field.1.Tagged != nil {
+                        progress {
+                            value: field.1.Tagged.text
+                            max: 100
+                        }
+                    }
+                }
+            }
+            // BB-11 回退:无 usage_percent 时用 usage 字段。
+            for idx, field in output.fields {
+                if field.0 == "usage" {
                     if field.1.Text != nil {
                         progress {
                             value: field.1.Text

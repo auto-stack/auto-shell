@@ -24,6 +24,11 @@ widget ToolSidebar(commands: List<ToolEntry>, smart_commands: List<SmartCommandE
                     button .c.name {
                         onclick: .Pick(.c.name)
                         style: "w-full text-left px-2 py-1 rounded text-xs font-mono-ash text-sky-300/90 hover:bg-muted/60 hover:text-sky-200"
+                        if .c.description != "" {
+                            text .c.description {
+                                style: "truncate text-[10px] text-muted-foreground/70"
+                            }
+                        }
                     }
                 }
             }
@@ -39,6 +44,11 @@ widget ToolSidebar(commands: List<ToolEntry>, smart_commands: List<SmartCommandE
                         button .s.name {
                             onclick: .RunSmart(.s.name)
                             style: "w-full text-left px-2 py-1 rounded text-xs font-mono-ash text-purple-300/90 hover:bg-muted/60 hover:text-purple-200"
+                            if .s.description != "" {
+                                text .s.description {
+                                    style: "truncate text-[10px] text-muted-foreground/70"
+                                }
+                            }
                         }
                     }
                 }

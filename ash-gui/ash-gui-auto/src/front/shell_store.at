@@ -9,6 +9,35 @@
 use back.api: command_list, complete, run_smart, prompt_context, history, open_path
 use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput
 
+// format_git_label — APP-05/06:格式化 git 分支+状态标签。
+// 对齐 Vue App.vue:75-92:"⎇ main +2 !1 ?3 ✗0 ⇡1 ⇣0"。
+// 抽成 module fn 供 Init/RefreshGit/RunResult 调用(computed 多行 body 在 vm 风险)。
+fn format_git_label(branch str, staged int, unstaged int, untracked int, conflicted int, ahead int, behind int) str {
+    if branch == "" {
+        return ""
+    }
+    var label str = "⎇ " + branch
+    if staged > 0 {
+        label = label + " +" + staged
+    }
+    if unstaged > 0 {
+        label = label + " !" + unstaged
+    }
+    if untracked > 0 {
+        label = label + " ?" + untracked
+    }
+    if conflicted > 0 {
+        label = label + " ✗" + conflicted
+    }
+    if ahead > 0 {
+        label = label + " ⇡" + ahead
+    }
+    if behind > 0 {
+        label = label + " ⇣" + behind
+    }
+    return label
+}
+
 store ShellStore {
     model {
         // ── 核心状态 ──
@@ -33,6 +62,11 @@ store ShellStore {
 
         // ── 侧栏开关 ──
         var sidebar_open bool = true
+
+        // ── git_label(APP-05/06):格式化的 git 分支+状态标签 ──
+        // computed 多行 body 在 vm 风险,改用 handler 调 module fn 写此字段。
+        // 格式对齐 Vue App.vue:75-92:"⎇ main +2 !1 ?3 ✗0 ⇡1 ⇣0"。
+        var git_label str = ""
 
         // ── SSE 桥预置字段(M1)──
         // VM 无法把 struct 作为 handler 参数(renderer push_value 对 Obj 推占位 0)。
@@ -59,7 +93,7 @@ store ShellStore {
         // Note: computed uses parse_expr (not parse_body), so complex
         // .field access may overflow. Keep simple for now.
         history => self.persisted_history
-        git_label => ""
+        git_label => self.git_label
     }
 
     on {
@@ -77,6 +111,8 @@ store ShellStore {
             .smart_commands = List<SmartCommandEntry>.new([])
             .command_names = names
             .persisted_history = List<str>.new([])
+            // APP-05/06:计算 git_label(用默认 git_info,全零 GitStatusInfo)。
+            .git_label = format_git_label(.git_info.git_branch, .git_info.git_status.staged, .git_info.git_status.unstaged, .git_info.git_status.untracked, .git_info.git_status.conflicted, .git_info.git_status.ahead, .git_info.git_status.behind)
             // prompt_context 曾触发 Invalid instance ID(git_status 默认零值)。
             // 用 store model 的默认 git_info(已是全零 GitStatusInfo),不再覆盖。
         }
@@ -152,9 +188,11 @@ store ShellStore {
             }
         }
 
-        // ── 取消 ──
+        // ── 取消(CMD-06:只停首个 Running)──
+        // blocks 由 renderer 管理(Value::Array),vm handler 读 .blocks 为 nil,
+        // 此 for 循环实际不执行。真正的取消(CMD-06 只停首个 + 进程 kill)在
+        // renderer 的 Cancel 拦截里用 Rust 完成。保留此 handler 供非 vm 路径。
         .Cancel -> {
-            // cancel() backend call stubbed — diagnosing vm link (M0)
             for b in .blocks {
                 if b.status.kind == "Running" {
                     var st BlockStatus = BlockStatus{}
@@ -211,7 +249,9 @@ store ShellStore {
 
         // ── 刷新 git 信息 ──
         .RefreshGit -> {
-            .git_info = prompt_context()
+            // prompt_context() 在 vm 曾触发 Invalid instance ID(M1 诊断),
+            // 暂跳过后端调用,只重算 git_label(用现有 git_info)。
+            .git_label = format_git_label(.git_info.git_branch, .git_info.git_status.staged, .git_info.git_status.unstaged, .git_info.git_status.untracked, .git_info.git_status.conflicted, .git_info.git_status.ahead, .git_info.git_status.behind)
         }
 
         // ── 侧栏 ──

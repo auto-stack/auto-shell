@@ -14,6 +14,9 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
         cwd_display => .block.cwd
         status_glyph => if .block.status.kind == "Success" { "✓" } else if .block.status.kind == "Failed" { "✗" } else if .block.status.kind == "Cancelled" { "⊘" } else { "…" }
         status_cls => if .block.status.kind == "Success" { "text-emerald-500" } else if .block.status.kind == "Failed" { "text-red-500" } else { "text-amber-500" }
+        // BL-08..10:duration badge。对齐 Vue BlockItem.vue:36-41。
+        // < 1000ms 显示 "Nms",否则 "N.Ns"。duration_ms 为 0(Running/未记)时不显示。
+        duration_label => if .block.duration_ms > 0 { if .block.duration_ms < 1000 { (.block.duration_ms + "ms") } else { (((.block.duration_ms / 1000) + "s")) } } else { "" }
     }
 
     view {
@@ -52,6 +55,12 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
                     }
                     text .status_glyph {
                         style: "text-xs font-mono-ash " + .status_cls
+                    }
+                    // BL-08..10:duration badge(仅完成时 duration_ms > 0 显示)。
+                    if .duration_label != "" {
+                        text .duration_label {
+                            style: "text-[10px] h-5 font-mono-ash text-muted-foreground"
+                        }
                     }
                 }
             }

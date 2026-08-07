@@ -60,6 +60,12 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
                             style: "px-3 py-4 text-center text-xs text-muted-foreground/50"
                         }
                     }
+                    // HS-13:匹配计数。
+                    if .matches.len() > 0 {
+                        text (.matches.len() + " matches") {
+                            style: "px-3 py-1 text-center text-[10px] text-muted-foreground/50"
+                        }
+                    }
                 }
             }
         }
@@ -94,23 +100,30 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
             }
         }
 
-        // 输入变化 → 过滤历史(子串匹配)。
-        // 注:大小写不敏感需 to_lower,但 ts_adapter 尚未映射 to_lower→toLowerCase;
-        // 暂用大小写敏感 contains(DEBTS 记录的一致性遗漏)。
+        // 输入变化 → 过滤历史。HS-04 三要素(对齐 Vue HistorySearch.vue:30-37):
+        // 大小写不敏感(to_lower)、倒序(newest first,从尾部遍历)、cap 50。
         .OnQuery -> {
-            if .query.trim() != "" {
-                var out []str = []
-                for h in .history {
-                    if h.contains(.query) {
-                        out.push(h)
+            var q str = .query.trim().to_lower()
+            var out []str = []
+            // 倒序:newest first。.history 是 chronological(last = newest),
+            // 从尾部向前遍历,push 到 out 即得倒序。
+            var i int = .history.len() - 1
+            for i >= 0 {
+                if q != "" {
+                    if .history[i].to_lower().contains(q) {
+                        out.push(.history[i])
                     }
+                } else {
+                    out.push(.history[i])
                 }
-                .matches = out
-                .selected = 0
-            } else {
-                .matches = .history
-                .selected = 0
+                // cap 50(对齐 Vue slice(0,50))。
+                if out.len() >= 50 {
+                    i = 0
+                }
+                i = i - 1
             }
+            .matches = out
+            .selected = 0
         }
     }
 }

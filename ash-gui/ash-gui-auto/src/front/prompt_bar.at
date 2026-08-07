@@ -14,7 +14,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
               HistoryOlder, HistoryNewer,
               PickCompletion(CompletionItem),
               ToggleHistorySearch,
-              AcceptGhost, AcceptGhostWord }
+              AcceptGhost, AcceptGhostWord, OnCtrlL }
 
     computed {
         cwd_display => .cwd
@@ -62,6 +62,12 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         button .s.display {
                             onclick: .PickCompletion(.s)
                             style: "text-xs font-mono-ash px-2 py-0.5 rounded bg-muted/60 hover:bg-muted text-sky-300"
+                            // PB-comp-07:显示 description(灰色小字)。
+                            if .s.description != "" {
+                                text .s.description {
+                                    style: "text-[10px] text-muted-foreground/70"
+                                }
+                            }
                         }
                     }
                 }
@@ -97,7 +103,9 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     onkeyup: .OnInput
                     onenter: .Run(.input)
                     onkeydown.ctrl.r: .ToggleHistorySearch
-                    onkeydown.ctrl.l: .Clear
+                    // PB-11:Ctrl+L 清屏(归档 blocks),非清输入。绑 OnCtrlL,
+                    // renderer emit 模拟转发到 store.ClearScreen(vm 剥离 callback emit)。
+                    onkeydown.ctrl.l: .OnCtrlL
                     onkeydown.ctrl.d: .OnCtrlD
                     onkeydown.ctrl.c: .OnCtrlC
                     onkeydown.up: .HistoryOlder
@@ -138,6 +146,10 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         .ToggleHistorySearch -> {
             .history_open = !.history_open
         }
+
+        // PB-11:Ctrl+L 清屏。handler body 空 —— renderer emit 模拟转发到
+        // store.ClearScreen(vm 剥离 callback prop emit,见 renderer PromptBar.Run 模拟)。
+        .OnCtrlL -> { }
 
         // Ctrl+C:清空当前输入
         .OnCtrlC -> {
