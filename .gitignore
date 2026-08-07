@@ -39,3 +39,6 @@ ash-gui/ash-gui-auto/examples/
 
 # ZCode session cache (per-session plan artifacts — not project content)
 /.zcode/
+__pycache__/
+*.pyc
+.pytest_cache/
