@@ -5,11 +5,30 @@
 > `designs/ash-gui-vm-fix-plan.md`(改 bug 的方案),auto-lang 侧的计划是
 > `auto-lang/docs/plans/398-vm-expose-and-store-sibling-handler.md`(Plan 398)。
 
-## 0. 一句话现状(最新,2026-08-07 Plan 398 深入诊断后)
+## ✅ M0 已达成(2026-08-07,Plan 398 complete)
+
+**ash-gui 在 vm 模式完整启动!** `auto run -r vm` → `AutoUI MCP: first state sync`,
+12 工具可调,`autoui_snapshot` 返回 App 树。Plan 398 三处修复全部闭环:
+
+| commit | 修复 | 解决 |
+|---|---|---|
+| `25642f91` | `collect_module_imports` parse 错误改 log::warn(不再静默) | 暴露真根因 |
+| `883b13cf` | Core parser `[][]T` / `[](tuple)` 支持(parse_array_type 用 parse_type 递归) | api.at parse 失败 → api.X 全消失 |
+| `cba655c8` | sibling handler 调用 rewrite(`.X()` self+msg variant → `handler_<W>_X(__state,args)`) | BUG-B(ShellStore_State.RefreshGit)+ BUG-C(PromptBar_State.Exit) |
+
+配套 ash-gui .at 修复:`shell_store.at` git_status 内联全零 GitStatusInfo(auto-shell commit 455b02e)。
+回归:015-notes / 013-todo vm 启动正常;015 desktop_mcp.py 8 pass / 2 预存 fail(非本 plan 引入)。
+
+**下一步**:回 ash-gui-native-plan M0.5——MCP 连通已证,搭测试骨架(conftest/desktop_mcp/test_smoke)。
+
+---
+
+## 0.历史 一句话现状(已被上文 M0 达成取代)
 
 > ⚠️ **本文 §1–§6 的"3 个 VM bug(BUG-A/B/C)"框架部分已被 Plan 398 §11 修正**。
 > 深入诊断(加 eprintln)后发现:ash-gui vm 启动失败主要是 **.at parse 错误被
 > 静默吞掉**,不是 VM 链接/作用域 bug。**以本节及 Plan 398 §11 为准;§1–§6 作历史。**
+> **现均已修复(见上"✅ M0 已达成")。**
 
 **真正的根因(Plan 398 §11,已验证)**:
 1. `collect_module_imports`(`auto-lang/lib.rs:2290`)的 `Err(_) => return` 静默吞
