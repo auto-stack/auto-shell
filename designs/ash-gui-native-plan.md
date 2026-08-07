@@ -240,9 +240,15 @@ M2 与 M3 交错:每修一组差异,立即写对应测试转绿。M1 必须先�
 
 ## 8. 进度跟踪
 
-- [~] M0 地基(pac.at 切换 + 冒烟 + MCP 连通 + 测试骨架)— **进行中,已发现关键阻塞,见 §9**
-- [ ] M1 SSE 流式桥
-- [ ] M2 行为对齐(27 处)
+- [x] **M0 地基**(2026-08-07 完成,见 §9 与 auto-lang Plan 398):
+      vm 启动 + MCP 12 工具连通 + `autoui_snapshot` 返回 App 树。
+      M0 的 3 个 VM 兼容阻塞由 Plan 398 全部修复(parser [][]T/[](tuple) +
+      sibling-handler rewrite + parse 错误 log::warn)。**注意:M0.4 测试骨架
+      (conftest/desktop_mcp/test_smoke)尚未搭**——下轮 M0 收尾要做。
+- [ ] M1 in-process 后端实现 + SSE 流式桥(原 M1 扩展,见 §9.2:
+      ash-gui 的真后端是 Rust `ash-core`,vm merged 模式需要一份 in-process
+      后端;当前 `src/back/shell.at` 是空 mock,命令执行/流式输出未接线)
+- [ ] M2 行为对齐(27 处 Vue→Auto 差异,见 §9.7 与行为目录)
 - [ ] M3 MCP 测试套件(~95 用例)
 - [ ] M4 a2r 二进制 + 文档
 
