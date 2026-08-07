@@ -27,10 +27,14 @@
 
 **修正后的续接步骤(替换 §4)**:
 1. (已做)Plan 398 lib.rs parse 错误改 log::warn。
-2. (下一步,ash-gui .at)修 api.at 的 `[][]`/`[](tuple)` → `[]T`;修 shell_store.at
-   的 `git_status: None`。
-3. (Plan 398 §2 BUG-C)修 `<Child>_State.<Handler>` 符号查找。
-4. ash-gui vm 启动验证 → 回 ash-gui-native-plan M0.5。
+2. (已做,ash-gui .at)shell_store.at 的 `git_status: None` → 全零 GitStatusInfo struct。
+3. (**需 Core parser 修复,Plan 398 §12**)api.at 的 `[][]T`(`rows: [][]RenderedCell`
+   等)与 `[](tuple)`(`fields: [](str, RenderedCell)`)不被 Core parser 支持。
+   **注意:不能用 `[][]T` → `[]T` 的 .at workaround**——这破坏 Vue 表格语义(行数组
+   变一维)。正确做法是给 Core parser 加 `[][]T` / `[](tuple)` 支持(§12)。这是 vm
+   跑通的前提,绕不过去。
+4. (Plan 398 §2 BUG-C)修 `<Child>_State.<Handler>` 符号查找(§12 完成后才会暴露)。
+5. ash-gui vm 启动验证 → 回 ash-gui-native-plan M0.5。
 
 ---
 

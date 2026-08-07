@@ -26,7 +26,10 @@ store ShellStore {
         var persisted_history []str = []
 
         // ── Prompt 上下文 (Plan 041 M5: git 分支/状态) ──
-        var git_info PromptContext = PromptContext{ git_branch: "", git_status: None }
+        // Note: PromptContext.git_status 类型是 GitStatusInfo(非可选 struct),
+        // 不能用 None 默认(parse FieldMismatch)。用一个全零 GitStatusInfo 占位。
+        var _gs GitStatusInfo = GitStatusInfo{ staged: 0, unstaged: 0, untracked: 0, conflicted: 0, ahead: 0, behind: 0 }
+        var git_info PromptContext = PromptContext{ git_branch: "", git_status: _gs }
 
         // ── 侧栏开关 ──
         var sidebar_open bool = true
