@@ -59,7 +59,7 @@ store ShellStore {
             }
             .command_names.sort()
             .persisted_history = history()
-            .RefreshGit()
+            .git_info = prompt_context()
         }
 
         // ── 命令执行 ──
@@ -98,7 +98,7 @@ store ShellStore {
         // `result.status == "Success"` 对对象为 false → else 分支取 status.Failed。
         .RunResult(result) -> {
             .cwd = result.cwd
-            .RefreshGit()
+            .git_info = prompt_context()
             for b in .blocks {
                 if b.id == result.block_id {
                     var st BlockStatus = BlockStatus{}
@@ -172,8 +172,8 @@ store ShellStore {
         // ── 补全(由 PromptBar 调用,返回候选) ──
         .Complete(line, cursor) -> {
             // 补全候选通过 return 值传给调用者
-            var items []CompletionItem = complete(line, cursor)
-            return items
+            var items = complete(line, cursor)
+            
         }
 
         // ── 刷新 git 信息 ──
