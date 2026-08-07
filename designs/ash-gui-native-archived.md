@@ -124,7 +124,8 @@ skip 分类:
 ### 现状(2026-08-07):不可用
 
 `auto run -r rust` 能生成 `main.rs` + `Cargo.toml`(代码生成阶段成功),但生成的
-Rust 代码有 **~99 个编译错误**,是 a2r codegen 的系统性缺陷。
+Rust 代码有 **~70 个编译错误**(nil→None 修复后从 99 降到 70),是 a2r codegen 的
+系统性缺陷。
 
 ### 已修复
 
@@ -132,17 +133,19 @@ Rust 代码有 **~99 个编译错误**,是 a2r codegen 的系统性缺陷。
   → fallback 到硬编码错误路径。已修复(walk-up 每级检查 ../auto-lang)。
 - **history_search.at parse**:text (括号表达式) 触发 a2r 解析器错误。改用 match_count
   model 字段。
+- **nil→None**:block_body.at 用 `!= nil` 而 block_item.at 用 `!= None`。a2r 把 `None`
+  正确生成,但 `nil` 当标识符生成 Rust `nil`(不存在)。统一改 `!= None`,错误 99→70。
 
-### 99 个编译错误的模式分布
+### 剩余 ~70 个编译错误的模式分布
 
 | 错误类型 | 次数 | 根因 |
 |---|---|---|
-| E0425 cannot find value `nil` | 13 | `None` → `nil`(codegen bug,nil 非 Rust 关键字) |
-| E0425 cannot find value `output` | 6 | view fn 参数作用域泄漏 |
-| E0609 no field on serde_json::Value | 11 | struct 字段访问在 serde_json::Value 而非强类型 struct |
-| E0308 mismatched types | 15 | 类型推断(Vec vs Value 等) |
-| E0615 computed as method | 4 | duration_label/history computed 当方法调用 |
-| E0277/E0599/E0061 等 | 40 | trait/方法/参数数 |
+| E0308 mismatched types | 18 | 类型推断(Vec vs Value / struct vs serde_json 等) |
+| E0425 cannot find value `output` | 15 | view fn 参数作用域:codegen 用 `output.Table` 但未引入参数变量 |
+| E0599 method not found | 12 | table builder `child`/Value `is_empty`/Split `len` 等 API 不匹配 |
+| E0609 no field on serde_json::Value | 9 | struct 字段访问在 serde_json::Value(弱类型)而非强类型 struct |
+| E0615 computed as method | 8 | computed(history/status_glyph/duration_label)生成 method 非 field |
+| E0277/E0061 等 | 8 | trait/参数数 |
 
 ### 修复方向(后续)
 
