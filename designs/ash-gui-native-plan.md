@@ -277,36 +277,50 @@ MCP 监听)逐一诊断:
   比"切 pac.at"更深的工作。**已写入计划的 M1 需求**(原 M1 只讲 SSE,现扩展为
   "in-process 后端 + SSE 桥")。
 
-### 9.3 未解决阻塞:api.at 整体 link 失败 ❌(定位到 19 个 pub type)
+### 9.3 未解决阻塞:VM 兼容性是**级联多重缺陷**,非单一原因 ❌(二轮修正)
 
-- **症状**:`Undefined symbol: api.complete in module App`(移除 complete 变
-  command_list,逐个 api 函数都 link 不到)。
-- **关键二分结果(本轮重大进展)**:
-  - ✅ **极简 api.at**(只保留 BootSnapshot + ToolEntry + SmartCommandEntry 三个
-    type + `command_list()` 一个 fn,调 `shell.command_list()`)→ **link 通过**
-    (api.* 错误消失,进入下一个问题)。
-  - ✅ 换用 **015-notes 的 back/api.at + db.at** → link 也通过(错误变成别的)。
-  - ❌ ash-gui 完整 api.at(19 个 pub type)→ link 失败。
-- **结论**:**ash-gui 的 19 个 pub type 中有(至少)一个触发 VM link 失败**。
-  最可疑的复杂特性(015 都没有):`?T` 可选字段、`[][]T` 嵌套数组、
-  `[](str, RenderedCell)` 元组数组。完整列表见 `src/back/api.at`。
-- **已排除**:`~Stream<T>`(注释掉仍失败,非主因);缺 `use shell`(加了仍失败);
-  pac.at 的 api/render 字段(与 015 一致);front/types.at 重名(禁用仍失败);
-  store 的 use back.api(极简 store 也失败)。
-- **下一步(下轮 M0,精确二分)**:保留 `use shell` + mock shell.at + 极简 store,
-  在 api.at 里**逐个加回 pub type**(顺序:简单 → 复杂):
-  1. 先加回简单 type(Block、BlockStatus、CompletionItem、PromptContext、
-     GitStatusInfo、ToolEntry、SmartCommandEntry、BootSnapshot、CodeSpan)。
-  2. 再加回带 `?T` 的(RenderedOutput、RenderedCell、TaggedCell、TableOutput、
-     CodeOutput、ErrorOutput、RecordOutput、CommandResult、ShellEvent)。
-  3. 重点验证元组数组 `fields: [](str, RenderedCell)`(RecordOutput)与
-     嵌套数组 `rows [][]RenderedCell`(TableOutput)、`lines [][]CodeSpan`(CodeOutput)。
-  - 每加一个 `auto run -r vm` 测一次,定位到首个破坏 link 的 type/特性。
-  - 这是 VM 侧类型系统的边界,定位后可绕过(改 type 形状)或上报 auto-lang 修 VM。
-- **次要问题(同轮暴露,易修)**:`var s BootSnapshot = command_list()` 在 store
-  handler 里报 `Undefined variable: s`——VM handler_codegen 对**带类型的局部
-  变量绑定 + 立即用**某些类型也有问题。规避:`var s = command_list()`(去掉显式
-  类型注解,让 VM 推断),或 `var s = command_list()  .cwd = s.cwd` 拆开。
+> **重要修正**:第一轮假设"19 个 pub type 触发 link 失败"已被第二轮证伪。
+> 二轮建立了干净二分 harness(stub app.at + 极简 store + mock shell.at + 完整 api.at),
+> 逐项验证后定位到真因。
+
+**二轮二分结论(已验证)**:
+- ✅ **api.at 完全没问题**:完整 19 个 pub type(含 `?T`、`[][]T`、`[](str,RenderedCell)`
+  元组数组)**全部能 link**(在 stub app + 极简 store 下)。换 015 的 api.at 也能 link。
+- ✅ **复杂类型特性全部支持**:`?T` 可选、`[][]T` 嵌套数组、tuple 数组都 OK。
+- ✅ **`var x T = T{}` + 字段赋值的 struct-fix 模式不触发 panic**(已隔离验证)。
+- ✅ **shell 模块名不特殊**(rename shbackend 仍失败)。
+- ❌ **真因:real app.at + real store 触发 VM 级联多重缺陷**,逐个暴露:
+  1. `Undefined symbol: handler_ShellStore_ClearScreen` — store 缺 app 要的 handler。
+  2. `Undefined symbol: PromptBar_State.Exit in module App` — 子组件 state 符号问题。
+  3. **`codegen.rs:6058 panic: "Assignment to complex LHS not supported yet"`** —
+     VM codegen 对某种 LHS 赋值形式不支持(`Expr::Dot` 分支要求 obj 是 `Expr::Ident`)。
+     触发源在 real store 某个 handler body(非 §9.1 的 struct-fix 模式——已排除)。
+- **"Undefined symbol: api.complete"的真相**:它不是 link 错误本身,而是 **codegen
+  panic 中途崩溃 → handler 符号未生成 → linker 报缺符号**。修复 panic 后会自然消失。
+
+**harness(下轮直接复用,可复现)**:
+```
+stub app.at(无 store/children)+ 极简 store(只 .Init)+ mock shell.at + 完整 api.at
+→ 链接通过(基准)。从此基准逐个加回 real 内容,定位每个缺陷。
+```
+
+**下轮 M0 的精确步骤(机械、快速)**:
+1. 从 harness 基准起,加回 real store 的**逐个 handler body**(保留所有 handler 签名,
+   body 一个个填),定位触发 codegen panic 的具体赋值形式。重点怀疑:
+   - `.blocks[.i] = ...`(数组索引赋值 —— codegen 有 `Expr::Index` 分支,但可能对
+     嵌套 .field 的元素失效)。
+   - `b.status = st`(b 是 for 循环变量 —— 循环变量在 codegen 里可能不是 `Expr::Ident`)。
+   - `result.status.Failed`(读取 status.Failed —— status 是 str 联合,读 .Failed 是
+     复杂 RHS,但 panic 在 LHS,故优先查 LHS)。
+2. 定位后:绕过(改写 .at,如用临时变量拆解),或上报 auto-lang 修 codegen.rs:6058
+   (补 `Expr::Dot(non-Ident-obj, field)` 分支)。
+3. 修通 store 后,逐个加回子组件(BlockList/PromptBar/ToolSidebar),定位
+   `PromptBar_State.Exit` 类的子组件符号问题(可能是 state struct 命名/导出问题)。
+
+**次要问题(已暴露,易修)**:
+- `var s BootSnapshot = command_list()` → `Undefined variable: s`(VM handler 对带类型
+  注解的局部绑定 + 立即用某些类型有问题)。规避:`var s = command_list()`(去类型注解)。
+- handler 参数名 `s` 与某些符号冲突(用更具描述性的名)。
 
 ### 9.4 已验证:MCP 基础设施在 vm 模式正常 ✅
 
