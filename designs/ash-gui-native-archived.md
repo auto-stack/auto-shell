@@ -121,11 +121,22 @@ skip 分类:
 
 ## 4. a2r 路径缺陷(M4 诊断)
 
-### 现状(2026-08-07):不可用
+### 现状(2026-08-08 二次实测):不可用
 
-`auto run -r rust` 能生成 `main.rs` + `Cargo.toml`(代码生成阶段成功),但生成的
-Rust 代码有 **~70 个编译错误**(nil→None 修复后从 99 降到 70),是 a2r codegen 的
-系统性缺陷。
+`auto run -r rust --server rust` 能完成代码生成阶段(`main.rs` + `Cargo.toml`),
+但随后 `cargo run` 编译失败,exit 101。两次实测:
+
+| 日期 | 命令 | 错误数 | 说明 |
+|---|---|---|---|
+| 2026-08-07 | `auto run -r rust`(旧产物) | 94(前端 77 + 后端 17) | 后端 `ash-gui-auto-back` 独立编译,`Vec<(str,...)>` 等 17 错 |
+| 2026-08-08 | `auto run -r rust --server rust`(重新生成) | **72**(全前端) | merged mode:后端 in-process,不单独编译后端 crate |
+
+**关键变化(2026-08-08)**:`--server rust` 走 **merged mode**(日志 `✓ rust+rust merged
+mode: backend runs in-process`),后端逻辑 inline 进前端二进制,**不再编译独立的
+`ash-gui-auto-back` crate**。因此旧的后端 17 个错误(`str` 无大小 / 不可 Deserialize)
+不是被修好,而是被绕过。72 个错误**全部集中在前端 `ash-gui`(main.rs, 932 行)**。
+
+这是 a2r codegen 的系统性缺陷,不是源 .at 或过时产物的问题(重新生成前后错误数基本持平)。
 
 ### 已修复
 
@@ -136,28 +147,36 @@ Rust 代码有 **~70 个编译错误**(nil→None 修复后从 99 降到 70),是
 - **nil→None**:block_body.at 用 `!= nil` 而 block_item.at 用 `!= None`。a2r 把 `None`
   正确生成,但 `nil` 当标识符生成 Rust `nil`(不存在)。统一改 `!= None`,错误 99→70。
 
-### 剩余 ~70 个编译错误的模式分布
+### 剩余 72 个编译错误的模式分布(2026-08-08 重新生成实测)
 
-| 错误类型 | 次数 | 根因 |
-|---|---|---|
-| E0308 mismatched types | 18 | 类型推断(Vec vs Value / struct vs serde_json 等) |
-| E0425 cannot find value `output` | 15 | view fn 参数作用域:codegen 用 `output.Table` 但未引入参数变量 |
-| E0599 method not found | 12 | table builder `child`/Value `is_empty`/Split `len` 等 API 不匹配 |
-| E0609 no field on serde_json::Value | 9 | struct 字段访问在 serde_json::Value(弱类型)而非强类型 struct |
-| E0615 computed as method | 8 | computed(history/status_glyph/duration_label)生成 method 非 field |
-| E0277/E0061 等 | 8 | trait/参数数 |
+全部集中在 `ash-gui-auto/examples/rust-workspace/ash-gui-auto/src/main.rs`。
+
+| 错误类型 | 次数 | 典型表现 | 根因 |
+|---|---|---|---|
+| `View` 上不存在的变体/方法 (E0599) | ~12 | `View::thead()`/`tr()`/`th()`/`td()`/`tbody()`、`ViewTableBuilder.child()` | **a2r 误以为 `auto_lang::View` 有 HTML 表格 API**——block_body 的 Table 渲染整段直译失败 |
+| 不存在的字段访问 (E0609) | ~15 | `String.kind`、`Value.git_status`、`Value.git_branch`、`self.b`(BlockList)、`Value.entry`、`Value.replacement` | store-composable / 嵌套 type 字段映射到弱类型 `serde_json::Value` 上 |
+| 未定义符号 (E0425) | ~13 | `output`、`this`、`navigator`、`format_git_label`、`RenderedOutput` | 跨组件作用域泄漏:view fn 参数、computed helper、子组件引用未正确引入 |
+| `PromptBar.history()` 缺失 (E0599) | ~6 | `&mut PromptBar` / `&PromptBar` 上找不到 `history()` | List / 子组件 store-composable 方法未生成 |
+| 类型不匹配 (E0308) | ~10 | `Value` 当 `Vec<Value>`(`Self::new` 调用)、`String` 比整数 | AutoLang 动态类型 → Rust 静态类型翻译错 |
+| 其他(move/Copy/Debug/trait) | ~16 | `self.cwd`/`self.git_label` move out(E0507×2)、`PromptBarMsg::Run` 不 Debug(E0277×3)、`String` 当函数调(E0618×2)、`on_change` trait bound(E0599×1) | 生命周期 / `#[derive]` 缺失 / 闭包类型未实现 trait |
+
+**注**:数字为 grep `error[E0xxx]` 去重计数,部分错误属同一行连发(如第 172 行表格渲染
+单行触发 6+ 条 E0599),故总数 72 与"逻辑错误点"少于 72。
 
 ### 修复方向(后续)
 
-a2r codegen(trans/rust.rs)需要:
-1. `None` → `Option::None` 或 `serde_json::Value::Null`(非裸 `nil`)
-2. view fn 参数作用域正确传递
-3. struct 字段访问生成强类型(非全部 serde_json::Value)
-4. computed 字段生成为 struct field 而非 method
+a2r codegen(auto-lang 侧 `trans/rust.rs` / `ui_gen/rust.rs`)需要系统性改进:
+1. **`View` 表格 API 映射**:把 `thead/tr/th/td/tbody` 映射到 `auto_lang::View` 实际
+   提供的表格构造方式(查 `ui/iced/renderer.rs` 确认 View enum 真实变体),而非直译
+   HTML 标签名。
+2. `None` → `Option::None` 或 `serde_json::Value::Null`(非裸 `nil`/`nil` 当标识符)。
+3. view fn 参数作用域正确传递(`output.Table` 等需引入参数变量)。
+4. store-composable / 嵌套 type 字段访问生成强类型 struct(非全部 `serde_json::Value`)。
+5. computed 字段生成为 struct field 而非 method(已修部分,残留 `history()` 等)。
 
-这是 auto-lang 层面的系统性改进,超出 ash-gui-native 范围。
+这是 auto-lang 层面的系统性改进,超出 ash-gui-native 范围——当前 VM 模式是唯一可用路径。
 
-## 5. VM 模式已知限制(EDGE-01..14)
+## 5. VM 模式已知限制(EDGE-01..16)
 
 | 编号 | 限制 | 影响 | 状态 |
 |---|---|---|---|
@@ -168,6 +187,8 @@ a2r codegen(trans/rust.rs)需要:
 | EDGE-04-B | store handler 调 back api 返回 type 实例崩 | boot 数据(command_list)空 | ⚠️ 静态值绕过(跨函数返回 type,更深问题) |
 | EDGE-05 | VM handler 读 .blocks 为 nil | for 循环空操作 | ✅ renderer Rust 处理 |
 | EDGE-07 | int+str 拼接 | duration/count 显示错 | ✅ 已修(.str()) |
+| **EDGE-15** | **真实 Enter 不触发 Run(on_submit 的 input_value 缺失)** | **能打字但回车不执行——只能靠 MCP submit 绕过** | ✅ **已修(auto-lang renderer.rs:on_submit 补 input_value,真实键盘验证通过)** |
+| **EDGE-16** | **store model 的 List<T>.new([]) 初始化为 Nil,handler push 失效** | **画面空白(blocks 有数据但 for 循环读空;`for b in .blocks` 渲染空)** | ✅ **已修(auto-lang vm_bridge.rs:`List<T>.new` 物化 GenName→VmRef,回归测试绿)** |
 
 ### EDGE-01 深度诊断:onkeydown.* 元素属性在 vm/rust 后端完全不支持
 
@@ -218,3 +239,129 @@ GET_FIELD(engine.rs:3752-3758)对 primitive 报 "Field index out of bounds for p
 
 **当前绕过**:Init 用静态值(cwd=".", 空 commands/history, git_label=format_git_label("",0,...))。
 真实 boot 数据待 vm 修复嵌套 type 字面量初始化(engine.rs GET_FIELD / 字面量物化路径)。
+
+### EDGE-15 深度诊断:真实 Enter 不触发 Run(on_submit 的 input_value 缺失)
+
+> **症状(用户视角)**:VM 模式窗口里,点击输入框聚焦后**能正常打字**,但**按回车不执行**
+> ——input 不清空、block 不创建、命令不跑。这是 ash-gui-auto 当前最大的可用性阻塞。
+> 根因在 **auto-lang 的 VM 渲染器**(renderer.rs),不在 ash-gui 的 .at 源码。
+>
+> **诊断修正**:初判"input 无焦点、键盘全断"**部分错误**——字符输入(on_input)正常,
+> 证明聚焦 OK。真正只有 Enter(on_submit)链路断。
+
+**实测复现(2026-08-08,auto run -r vm + MCP)**:
+
+```
+autoui_type text=ls          → input: "ls"          ✓ 字符输入正常
+autoui_keyboard key=enter    → input: "ls"(未清空) ✗ Run 未触发
+                              blocks: nil, next_id: 0
+```
+
+对照:`autoui_action action=submit` → 命令正常执行。**真实 Enter 不行,MCP submit 行。**
+
+**根因(auto-lang `crates/auto-lang/src/ui/iced/renderer.rs`)**:
+
+`on_submit`(Enter)与 `on_input`(字符)的 msg 构造不同——**on_submit 不带 input_value**:
+
+```rust
+// renderer.rs:6707-6713  on_input —— 带 text
+IcedMessage { ..., input_value: Some(text) }   // ✓ 有值
+
+// renderer.rs:6719-6720  on_submit —— 裸 msg
+input_widget.on_submit(msg);                   // ✗ msg.input_value = None
+```
+
+而 update 的 emit 模拟块依赖 input_value 才转发到 store(renderer.rs:3694-3705):
+
+```rust
+if widget_name == "PromptBar" && event_name == "Run" {
+    if let Some(cmd) = saved_input_value.as_deref() {   // ✗ None → 整块跳过
+        state.component.on_with_input_for("ShellStore", "RunCommand", Some(cmd));
+        ...  // block 构造 + 执行器提交,全在这块里
+    }
+}
+```
+
+Enter → on_submit → msg.input_value=None → emit 模拟整块跳过 → 回车无反应。
+
+**对照证据:MCP 路径补了这个值。** `mcp_server.rs:1963-1968`:
+```rust
+if action == UiActionType::Submit && input_value.is_none() {
+    if let Some(v) = read_input_value(target_view) {
+        input_value = Some(v.clone());   // ← MCP 手动补值,所以 MCP submit 能工作
+    }
+}
+```
+MCP 作者明确知道 submit 不自带 value 并补了;**真实 on_submit 路径没有等价补值逻辑**。
+
+**为什么测试套件 56 pass 没发现**:测试全用 `autoui_type` + `autoui_action submit`
+(`test_command_exec.py:52-70`),走 MCP 那条已补值路径。"真实回车"从未被测。
+
+**修复(已实施 + 验证 ✅)**:auto-lang `crates/auto-lang/src/ui/iced/renderer.rs`,
+在 update 的 `saved_input_value` 构造处(handler 执行**前**——因 PromptBar.Run 会清空
+`.input`),当 msg 无 input_value 时从 `state.input` 抢救当前值:
+
+```rust
+let saved_input_value = msg.input_value.clone().or_else(|| {
+    if widget_name == "PromptBar" && event_name == "Run" {
+        state.component.read_state("input").ok()
+            .map(|v| v.as_str().to_string())
+    } else { None }
+});
+```
+
+**验证(2026-08-08,真实键盘)**:窗口输入 `ls` + 真实回车 → 命令执行成功
+(`status: Success`, output 有内容, block 创建)。详见 auto-lang
+`docs/plans/archive/371-autoui-mcp-improvements.md` §19。
+
+**遗留小问题**:回车后 `state.input` 仍显示 "ls"(PromptBar.Run 应清空但受
+patch_input_values 回填影响),下次输入会覆盖,不影响功能。
+
+### EDGE-16 深度诊断:store model List<T>.new([]) 初始化为 Nil
+
+> **症状**:VM 模式画面空白——store 里 blocks 有数据(Success + output),但
+> `for b in .blocks` 渲染不出 BlockItem。主内容区(BlockList 命令输出)完全空白。
+>
+> **诊断修正**:初判"VM 布局塌缩(row 交叉轴 fill 不传递)"**方向错误**——极简
+> 静态示例(`examples/ui/021-block-static`)证明纯静态 block 能正常渲染,布局基本 OK。
+> 真正根因是 **store model 字段的 List 初始化为 Nil,handler 的 push 静默失效**。
+
+**实测复现 + 定位(2026-08-08)**:
+
+```
+store BlockStore Init handler:  .blocks.push(b1)  .blocks.push(b2)
+read_state('blocks') 修复前 = Ok(Nil)         ← List<T>.new([]) 被求值为 Nil!
+read_state('blocks') 修复后 = Ok(VmRef{id})    ← 物化成堆对象
+```
+
+**根因(auto-lang `crates/auto-lang/src/ui/vm_bridge.rs`)**:
+
+`eval_expr_to_value`(求值 store/组件 model 字段初值)的 `Expr::Call` arm 之前
+只认 `Expr::Ident` name。`List<BlockItem>.new([])` 的 AST 是
+`Call { name: Dot(GenName("List<BlockItem>"), "new"), ... }`——name 是 `Expr::Dot`,
+receiver 是 `GenName`(泛型),不匹配 → 落入 `Value::Nil` 兜底(vm_bridge.rs:1054)。
+
+结果:`blocks` 字段槽存的是 `Value::Nil`,不是 List 对象。handler 的
+`.blocks.push(b1)` 在 engine 里 `get_heap_object(list_id)` 对 Nil 返回 None,
+push 整个跳过、静默失败(engine.rs:5481)。`read_state_as_vec("blocks")` 也因
+Nil 返回 Err,view 的 `for b in .blocks` 读到空。
+
+**对照**:纯逻辑层 `type` 的 `self.list.push()` 正常(走真正 VM codegen,
+`List<T>.new` 被物化成真实 ListData 堆对象)。store/组件 model 字段初值
+**绕过 VM codegen**,走 `eval_expr_to_value` 这个不完整的求值器。
+
+**修复(auto-lang master,3 个提交)**:
+- `c25e0888` — 回归测试(两层对照:纯逻辑层绿 + store 层红)+ `021-block-static` 示例
+  + `build_example_component` helper 抽象
+- `70f94e02` — `eval_expr_to_value` 加 `Expr::Dot(GenName/Ident, "new")` 分支:
+  `List<...>.new(...)` → 物化空 `ListData<Value>` 堆对象返回 `VmRef`;
+  `<Type>.new()` → 若注册类型走字面量物化
+- `753ad4bc` — 示例 App 加 `.Init -> { store.Init() }`(测试载体本身缺触发)
+
+**验证**:`block_static_store_tests` 2/2 全绿——`read_state_as_vec("blocks").len() == 2`,
+push 持久化。
+
+> 注:之前记录的"布局塌缩(vtree bbox 0×0)"现象仍可能存在(iced Row 交叉轴 fill
+> 传递不完整),但**不是 ash-gui 画面空白的主因**——block 数据渲染不出来才是。
+> 修复 List 物化后,block 数据能进 state,`for b in .blocks` 即可渲染 BlockItem。
+> 布局问题如有可后续单独查。

@@ -24,11 +24,14 @@ auto run -r vm
 A2R 模式生成 Rust `main.rs` + `Cargo.toml` → `cargo run` → 独立 iced 二进制。
 
 ```bash
-auto run -r rust
+auto run -r rust --server rust   # merged mode: 后端 in-process
 ```
 
-**当前状态(2026-08-07):不可用。** 生成的 Rust 代码有 ~99 个编译错误(a2r codegen
-对 store-composable / 嵌套 struct / List 方法的系统性缺陷)。详见
+**当前状态(2026-08-08 二次实测):不可用。** codegen 阶段成功,但 `cargo run`
+编译失败(exit 101),**72 个错误全在前端 `main.rs`**。`--server rust` 走 merged mode,
+后端 in-process 不再单独编译(旧的后端 17 错被绕过非修复)。根因是 a2r codegen 系统性
+缺陷:误译 `View` 表格 API(`thead/tr/td` 在 `auto_lang::View` 不存在)、store-composable/
+嵌套字段映射到弱类型 `serde_json::Value`、跨组件符号作用域泄漏。详见归档文档 §4 与
 `designs/ash-gui-native-plan.md` M4 备注。VM 模式是当前唯一可用路径。
 
 ## MCP UI 服务端
@@ -94,8 +97,11 @@ AUTO_BIN=... python -m pytest tests/test_smoke.py -v
 | test_prompt_input.py | PB-01..15 | 3 pass + 12 skip |
 | test_history_search.py | HS-01..13 | 3 xfail |
 
-**总计:49 pass + 47 skip + 3 xfail**。skip 主要是难档(M2 未做的
+**总计(2026-08-08 实测):56 pass + 43 skip**。skip 主要是难档(M2 未做的
 ghost/highlight/textarea/debounce)+ mock 数据空;a2r 修复后更多可转 pass。
+
+> 注:测试矩阵表按文件分项仍为历史数据(49/47/3 口径);以 `pytest -q` 实测
+> 总计 56 pass + 43 skip 为准。
 
 ## 架构
 

@@ -15,7 +15,7 @@
 
 ## 需要谨慎评估的架构项
 
-- [x] **`.at` 复刻**:ash-gui-auto 已完成 .at 复刻(VM 模式可跑)。VM 模式下命令执行闭环已打通(SSE 桥)、12 处 Vue→Auto 差异已对齐、99 测试用例(49 pass)。详见 `designs/ash-gui-native-plan.md`。**a2r(可分发二进制)路径待 codegen 修复**(99 个编译错误,见归档文档 §4)。
+- [x] **`.at` 复刻**:ash-gui-auto 已完成 .at 复刻(VM 模式可跑)。VM 模式下命令执行闭环已打通(SSE 桥)、12 处 Vue→Auto 差异已对齐、56 测试用例 pass。详见 `designs/ash-gui-native-plan.md`。**a2r(可分发二进制)路径待 codegen 修复**(2026-08-08 二次实测 72 个编译错误,全前端 main.rs;`--server rust` merged mode 绕过后端。见归档文档 §4)。
 - [ ] **iced 版去留**:`ash-gui-bin`(iced 原型)保留为参考。当 Vue 版达到功能等价后,评估是否归档。ash-gui-auto 的 VM 模式已用 iced 原生渲染器,是 ash-gui-bin 的后继。
 - [ ] **跨后端一致性**:TUI / iced / Vue 三端的配色与状态语义应统一到单一来源(当前分散在各前端)。可能抽一个共享 token 定义。
 

@@ -261,10 +261,13 @@ M2 与 M3 交错:每修一组差异,立即写对应测试转绿。M1 必须先�
       按 vm 可测性分级。**49 pass** 验证 M0/M1/M2 已实现行为;**47 skip** 占位待实现(难档 + mock 数据空);
       **3 xfail** 真实未实现(HS Ctrl+R 面板)。最大杠杆:修 EDGE-01(keyboard onkeydown emit 模拟)
       可解锁 ~20 个 skip → pass。
-- [~] **M4 a2r 二进制 + 文档**(2026-08-07 文档完成;a2r 二进制待 codegen 修复):
-      a2r 路径诊断完成(99 codegen 错误是系统性缺陷,归档 §4);README.md + 归档文档 +
-      DEBT/TODO 同步完成。**a2r 二进制 + release 打包延后**到 codegen 修复(None→nil /
-      struct 字段 / view fn 作用域 / computed)。VM 模式是当前唯一可用路径。
+- [~] **M4 a2r 二进制 + 文档**(2026-08-08 二次实测,文档完成;a2r 二进制待 codegen 修复):
+      `auto run -r rust --server rust` 重新生成 + 实测——codegen 阶段成功,但 `cargo run`
+      编译失败(exit 101),**72 个错误全在前端 main.rs**。`--server rust` 走 merged mode,
+      后端 in-process 不再单独编译(旧的后端 17 错被绕过非修复)。错误根因(详见归档 §4):
+      a2r 误译 `View` 表格 API(`thead/tr/td` 不存在)、store-composable/嵌套字段映射到弱类型
+      `Value`、跨组件符号作用域泄漏。**a2r 二进制 + release 打包延后**到 auto-lang 侧
+      codegen 系统性修复。README.md + 归档文档 + DEBT/TODO 同步完成。**VM 模式是当前唯一可用路径。**
 
 ## 9. M0 实测发现(2026-08-07,关键,改变 M0 工作量评估)
 
