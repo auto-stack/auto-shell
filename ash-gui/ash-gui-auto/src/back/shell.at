@@ -9,19 +9,328 @@
 
 use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
 
-// ── command_list:返回最小工具表 ──
+// ── command_list:返回完整工具表(79 命令,对齐 ash-core registry)──
 pub fn command_list() BootSnapshot {
     var snap BootSnapshot = BootSnapshot{}
-    snap.cwd = "/home/user"
-    snap.home = "/home/user"
-    // VM 类型推断:用 List<T>.new([]) 显式容器类型(015-notes db.at 模式)。
-    // 直接 `var cmds []ToolEntry = []` 会被误推断为 ToolEntry 类型 →
-    // cmds.push 报 "no function 'ToolEntry.push'"。
+    snap.cwd = "."
+    snap.home = "."
     var cmds List<ToolEntry> = List<ToolEntry>.new([])
-    var ls ToolEntry = ToolEntry{}
-    ls.name = "ls"
-    ls.description = "list files"
-    cmds.push(ls)
+    var cmd1 ToolEntry = ToolEntry{}
+    cmd1.name = "."
+    cmd1.description = "Execute a .ash script in the current shell session (alias for source)"
+    cmds.push(cmd1)
+    var cmd2 ToolEntry = ToolEntry{}
+    cmd2.name = "build"
+    cmd2.description = "Generate code and build for configured backends"
+    cmds.push(cmd2)
+    var cmd3 ToolEntry = ToolEntry{}
+    cmd3.name = "cat"
+    cmd3.description = "Concatenate files and print on the standard output"
+    cmds.push(cmd3)
+    var cmd4 ToolEntry = ToolEntry{}
+    cmd4.name = "cd"
+    cmd4.description = "Change directory"
+    cmds.push(cmd4)
+    var cmd5 ToolEntry = ToolEntry{}
+    cmd5.name = "column"
+    cmd5.description = "Columnate lists"
+    cmds.push(cmd5)
+    var cmd6 ToolEntry = ToolEntry{}
+    cmd6.name = "cp"
+    cmd6.description = "Copy files and directories"
+    cmds.push(cmd6)
+    var cmd7 ToolEntry = ToolEntry{}
+    cmd7.name = "cut"
+    cmd7.description = "Remove sections from each line of text"
+    cmds.push(cmd7)
+    var cmd8 ToolEntry = ToolEntry{}
+    cmd8.name = "date"
+    cmd8.description = "Display current date and time"
+    cmds.push(cmd8)
+    var cmd9 ToolEntry = ToolEntry{}
+    cmd9.name = "diff"
+    cmd9.description = "Compare two files line by line"
+    cmds.push(cmd9)
+    var cmd10 ToolEntry = ToolEntry{}
+    cmd10.name = "du"
+    cmd10.description = "Display disk usage"
+    cmds.push(cmd10)
+    var cmd11 ToolEntry = ToolEntry{}
+    cmd11.name = "each"
+    cmd11.description = "Extract a field from each record in array"
+    cmds.push(cmd11)
+    var cmd12 ToolEntry = ToolEntry{}
+    cmd12.name = "echo"
+    cmd12.description = "Print arguments followed by a newline"
+    cmds.push(cmd12)
+    var cmd13 ToolEntry = ToolEntry{}
+    cmd13.name = "file"
+    cmd13.description = "Determine file type"
+    cmds.push(cmd13)
+    var cmd14 ToolEntry = ToolEntry{}
+    cmd14.name = "find"
+    cmd14.description = "Find files matching criteria"
+    cmds.push(cmd14)
+    var cmd15 ToolEntry = ToolEntry{}
+    cmd15.name = "fmt"
+    cmd15.description = "Reformat paragraph text to a target width"
+    cmds.push(cmd15)
+    var cmd16 ToolEntry = ToolEntry{}
+    cmd16.name = "from_csv"
+    cmd16.description = "Parse CSV text into a table"
+    cmds.push(cmd16)
+    var cmd17 ToolEntry = ToolEntry{}
+    cmd17.name = "from_json"
+    cmd17.description = "Parse JSON string into structured Value"
+    cmds.push(cmd17)
+    var cmd18 ToolEntry = ToolEntry{}
+    cmd18.name = "from_toml"
+    cmd18.description = "Parse TOML string into structured Value"
+    cmds.push(cmd18)
+    var cmd19 ToolEntry = ToolEntry{}
+    cmd19.name = "from_xml"
+    cmd19.description = "Parse XML string into structured Value"
+    cmds.push(cmd19)
+    var cmd20 ToolEntry = ToolEntry{}
+    cmd20.name = "from_yaml"
+    cmd20.description = "Parse YAML string into structured Value"
+    cmds.push(cmd20)
+    var cmd21 ToolEntry = ToolEntry{}
+    cmd21.name = "get"
+    cmd21.description = "Extract fields from objects in pipeline"
+    cmds.push(cmd21)
+    var cmd22 ToolEntry = ToolEntry{}
+    cmd22.name = "glob"
+    cmd22.description = "Expand glob patterns to file paths"
+    cmds.push(cmd22)
+    var cmd23 ToolEntry = ToolEntry{}
+    cmd23.name = "grep"
+    cmd23.description = "Search for patterns in text"
+    cmds.push(cmd23)
+    var cmd24 ToolEntry = ToolEntry{}
+    cmd24.name = "head"
+    cmd24.description = "Display the first lines of a file"
+    cmds.push(cmd24)
+    var cmd25 ToolEntry = ToolEntry{}
+    cmd25.name = "help"
+    cmd25.description = "Display help information for commands"
+    cmds.push(cmd25)
+    var cmd26 ToolEntry = ToolEntry{}
+    cmd26.name = "http delete"
+    cmd26.description = "Perform an HTTP DELETE request"
+    cmds.push(cmd26)
+    var cmd27 ToolEntry = ToolEntry{}
+    cmd27.name = "http get"
+    cmd27.description = "Perform an HTTP GET request"
+    cmds.push(cmd27)
+    var cmd28 ToolEntry = ToolEntry{}
+    cmd28.name = "http head"
+    cmd28.description = "Perform an HTTP HEAD request and return headers"
+    cmds.push(cmd28)
+    var cmd29 ToolEntry = ToolEntry{}
+    cmd29.name = "http post"
+    cmd29.description = "Perform an HTTP POST request"
+    cmds.push(cmd29)
+    var cmd30 ToolEntry = ToolEntry{}
+    cmd30.name = "http put"
+    cmd30.description = "Perform an HTTP PUT request"
+    cmds.push(cmd30)
+    var cmd31 ToolEntry = ToolEntry{}
+    cmd31.name = "insert"
+    cmd31.description = "Insert a new field in each record (only if not present)"
+    cmds.push(cmd31)
+    var cmd32 ToolEntry = ToolEntry{}
+    cmd32.name = "ln"
+    cmd32.description = "Create links between files"
+    cmds.push(cmd32)
+    var cmd33 ToolEntry = ToolEntry{}
+    cmd33.name = "ls"
+    cmd33.description = "List directory contents"
+    cmds.push(cmd33)
+    var cmd34 ToolEntry = ToolEntry{}
+    cmd34.name = "math-avg"
+    cmd34.description = "Average numeric values in an array"
+    cmds.push(cmd34)
+    var cmd35 ToolEntry = ToolEntry{}
+    cmd35.name = "math-max"
+    cmd35.description = "Find maximum value"
+    cmds.push(cmd35)
+    var cmd36 ToolEntry = ToolEntry{}
+    cmd36.name = "math-min"
+    cmd36.description = "Find minimum value"
+    cmds.push(cmd36)
+    var cmd37 ToolEntry = ToolEntry{}
+    cmd37.name = "math-round"
+    cmd37.description = "Round numbers"
+    cmds.push(cmd37)
+    var cmd38 ToolEntry = ToolEntry{}
+    cmd38.name = "math-sum"
+    cmd38.description = "Sum numeric values in an array or record"
+    cmds.push(cmd38)
+    var cmd39 ToolEntry = ToolEntry{}
+    cmd39.name = "mkdir"
+    cmd39.description = "Create directories"
+    cmds.push(cmd39)
+    var cmd40 ToolEntry = ToolEntry{}
+    cmd40.name = "mv"
+    cmd40.description = "Move or rename files and directories"
+    cmds.push(cmd40)
+    var cmd41 ToolEntry = ToolEntry{}
+    cmd41.name = "open"
+    cmd41.description = "Open a file with the default application"
+    cmds.push(cmd41)
+    var cmd42 ToolEntry = ToolEntry{}
+    cmd42.name = "paste"
+    cmd42.description = "Merge lines of files"
+    cmds.push(cmd42)
+    var cmd43 ToolEntry = ToolEntry{}
+    cmd43.name = "ps"
+    cmd43.description = "List running processes"
+    cmds.push(cmd43)
+    var cmd44 ToolEntry = ToolEntry{}
+    cmd44.name = "pwd"
+    cmd44.description = "Print working directory"
+    cmds.push(cmd44)
+    var cmd45 ToolEntry = ToolEntry{}
+    cmd45.name = "realpath"
+    cmd45.description = "Print the resolved absolute path"
+    cmds.push(cmd45)
+    var cmd46 ToolEntry = ToolEntry{}
+    cmd46.name = "rev"
+    cmd46.description = "Reverse each line of text"
+    cmds.push(cmd46)
+    var cmd47 ToolEntry = ToolEntry{}
+    cmd47.name = "rm"
+    cmd47.description = "Remove files and directories"
+    cmds.push(cmd47)
+    var cmd48 ToolEntry = ToolEntry{}
+    cmd48.name = "run"
+    cmd48.description = "Generate code and start dev server for configured backends"
+    cmds.push(cmd48)
+    var cmd49 ToolEntry = ToolEntry{}
+    cmd49.name = "select"
+    cmd49.description = "Select specific fields from objects in pipeline"
+    cmds.push(cmd49)
+    var cmd50 ToolEntry = ToolEntry{}
+    cmd50.name = "show"
+    cmd50.description = "Read a file and parse it into the pipeline by extension"
+    cmds.push(cmd50)
+    var cmd51 ToolEntry = ToolEntry{}
+    cmd51.name = "sleep"
+    cmd51.description = "Sleep for a duration (s=seconds, m=minutes, h=hours)"
+    cmds.push(cmd51)
+    var cmd52 ToolEntry = ToolEntry{}
+    cmd52.name = "sort"
+    cmd52.description = "Sort lines or records, optionally by field/column"
+    cmds.push(cmd52)
+    var cmd53 ToolEntry = ToolEntry{}
+    cmd53.name = "source"
+    cmd53.description = "Execute a .ash script in the current shell session"
+    cmds.push(cmd53)
+    var cmd54 ToolEntry = ToolEntry{}
+    cmd54.name = "split"
+    cmd54.description = "Split text into chunks"
+    cmds.push(cmd54)
+    var cmd55 ToolEntry = ToolEntry{}
+    cmd55.name = "stat"
+    cmd55.description = "Display file status"
+    cmds.push(cmd55)
+    var cmd56 ToolEntry = ToolEntry{}
+    cmd56.name = "str-case"
+    cmd56.description = "Change string case"
+    cmds.push(cmd56)
+    var cmd57 ToolEntry = ToolEntry{}
+    cmd57.name = "str-contains"
+    cmd57.description = "Check if text contains pattern"
+    cmds.push(cmd57)
+    var cmd58 ToolEntry = ToolEntry{}
+    cmd58.name = "str-join"
+    cmd58.description = "Join array elements into string"
+    cmds.push(cmd58)
+    var cmd59 ToolEntry = ToolEntry{}
+    cmd59.name = "str-length"
+    cmd59.description = "Get string length (Unicode-aware)"
+    cmds.push(cmd59)
+    var cmd60 ToolEntry = ToolEntry{}
+    cmd60.name = "str-replace"
+    cmd60.description = "Replace text in pipeline input"
+    cmds.push(cmd60)
+    var cmd61 ToolEntry = ToolEntry{}
+    cmd61.name = "str-split"
+    cmd61.description = "Split text into array"
+    cmds.push(cmd61)
+    var cmd62 ToolEntry = ToolEntry{}
+    cmd62.name = "str-trim"
+    cmd62.description = "Trim whitespace from text"
+    cmds.push(cmd62)
+    var cmd63 ToolEntry = ToolEntry{}
+    cmd63.name = "sys"
+    cmd63.description = "Get system information"
+    cmds.push(cmd63)
+    var cmd64 ToolEntry = ToolEntry{}
+    cmd64.name = "tail"
+    cmd64.description = "Display the last lines of a file"
+    cmds.push(cmd64)
+    var cmd65 ToolEntry = ToolEntry{}
+    cmd65.name = "tee"
+    cmd65.description = "Read from stdin and write to stdout and file"
+    cmds.push(cmd65)
+    var cmd66 ToolEntry = ToolEntry{}
+    cmd66.name = "to_csv"
+    cmd66.description = "Convert table data to CSV string"
+    cmds.push(cmd66)
+    var cmd67 ToolEntry = ToolEntry{}
+    cmd67.name = "to_json"
+    cmd67.description = "Convert structured Value to JSON string"
+    cmds.push(cmd67)
+    var cmd68 ToolEntry = ToolEntry{}
+    cmd68.name = "to_toml"
+    cmd68.description = "Convert structured Value to TOML string"
+    cmds.push(cmd68)
+    var cmd69 ToolEntry = ToolEntry{}
+    cmd69.name = "to_xml"
+    cmd69.description = "Convert structured Value to XML string"
+    cmds.push(cmd69)
+    var cmd70 ToolEntry = ToolEntry{}
+    cmd70.name = "to_yaml"
+    cmd70.description = "Convert structured Value to YAML string"
+    cmds.push(cmd70)
+    var cmd71 ToolEntry = ToolEntry{}
+    cmd71.name = "touch"
+    cmd71.description = "Create empty files or update timestamps"
+    cmds.push(cmd71)
+    var cmd72 ToolEntry = ToolEntry{}
+    cmd72.name = "tr"
+    cmd72.description = "Translate, squeeze, or delete characters"
+    cmds.push(cmd72)
+    var cmd73 ToolEntry = ToolEntry{}
+    cmd73.name = "uniq"
+    cmd73.description = "Report or omit repeated lines"
+    cmds.push(cmd73)
+    var cmd74 ToolEntry = ToolEntry{}
+    cmd74.name = "update"
+    cmd74.description = "Update a field in each record"
+    cmds.push(cmd74)
+    var cmd75 ToolEntry = ToolEntry{}
+    cmd75.name = "url-encode"
+    cmd75.description = "URL-encode or decode text"
+    cmds.push(cmd75)
+    var cmd76 ToolEntry = ToolEntry{}
+    cmd76.name = "version"
+    cmd76.description = "Show shell version information"
+    cmds.push(cmd76)
+    var cmd77 ToolEntry = ToolEntry{}
+    cmd77.name = "wc"
+    cmd77.description = "Count lines, words, bytes, and characters"
+    cmds.push(cmd77)
+    var cmd78 ToolEntry = ToolEntry{}
+    cmd78.name = "where"
+    cmd78.description = "Filter objects in pipeline based on condition"
+    cmds.push(cmd78)
+    var cmd79 ToolEntry = ToolEntry{}
+    cmd79.name = "which"
+    cmd79.description = "Locate a command in PATH"
+    cmds.push(cmd79)
     snap.commands = cmds
     var smart List<SmartCommandEntry> = List<SmartCommandEntry>.new([])
     snap.smart_commands = smart
