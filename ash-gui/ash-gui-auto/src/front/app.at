@@ -23,7 +23,7 @@ widget App {
 
     view {
         row {
-            style: "h-full bg-background"
+            style: "w-full h-full bg-background"
 
             // 侧栏(可选)
             if .sidebar_open {
