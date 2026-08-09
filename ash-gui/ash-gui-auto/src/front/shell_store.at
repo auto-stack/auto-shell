@@ -105,10 +105,11 @@ store ShellStore {
             .home = "."
             // 逐步加回 boot 数据(M1 诊断:command_list 曾触发 Invalid instance ID)。
             // 先用最小静态值,确保 Init 不崩 —— 完整 boot 数据待 VM 兼容性修复。
-            var cmds List<ToolEntry> = List<ToolEntry>.new([])
+            // [诊断] 试调 command_list()(vue 版用此路径获取侧栏数据)
+            var snap BootSnapshot = command_list()
+            .commands = snap.commands
+            .smart_commands = snap.smart_commands
             var names List<str> = List<str>.new([])
-            .commands = cmds
-            .smart_commands = List<SmartCommandEntry>.new([])
             .command_names = names
             .persisted_history = List<str>.new([])
             // APP-05/06:git_label。EDGE-04-A 已修(vm 嵌套 type 字面量物化),
