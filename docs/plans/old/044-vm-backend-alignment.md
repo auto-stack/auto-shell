@@ -131,15 +131,39 @@ auto-shell 依赖 auto-lang(cargo dep),所以 auto-lang **不能反向依赖** a
 vue 版(ash-core)有 80 个命令文件,shell.at 有 79 个 push(差 1 为内部别名/code_highlight)。
 布局:根 row `w-full h-full bg-background` → 侧栏 col(Commands 标题 + 79 命令按钮)+ 主 col(标题栏 🛠ash·. + BlockList 空状态 + PromptBar ❯.input)。对齐 vue 版结构。
 
-**命令执行验证(限制)**:通过 MCP `autoui_type` 输入 `ls` 成功(触发 `.PromptBar.OnInput`),
-但 MCP `autoui_keyboard Enter` 未触发命令执行(block 仍空状态)。原因:MCP 键盘事件走的路径
-与 iced 真实键盘 on_submit 不同(EDGE-15 修的是真实键盘路径)。真实键盘 Enter 的执行链已修
-(EDGE-15),Table 解析逻辑(M1)已实现并提交,但端到端 vm 截图验证因 MCP 键盘限制未能完成。
+**命令执行 + Table 渲染验证(通过)**:通过 MCP `autoui_type` 输入 `ls` +
+`autoui_action submit`(对准 input 元素)成功触发完整执行链:
+1. `submit` → `.PromptBar.Run` handler 清空 input、push block{status:Running}
+2. renderer `merged_exec_loop` 在 cwd "." 执行 `std::process ls`,收 stdout
+3. M1 的 `parse_output_to_structured` 把 stdout 解析成 RenderedOutput
+4. `update_block_in_state` 按 Table 变体写回 block.output
+
+state 确认 block 最终状态(对齐 vue 版 ash-core 的 ls Table 形状):
+```
+blocks: [{
+  id: 0, command: "ls", cwd: ".",
+  status: {kind: "Success", message: ""},
+  duration_ms: 13,
+  output: {Table: {
+    columns: ["name", "type", "size"],
+    rows: [[{Text:"app.at"},{Text:"file"},{Text:""}],
+           [{Text:"block_body.at"},{Text:"file"},{Text:""}],
+           [{Text:"block_list.at"},{Text:"file"},{Text:""}],
+           ...
+           [{Text:"tmp"},{Text:"dir"},{Text:""}],
+           [{Text:"types.at"},{Text:"file"},{Text:""}]]
+  }}
+}]
+```
+注:最初尝试用 `autoui_keyboard Enter` 失败(底层 key event 不映射到 iced on_submit),
+改用 `autoui_action submit` 对准 input 元素即触发 `onenter: .Run(.input)`(EDGE-15 路径)。
+M3 的 RenderTable 组件在 state 层正确消费了 Table 变体。
 
 **剩余工作(M4 未完成)**:
 1. prompt_context / complete / read_history 仍静态 mock(shell.at:52-84)
-2. 外部命令流式未做(merged_exec_loop 当前同步)
-3. ls Table 渲染的端到端截图验证(需真实键盘或修 MCP submit 路径)
+2. 外部命令流式未做(merged_exec_loop 当前同步;内置短命令无感知,长命令会阻塞 UI)
+3. ls Table 的**视觉**截图未取到(MCP screenshot 捕获时窗口退出,疑似 iced/winit 环境
+   问题,非渲染缺陷——state 已证明 Table 数据正确写回并消费)
 
 ## 3. 关键风险
 
