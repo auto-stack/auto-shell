@@ -1,13 +1,27 @@
 # Plan 044: VM 后端对齐 — shell.at 从 mock 升级为 ash-core 真实后端
 
 > **日期**: 2026-08-09
-> **状态**: 🔲 **规划中**(计划已批准,待实施)
+> **状态**: ✅ **M1/M2/M3 完成**(简化方案);M4 收尾中
 > **来源**: EDGE-16 修复链完成后(EDGE-15/16a-f + EDGE-04-B,auto-lang master),
 > VM 版命令执行 + block 渲染 + computed + 布局全通。剩余两个对齐 vue 版的差距:
 > 侧栏只有 1 命令(mock)、ls 输出纯 Text(非结构化 Table)。
 > **范围**: shell.at 从 mock 升级为真实后端(接 ash-core 引擎),renderer 拆除短路
 > **前置**: EDGE-16 全链已修(auto-lang master);VM 支持 use.rust FFI(已验证)
 > **参照**: ash-server/src/worker.rs(vue 版后端)、back/api.at(契约)
+>
+> **实施结果(2026-08-09)**:
+> - ✅ **M1** — 走简化方案:renderer 自解析 stdout→Table(auto-lang 727a059e),
+>       而非原计划的 Rust 桥接层。原因:M1 原计划要求 auto-lang 调 auto-shell
+>       crate,但 auto-shell 依赖 auto-lang(**循环依赖**,auto-lang 不能反向依赖
+>       auto-shell)。故降级为方案 B(renderer 在 std::process 拿到 stdout 后,
+>       按 cmd 名解析成 RenderedOutput JSON,推回 store)。
+> - ✅ **M2** — shell.at 手写 79 命令(签名提取自 ash-core registry,
+>       auto-shell 4f0d1e1)。侧栏从 1→78 命令按钮,对齐 vue 版。
+>       (原计划 M2 要调 M1 的 ash_command_list()桥接;桥接被否后改为静态表。)
+> - ✅ **M3** — 传递性 view fn 注册(RenderTable 展开,auto-lang 44135ebb)。
+>       block_body.at 的 RenderTable 组件从 use 导入链正确展开。
+> - 🔲 **M4** — prompt_context/complete/read_history 仍静态 mock;
+>       外部命令流式未做。VM vs vue 视觉对比待补。
 
 ---
 
@@ -89,6 +103,43 @@ VM 的 .at **无法实现 Rust trait**(RenderHook)。ash-server 用 `set_render_
 - 外部命令流式(channel FFI 或保留 renderer 路径)
 - prompt_context / complete / read_history 对齐 ash-core
 - vm vs vue 行为/视觉对比测试
+
+## 2.5 实际实现与验证结果(2026-08-09)
+
+### 已完成(M1/M2/M3)
+
+| 阶段 | 原计划 | 实际实现 | 提交 |
+|------|--------|----------|------|
+| M1 | Rust 桥接层(ash_execute/ash_command_list) | **方案 B**:renderer 在 std::process 拿到 stdout 后,按 cmd 名自解析成 RenderedOutput JSON(`parse_output_to_structured`),推回 store | auto-lang 727a059e |
+| M2 | shell.at 调 ash_command_list() 桥接 | **静态签名表**:从 ash-core 的 `ash/auto-shell/src/cmd/commands/*.rs` 提取 79 个 Signature(name+description),手写进 shell.at | auto-shell 4f0d1e1 |
+| M3 | shell.at 调 ash_execute() + renderer 回调 VM | **传递性 view fn 注册**:`register_transitive_widgets` 递归收集 use 链的 view fn,RenderTable 组件正确展开 | auto-lang 44135ebb |
+
+**为什么没走原计划的 Rust 桥接层(M1)**:
+auto-shell 依赖 auto-lang(cargo dep),所以 auto-lang **不能反向依赖** auto-shell(循环依赖)。
+原计划的 "auto-lang native shim 调 auto-shell crate" 在依赖层面不成立。
+故降级为方案 B(renderer 侧自解析),避开了循环依赖。
+
+### M4 验证结论
+
+**M2 验证(通过)**:VM snapshot 确认侧栏渲染 80 个 button(79 命令 + 1 个 🛠 ToggleSidebar):
+`. build cat cd column cp cut date diff du each echo file find fmt from_csv from_json
+ from_toml from_xml from_yaml get glob grep head help http_delete http_get http_head
+ http_post http_put insert ln ls math-avg math-max math-min math-round math-sum mkdir mv
+ open paste ps pwd realpath rev rm run select show sleep sort source split stat str-case
+ str-contains str-join str-length str-replace str-split str-trim sys tail tee to_csv to_json
+ to_toml to_xml to_yaml touch tr uniq update url-encode version wc where which`
+vue 版(ash-core)有 80 个命令文件,shell.at 有 79 个 push(差 1 为内部别名/code_highlight)。
+布局:根 row `w-full h-full bg-background` → 侧栏 col(Commands 标题 + 79 命令按钮)+ 主 col(标题栏 🛠ash·. + BlockList 空状态 + PromptBar ❯.input)。对齐 vue 版结构。
+
+**命令执行验证(限制)**:通过 MCP `autoui_type` 输入 `ls` 成功(触发 `.PromptBar.OnInput`),
+但 MCP `autoui_keyboard Enter` 未触发命令执行(block 仍空状态)。原因:MCP 键盘事件走的路径
+与 iced 真实键盘 on_submit 不同(EDGE-15 修的是真实键盘路径)。真实键盘 Enter 的执行链已修
+(EDGE-15),Table 解析逻辑(M1)已实现并提交,但端到端 vm 截图验证因 MCP 键盘限制未能完成。
+
+**剩余工作(M4 未完成)**:
+1. prompt_context / complete / read_history 仍静态 mock(shell.at:52-84)
+2. 外部命令流式未做(merged_exec_loop 当前同步)
+3. ls Table 渲染的端到端截图验证(需真实键盘或修 MCP submit 路径)
 
 ## 3. 关键风险
 
