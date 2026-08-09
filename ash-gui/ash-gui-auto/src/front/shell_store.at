@@ -105,7 +105,21 @@ store ShellStore {
             .home = "."
             // 逐步加回 boot 数据(M1 诊断:command_list 曾触发 Invalid instance ID)。
             // 先用最小静态值,确保 Init 不崩 —— 完整 boot 数据待 VM 兼容性修复。
+            // [EDGE-16] 补几个静态 ToolEntry,让侧栏有内容(绕过 command_list 的
+            // EDGE-04-B 阻塞:store handler 调 back api 返回 type 实例崩)。
             var cmds List<ToolEntry> = List<ToolEntry>.new([])
+            var cmd1 ToolEntry = ToolEntry{}
+            cmd1.name = "ls"
+            cmd1.description = "list files"
+            cmds.push(cmd1)
+            var cmd2 ToolEntry = ToolEntry{}
+            cmd2.name = "cat"
+            cmd2.description = "show file"
+            cmds.push(cmd2)
+            var cmd3 ToolEntry = ToolEntry{}
+            cmd3.name = "grep"
+            cmd3.description = "search text"
+            cmds.push(cmd3)
             var names List<str> = List<str>.new([])
             .commands = cmds
             .smart_commands = List<SmartCommandEntry>.new([])
