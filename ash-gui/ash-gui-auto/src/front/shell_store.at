@@ -103,9 +103,8 @@ store ShellStore {
             // 会在此 cwd 执行 std::process::Command,/home/user 在 Windows 无效。
             .cwd = "."
             .home = "."
-            // 逐步加回 boot 数据(M1 诊断:command_list 曾触发 Invalid instance ID)。
-            // 先用最小静态值,确保 Init 不崩 —— 完整 boot 数据待 VM 兼容性修复。
-            // [诊断] 试调 command_list()(vue 版用此路径获取侧栏数据)
+            // 调 command_list() 拉取侧栏命令表(Plan 044 M2:79 命令,对齐 vue 版)。
+            // 路径同 vue:store.Init → command_list → 侧栏 ToolSidebar。
             var snap BootSnapshot = command_list()
             .commands = snap.commands
             .smart_commands = snap.smart_commands

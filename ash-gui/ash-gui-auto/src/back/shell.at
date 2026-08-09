@@ -1,11 +1,15 @@
-// back/shell.at — VM-mode in-process mock backend for ash-gui (M0)
+// back/shell.at — VM-mode in-process backend for ash-gui
 //
-// 为什么有这个文件:VM merged 模式没有 in-process 后端(api.at 调 shell.X(),
-// 真实现在 ash-core Rust crate 里)。这份纯 .at mock 让 UI 能在 vm 模式独立
-// 跑起来(M0:开窗 + MCP + smoke)。真 shell 留给 a2r/HTTP(M1/M4)。
+// 为什么有这个文件:VM merged 模式没有独立后端进程(api.at 调 shell.X(),
+// 真实实现在 ash-core Rust crate 里)。这份 .at 提供进程内后端,让 UI 能在
+// vm 模式独立跑起来。
 //
-// 函数签名必须与 api.at 调用点一致。返回最简 mock 数据,避免复杂方法链
-// (VM handler/codegen 对部分 stdlib 方法支持有限)。
+// 函数签名必须与 api.at 调用点一致。
+//
+// 当前能力:
+// - command_list():返回完整 79 命令表(Plan 044 M2,签名提取自 ash-core registry)。
+// - run_command:no-op(命令执行由 renderer 的 merged_exec_loop 拦截,见 M3)。
+// - prompt_context/complete/read_history:静态 mock,待 M4 接 ash-core。
 
 use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
 
