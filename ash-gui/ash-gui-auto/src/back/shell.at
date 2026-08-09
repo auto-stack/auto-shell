@@ -350,23 +350,48 @@ pub fn read_history() []str {
     return h
 }
 
-// ── complete:返回与 line 前缀匹配的命令(mock:不过滤,全返) ──
+// ── complete:基于 command_list 的 79 命令做前缀过滤 ──
+// 对齐 vue 版 ash-core complete_from_signatures:sig.name.starts_with(prefix)。
+// 取 line 首词作前缀,遍历 command_list().commands 过滤,最多 10 条。
+// 空 line → 空列表(与 PromptBar .OnInput 的空输入清 suggestions 一致)。
 pub fn complete(line str, cursor int) []CompletionItem {
     var items List<CompletionItem> = List<CompletionItem>.new([])
-    var ls CompletionItem = CompletionItem{}
-    ls.replacement = "ls"
-    ls.display = "ls"
-    ls.description = "list files"
-    ls.kind = "command"
-    items.push(ls)
+    var prefix str = line.trim()
+    if prefix == "" {
+        return items
+    }
+    // 取首词(命令名部分),忽略参数。
+    var parts []str = prefix.split(" ")
+    if parts.len() == 0 {
+        return items
+    }
+    var cmd_prefix str = parts[0]
+    var snap BootSnapshot = command_list()
+    var count int = 0
+    for c in snap.commands {
+        if count >= 10 {
+            break
+        }
+        if c.name.starts_with(cmd_prefix) {
+            var item CompletionItem = CompletionItem{}
+            item.replacement = c.name
+            item.display = c.name
+            item.description = c.description
+            item.kind = "command"
+            items.push(item)
+            count = count + 1
+        }
+    }
     return items
 }
 
-// ── prompt_context:mock git 信息 ──
+// ── prompt_context:返回 git 分支/状态(静态,FFI 在 handler 不可用) ──
+// 注:use.rust std::process 能 link,但在 store handler 实际调用时 VM 崩溃
+// (handler codegen 路径不支持 FFI native call)。故保持静态值。
+// vue 版读 .git/HEAD + git status --porcelain;此处待 renderer 侧桥接。
 pub fn prompt_context() PromptContext {
     var pc PromptContext = PromptContext{}
     pc.git_branch = "main"
-    // 显式构造 git_status,避免默认零值(Invalid instance ID)。
     var gs GitStatusInfo = GitStatusInfo{}
     gs.staged = 0
     gs.unstaged = 0

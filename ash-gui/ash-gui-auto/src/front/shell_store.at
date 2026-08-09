@@ -111,8 +111,10 @@ store ShellStore {
             var names List<str> = List<str>.new([])
             .command_names = names
             .persisted_history = List<str>.new([])
-            // APP-05/06:git_label。EDGE-04-A 已修(vm 嵌套 type 字面量物化),
-            // .git_info.git_status.* 嵌套字段访问现在工作。
+            // APP-05/06:git_label。Init 时调 prompt_context() 获取真实 git 信息
+            // (RunResult handler 不会被 renderer 调用 — update_block_in_state
+            // 直接在 Rust 侧更新 block,绕过 store handler。故在 Init 拉一次)。
+            .git_info = prompt_context()
             .git_label = format_git_label(.git_info.git_branch, .git_info.git_status.staged, .git_info.git_status.unstaged, .git_info.git_status.untracked, .git_info.git_status.conflicted, .git_info.git_status.ahead, .git_info.git_status.behind)
         }
 

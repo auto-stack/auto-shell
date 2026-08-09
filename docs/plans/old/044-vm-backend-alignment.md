@@ -160,10 +160,46 @@ blocks: [{
 M3 的 RenderTable 组件在 state 层正确消费了 Table 变体。
 
 **剩余工作(M4 未完成)**:
-1. prompt_context / complete / read_history 仍静态 mock(shell.at:52-84)
+1. ~~prompt_context / complete / read_history 仍静态 mock~~ → complete 已改进(见下),
+   prompt_context/read_history 受 FFI 限制保持静态(见 §2.6)
 2. 外部命令流式未做(merged_exec_loop 当前同步;内置短命令无感知,长命令会阻塞 UI)
 3. ls Table 的**视觉**截图未取到(MCP screenshot 捕获时窗口退出,疑似 iced/winit 环境
    问题,非渲染缺陷——state 已证明 Table 数据正确写回并消费)
+
+## 2.6 mock 改进(2026-08-10)
+
+### complete() — 已改进(纯 .at 前缀过滤)
+
+从"只返回固定 ls"改进为基于 79 命令的前缀过滤,对齐 vue 版 ash-core
+`complete_from_signatures`(`sig.name.starts_with(prefix)`):
+- 取 `line` 首词(split " " 的 `[0]`)作前缀
+- 遍历 `command_list().commands`,用 `c.name.starts_with(cmd_prefix)` 过滤
+- 最多 10 条,空 line 返回空列表
+
+VM 验证:complete("ca",2)→[cat](1条,正确);c 前缀→5条(cat/cd/column/cp/cut,正确)。
+back 函数里 starts_with + for 遍历 + 字段访问全链路验证通过。
+
+**已知限制**:PromptBar 的 `.OnInput` handler 调 complete 后,结果未反映到 UI 补全建议行。
+根因:renderer 的 `on_with_input_for` 把 input 值写到**根状态**(store),而 PromptBar 的
+`.suggestions` 是 **widget 本地 model**——input 双向绑定没路由到 widget 本地状态。
+这是 renderer 的预存限制(EDGE-17 候选),非 complete() 本身的问题。
+
+### prompt_context() — Init 调用改进 + FFI 限制记录
+
+- **改进**:store Init 现在调 `prompt_context()`(之前不调,git_label 为空;
+  现在显示 `⎇ main`)。注:RunResult handler 不会被 renderer 调用
+  (`update_block_in_state` 直接在 Rust 侧更新 block,绕过 store handler)。
+- **FFI 限制**:`use.rust std::process::Command` 能 link,back 函数定义不崩,
+  但在 **store handler 实际调用时 VM 崩溃**(handler codegen 路径不支持 FFI
+  native call)。`use.rust std::fs::read_to_string` 同理。故无法用 FFI 跑
+  `git rev-parse` 或读 `.git/HEAD`,保持静态 "main"。
+
+### read_history() — 保持静态
+
+FFI 不可用(同 prompt_context),无法读 `~/.auto-shell-history`。
+保持示例数据(ls -al / echo hello / git status)。
+注:store Init 目前不调 `history()`(直接置空 persisted_history),
+即使改进 read_history 也需同时补 Init 调用。
 
 ## 3. 关键风险
 
