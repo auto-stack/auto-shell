@@ -17,57 +17,35 @@ use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 /// 表格渲染器(ls/ps 等结构化命令的输出)
 // 参数是窄化后的 TableOutput(view fn 只替换裸 Ident 参数,把 .output.Table
 // 传进来即可在 body 里用 output.columns)。
+//
+// Plan 046:用 col/row 替代 HTML table 标签(table/thead/tbody/tr/th/td)。
+// VM 的 aura_view_builder 不支持 HTML table 标签(fallback 成 Column 会丢数据行)。
+// col/row 是 VM 原生支持的对齐 iced 的 Table 渲染方式(renderer.rs:1289 column of rows)。
+// 简化:先只处理 cell.Text 变体(纯文本),Tagged 着色/点击后续增强。
 view fn RenderTable(output TableOutput) {
-    table {
-        style: "w-full text-sm font-mono-ash border-collapse"
-        // 表头
-        thead {
-            tr {
-                style: "border-b border-border text-muted-foreground text-xs"
-                for col in output.columns {
-                    th {
-                        style: "px-3 py-1.5 text-left font-medium whitespace-nowrap"
-                        text col { }
-                    }
+    col {
+        style: "w-full text-sm font-mono-ash"
+        // 表头行
+        row {
+            style: "border-b border-border text-muted-foreground text-xs"
+            for col_name in output.columns {
+                text col_name {
+                    style: "px-3 py-1.5 text-left font-medium whitespace-nowrap"
                 }
             }
         }
-        // 表行(首列是名称/路径,用蓝色 + 下划线提示可点击)
-        tbody {
-            for row in output.rows {
-                tr {
-                    style: "border-b border-border/50"
-                    for idx, cell in row {
-                        td {
-                            style: "px-3 py-1.5 align-top"
-                            // BB-08:仅 Dir/FileName 可点(Vue cellStyle.ts:22-26 isClickable)。
-                            // Text(Plain)不可点;Tagged 仅 Dir/FileName 绑 onclick + cursor。
-                            if cell.Text != None {
-                                text cell.Text {
-                                    style: "text-foreground"
-                                }
-                            }
-                            if cell.Tagged != None {
-                                if cell.Tagged.kind == "Dir" {
-                                    text cell.Tagged.text {
-                                        onclick: .OpenPath(cell.Tagged.text)
-                                        style: "cursor-pointer text-sky-400 hover:underline"
-                                    }
-                                } else {
-                                    if cell.Tagged.kind == "FileName" {
-                                        text cell.Tagged.text {
-                                            onclick: .OpenPath(cell.Tagged.text)
-                                            style: "cursor-pointer text-sky-400 hover:underline"
-                                        }
-                                    } else {
-                                        text cell.Tagged.text {
-                                            style: if cell.Tagged.kind == "CodeAtRs" { "text-emerald-400" } else if cell.Tagged.kind == "Executable" { "text-cyan-300" } else if cell.Tagged.kind == "Config" { "text-amber-300" } else if cell.Tagged.kind == "Permission" { "text-muted-foreground" } else { "text-foreground" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+        // 数据行 — 每行一个扁平对象 {name, type, size}(避开二维数组 for 循环)
+        for row in output.rows {
+            row {
+                style: "border-b border-border/50"
+                text row.name {
+                    style: "px-3 py-1.5"
+                }
+                text row.type {
+                    style: "px-3 py-1.5"
+                }
+                text row.size {
+                    style: "px-3 py-1.5"
                 }
             }
         }

@@ -46,9 +46,15 @@ pub type RenderedCell = {
     Tagged: ?TaggedCell
 }
 
+pub type TableRow = {
+    name: str
+    type: str
+    size: str
+}
+
 pub type TableOutput = {
     columns: []str
-    rows [][]RenderedCell
+    rows []TableRow
 }
 
 pub type CodeOutput = {
