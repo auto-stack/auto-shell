@@ -12,6 +12,7 @@
 // - prompt_context/complete/read_history:静态 mock,待 M4 接 ash-core。
 
 use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
+use.rust std::process::Command
 
 // ── command_list:返回完整工具表(79 命令,对齐 ash-core registry)──
 pub fn command_list() BootSnapshot {
@@ -341,13 +342,27 @@ pub fn command_list() BootSnapshot {
     return snap
 }
 
-// ── read_history:返回几条示例历史 ──
+// ── read_history:读 ~/.auto-shell-history(对齐 vue 版 worker.rs:633) ──
+// 文件格式:每行一条命令(oldest first)。文件不存在 → File.read_text 返回空 → 空列表。
 pub fn read_history() []str {
-    var h List<str> = List<str>.new([])
-    h.push("ls -al")
-    h.push("echo hello")
-    h.push("git status")
-    return h
+    var home str = Env.get("USERPROFILE")
+    if home == "" {
+        home = Env.get("HOME")
+    }
+    var path str = home + "/.auto-shell-history"
+    var content str = File.read_text(path)
+    var result List<str> = List<str>.new([])
+    if content == "" {
+        return result
+    }
+    var lines []str = content.split("\n")
+    for line in lines {
+        var trimmed str = line.trim()
+        if trimmed != "" {
+            result.push(trimmed)
+        }
+    }
+    return result
 }
 
 // ── complete:基于 command_list 的 79 命令做前缀过滤 ──
@@ -385,18 +400,42 @@ pub fn complete(line str, cursor int) []CompletionItem {
     return items
 }
 
-// ── prompt_context:返回 git 分支/状态(静态,FFI 在 handler 不可用) ──
-// 注:use.rust std::process 能 link,但在 store handler 实际调用时 VM 崩溃
-// (handler codegen 路径不支持 FFI native call)。故保持静态值。
-// vue 版读 .git/HEAD + git status --porcelain;此处待 renderer 侧桥接。
+// ── prompt_context:用 git 命令获取真实分支名 + status 统计 ──
+// 对齐 vue 版 ash-core:git rev-parse 取分支,git status --porcelain 统计。
+// 注:非 git 目录时 git 命令返回非零,unwrap 会 panic —— 调用方需确保在 git 仓库。
 pub fn prompt_context() PromptContext {
     var pc PromptContext = PromptContext{}
-    pc.git_branch = "main"
+    var branch_out = Command.new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).output().unwrap()
+    var branch str = String.from_utf8(branch_out.stdout).unwrap()
+    pc.git_branch = branch.trim()
     var gs GitStatusInfo = GitStatusInfo{}
-    gs.staged = 0
-    gs.unstaged = 0
-    gs.untracked = 0
-    gs.conflicted = 0
+    var status_out = Command.new("git").args(["status", "--porcelain"]).output().unwrap()
+    var status_str str = String.from_utf8(status_out.stdout).unwrap()
+    var lines []str = status_str.split("\n")
+    var staged int = 0
+    var unstaged int = 0
+    var untracked int = 0
+    var conflicted int = 0
+    for line in lines {
+        if line.len() >= 2 {
+            var x str = line.substr(0, 1)
+            var y str = line.substr(1, 1)
+            if x == "?" && y == "?" {
+                untracked = untracked + 1
+            } else {
+                if x != " " && x != "?" {
+                    staged = staged + 1
+                }
+                if y != " " && y != "?" {
+                    unstaged = unstaged + 1
+                }
+            }
+        }
+    }
+    gs.staged = staged
+    gs.unstaged = unstaged
+    gs.untracked = untracked
+    gs.conflicted = conflicted
     gs.ahead = 0
     gs.behind = 0
     pc.git_status = gs

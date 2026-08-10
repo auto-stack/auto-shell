@@ -110,7 +110,9 @@ store ShellStore {
             .smart_commands = snap.smart_commands
             var names List<str> = List<str>.new([])
             .command_names = names
-            .persisted_history = List<str>.new([])
+            // 读真实历史文件(Plan 044 M4:对齐 vue 版 read_history)。
+            var hist []str = history()
+            .persisted_history = hist
             // APP-05/06:git_label。Init 时调 prompt_context() 获取真实 git 信息
             // (RunResult handler 不会被 renderer 调用 — update_block_in_state
             // 直接在 Rust 侧更新 block,绕过 store handler。故在 Init 拉一次)。

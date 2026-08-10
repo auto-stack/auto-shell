@@ -168,6 +168,23 @@ M3 的 RenderTable 组件在 state 层正确消费了 Table 变体。
 
 ## 2.6 mock 改进(2026-08-10)
 
+### ✅ 根因修复:Command.args() 是 no-op(auto-lang b965b90b)
+
+初版调研误判"FFI 在 handler 不可用"(§2.5 旧结论)。复查发现真因:
+VM 的 `std::process::Command.args()` FFI 实现(stdlib.rs:7516)是**空操作** ——
+弹出参数数组后直接丢弃(`let _args_handle = ...`),不把参数加到 Command 上。
+故 `Command.new("git").args(["--version"])` 执行 git 时**不带子命令**,
+输出 git usage 帮助 → 被误读为"崩溃"。
+
+修复:用 `Vec<String>::pop_from_stack` 正确提取参数数组(同
+`shim_process_spawn` 的 Vec<String> 路径),遍历加到 Command:
+```rust
+let args: Vec<String> = Vec::<String>::pop_from_stack(task, vm)?;
+cmd_guard.args(&args);
+```
+验证:`Command.new("git").args(["rev-parse","--abbrev-ref","HEAD"]).output()`
+→ 分支名 "main"。FFI 在 handler 完全可用,旧结论作废。
+
 ### complete() — 已改进(纯 .at 前缀过滤)
 
 从"只返回固定 ls"改进为基于 79 命令的前缀过滤,对齐 vue 版 ash-core
@@ -184,22 +201,27 @@ back 函数里 starts_with + for 遍历 + 字段访问全链路验证通过。
 `.suggestions` 是 **widget 本地 model**——input 双向绑定没路由到 widget 本地状态。
 这是 renderer 的预存限制(EDGE-17 候选),非 complete() 本身的问题。
 
-### prompt_context() — Init 调用改进 + FFI 限制记录
+### prompt_context() — ✅ 真实 git 信息(FFI)
 
-- **改进**:store Init 现在调 `prompt_context()`(之前不调,git_label 为空;
-  现在显示 `⎇ main`)。注:RunResult handler 不会被 renderer 调用
-  (`update_block_in_state` 直接在 Rust 侧更新 block,绕过 store handler)。
-- **FFI 限制**:`use.rust std::process::Command` 能 link,back 函数定义不崩,
-  但在 **store handler 实际调用时 VM 崩溃**(handler codegen 路径不支持 FFI
-  native call)。`use.rust std::fs::read_to_string` 同理。故无法用 FFI 跑
-  `git rev-parse` 或读 `.git/HEAD`,保持静态 "main"。
+用 `use.rust std::process::Command` 执行 git 命令(shell.at):
+- `git rev-parse --abbrev-ref HEAD` → 真实分支名
+- `git status --porcelain` → 逐行解析 XY 状态码,统计 staged/unstaged/untracked
 
-### read_history() — 保持静态
+store Init 调 `prompt_context()`(RunResult handler 不被 renderer 调用 ——
+`update_block_in_state` 直接在 Rust 侧更新 block,绕过 store handler)。
 
-FFI 不可用(同 prompt_context),无法读 `~/.auto-shell-history`。
-保持示例数据(ls -al / echo hello / git status)。
-注:store Init 目前不调 `history()`(直接置空 persisted_history),
-即使改进 read_history 也需同时补 Init 调用。
+VM 验证:`git_label: "⎇ main !1"`(分支 main + 1 个 unstaged),改动后实时反映。
+注:非 git 目录时 git 命令返回非零,`.unwrap()` 会 panic —— 当前调用方(Init)
+假设在 git 仓库;后续可加 `output.status.success()` 判断增强健壮性。
+
+### read_history() — ✅ 真实历史文件(FFI)
+
+用内置 `File.read_text`(`shim_file_read_text`,失败返回空串,不 panic)
+读 `$USERPROFILE/.auto-shell-history`,按 `\n` split + trim 过滤空行。
+store Init 现在调 `history()`(之前不调,persisted_history 直接置空)。
+
+VM 验证:历史文件 3 行 → `hist.len() == 3`(通过 next_id 诊断确认)。
+注:Windows 用 USERPROFILE,回落 HOME(对齐 vue 版 worker.rs:603-607)。
 
 ## 3. 关键风险
 
