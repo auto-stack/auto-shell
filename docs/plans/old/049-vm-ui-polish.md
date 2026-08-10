@@ -1,7 +1,7 @@
 # Plan 049: ash-gui VM 版 UI 完善
 
 > **日期**: 2026-08-10
-> **状态**: 🔲 进行中(已完成项标 ✅)
+> **状态**: ✅ 完成(P1 input 清空 / P2 自动滚动 / P3 block 折叠 均已验证)
 > **来源**: Plan 044-048 的延续。VM 版 ash-gui 经过多轮修复已基本可用,
 > 本计划汇总所有已完成的改动 + 剩余改善需求。
 
@@ -73,21 +73,19 @@
 
 ## 二、剩余改善需求(本计划主体)
 
-### P1: 输入命令后 Enter,input 不清空
+### ✅ P1: 输入命令后 Enter,input 不清空
 **现象**: 输入 `ls` 回车,命令执行了但 input 框仍显示 `ls`。
 **根因**: Plan 046 加了 `input_values.remove("Run")`,但 `on_with_input_for` 在
 handler 前把 input_value 写入 state.input(根状态),handler 清的是 widget 本地 .input,
 两者不同步。refocus 触发 view 重建后,input value 可能从根状态读到旧值。
-**修复方向**: 调研 on_with_input_for 对 PromptBar 的写入路径,确保 handler 清空后
-根状态的 input 也被清空。
+**修复**: auto-lang 45e55871(on_with_input_for 写根状态 + handler 清空路径对齐)。
 
-### P2: 自动滚动到底部
+### ✅ P2: 自动滚动到底部
 **现象**: 多条命令超出窗口高度后,滚动条出现但停在最顶部,需手动滚到底部。
 **期望**: 新命令执行后自动滚动到最底部(最新 block 可见)。
-**修复方向**: block_list.at 或 renderer 在 blocks 变化后,
-用 scrollable::scroll_to(scrollable::Absolute::Bottom) 滚到底部。
+**修复**: auto-lang 45e55871(snap_to_end 自动滚动)。
 
-### P3: Block 标题点击折叠
+### ✅ P3: Block 标题点击折叠
 **现象**: 每个 block 的标题行(❯ command + status)点击无反应。
 **期望**: 点击标题行可折叠/展开 block body(方便多个结果时查看)。
 **修复方向**: block_item.at 加 model { var collapsed bool = false },
@@ -95,13 +93,32 @@ handler 前把 input_value 写入 state.input(根状态),handler 清的是 widge
 
 ---
 
-## 三、执行计划
+## 三、执行计划(状态更新)
 
-1. P1 调研 input 清空根因 → 修复(auto-lang)
-2. P2 加自动滚动到底部(auto-lang renderer 或 auto-shell block_list.at)
-3. P3 加 block 折叠(auto-shell block_item.at)
-4. VM 验证三项
-5. 更新本计划状态
+### ✅ P1/P2(依赖 auto-lang 45e55871)
+- input 清空 + snap_to_end 自动滚动已在 auto-lang 45e55871 完成。
+
+### ✅ P3 block 折叠(本计划主体,2026-08-10)
+
+| 步骤 | 内容 | 位置 |
+|------|------|------|
+| 1 | `block_item.at` 加 `model { var collapsed bool = false }` + `collapse_glyph` computed + `if !.collapsed` 条件渲染 body + 标题行 `onclick: .ToggleCollapse` | auto-shell f72dca8 |
+| 2 | VM 修复 **`!` 前缀条件**:`eval_condition_with` 识别 `! .collapsed`(此前落入 resolve_binding_path → 恒 false → ls 结果默认全隐藏) | auto-lang(本计划) |
+| 3 | VM 修复 **子组件 model var 默认值**:`render_child_widget` 把子组件 state_var 默认值(如 `collapsed=false`)种入统一 root state;`VmBridge::read_state/write_state` 增加实时 heap 对象按名回退(动态写入的字段不再 FieldNotFound → 修 `${collapse_glyph}` 字面量回退) | auto-lang(本计划) |
+| 4 | VM 修复 **传递性 widget 的 handler 编译**:`register_transitive_widgets` 同步把孙组件(BlockItem)的 WidgetDecl 收进 child_decls,`handler_BlockItem_ToggleCollapse` 才存在(此前点击静默 HandlerNotFound) | auto-lang(本计划) |
+| 5 | 模板 workaround **row onclick 被丢**:`convert_row` 无 onclick 字段,把折叠切换从 row 移到 `text` 元素(glyph + command,text 带 onclick 转无边框 Button,VM 已支持) | auto-shell(本计划) |
+| 6 | 回归单测:`test_conditional_negation_*` / `test_text_onclick_becomes_toggle_button` / `test_child_model_var_default_seeded_into_state`(**28/28 过**);顺手修 vnode_converter 4 处过期 `on_right_click` 测试初始化(HEAD 上 test 构建一直编译不过) | auto-lang(本计划) |
+
+**验证**(MCP):
+- `ls` 后 body(表格)默认可见,glyph 显示 `▾`(不再 `${collapse_glyph}`)
+- 点击命令文本 → `collapsed: true`,body 隐藏,glyph 变 `▸`;再点展开
+- `python -m pytest tests/`:54 passed / 2 failed(均为既有问题:`test_mcp_server_responds` 工具数 12→13 陈旧断言、`test_pb04` 偶发,单独跑即过)
+
+**已知限制**:VM 统一 root state 下,`collapsed` 是全局字段 —— 点击任一 block 会同时折叠/展开全部 block。逐 block 折叠需按 block id 做 per-instance state(后续计划)。
+
+### P4: 其他发现(本计划)
+- `handler_codegen` 对 `navigator.clipboard.writeText`(BlockItem.CopyCommand)软失败(WARN),复制按钮在 VM 模式为 no-op,Vue 路径不受影响。
+- 3 个既有失败单测(`repro_selectday_panic`/`test_calendar_init_builds_42_cells`/`test_sizing`)在 HEAD 上因 vnode_converter 编译错误从未能跑,本计划修编译后确认仍为陈旧失败(016-calendar 处理器/数组约定 + style 解析),不属本计划范围。
 
 ## 四、关联
 

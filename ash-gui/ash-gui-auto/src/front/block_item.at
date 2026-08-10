@@ -32,17 +32,21 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
             style: "border-border bg-card/60 px-3 py-2.5 shadow-sm overflow-hidden rounded-lg border"
 
             // 头部:❯ command + 操作 + 状态(Plan 049:点击折叠/展开)
+            // VM 限制:row 元素不支持 onclick(convert_row 会丢弃 events),
+            // 而 text 元素带 onclick 会转成无边框 Button(VM 已支持)。
+            // 所以把折叠切换挂到折叠指示符 + 命令文本上(点击它们即可折叠)。
             row {
                 style: "items-center gap-2 mb-1.5 group cursor-pointer"
-                onclick: .ToggleCollapse
                 text .collapse_glyph {
                     style: "text-muted-foreground select-none text-xs w-4"
+                    onclick: .ToggleCollapse
                 }
                 text "❯" {
                     style: "text-muted-foreground select-none"
                 }
                 text .block.command {
                     style: "font-mono-ash text-sm text-foreground/90 truncate"
+                    onclick: .ToggleCollapse
                 }
 
                 // 右侧操作区:停止(运行中)+ 悬停显示的复制/重跑 + 状态图标
