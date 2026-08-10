@@ -27,24 +27,24 @@ use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 // 简化:先只处理 cell.Text 变体(纯文本),Tagged 着色/点击后续增强。
 view fn RenderTable(output TableOutput) {
     col {
-        style: "w-full text-sm font-mono-ash"
+        style: "w-full text-sm font-mono-ash border border-border rounded"
         // 表头行
         row {
-            style: "border-b border-border text-muted-foreground text-xs"
+            style: "border border-border bg-muted/30"
             for col_name in output.columns {
                 text col_name {
-                    style: "px-3 py-1.5 text-left font-medium whitespace-nowrap"
+                    style: "px-3 py-1.5 text-left font-medium whitespace-nowrap border border-border"
                 }
             }
         }
         // 数据行 — 二维数组 for cell in row(Plan 046 已修 VM 嵌套 for bug)
         for row in output.rows {
             row {
-                style: "border-b border-border/50"
+                style: "border border-border"
                 for cell in row {
                     if cell.Text != None {
                         text cell.Text {
-                            style: "px-3 py-1.5"
+                            style: "px-3 py-1.5 border border-border"
                         }
                     }
                 }
