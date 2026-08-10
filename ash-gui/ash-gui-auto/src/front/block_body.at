@@ -21,6 +21,9 @@ use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 // Plan 046:用 col/row 替代 HTML table 标签(table/thead/tbody/tr/th/td)。
 // VM 的 aura_view_builder 不支持 HTML table 标签(fallback 成 Column 会丢数据行)。
 // col/row 是 VM 原生支持的对齐 iced 的 Table 渲染方式(renderer.rs:1289 column of rows)。
+//
+// Plan 046(for 循环修复后):for cell in row 二维数组迭代已修(aura_view_builder
+// ForLoop 现在先查 bindings),改回标准 RenderedCell 格式 + cell.Text 访问。
 // 简化:先只处理 cell.Text 变体(纯文本),Tagged 着色/点击后续增强。
 view fn RenderTable(output TableOutput) {
     col {
@@ -34,18 +37,16 @@ view fn RenderTable(output TableOutput) {
                 }
             }
         }
-        // 数据行 — 每行一个扁平对象 {name, type, size}(避开二维数组 for 循环)
+        // 数据行 — 二维数组 for cell in row(Plan 046 已修 VM 嵌套 for bug)
         for row in output.rows {
             row {
                 style: "border-b border-border/50"
-                text row.name {
-                    style: "px-3 py-1.5"
-                }
-                text row.type {
-                    style: "px-3 py-1.5"
-                }
-                text row.size {
-                    style: "px-3 py-1.5"
+                for cell in row {
+                    if cell.Text != None {
+                        text cell.Text {
+                            style: "px-3 py-1.5"
+                        }
+                    }
                 }
             }
         }
