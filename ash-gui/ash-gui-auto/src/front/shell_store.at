@@ -94,6 +94,11 @@ store ShellStore {
         var __sse_cwd str = ""
         var __sse_status str = ""
         var __sse_output_text str = ""
+        // Plan 052: 完整结构化 output(vue 模式 SSE 透传 r.output 整个对象)。
+        // 承载 Table/Record/Code/Error/Text 等所有变体(__sse_output_text 只能承载文本)。
+        // VM merged 模式不填此字段(renderer 走 update_block_in_state 直写 block),
+        // RunResult handler 判断它为空时回退到 streamed_text。
+        var __sse_output RenderedOutput = RenderedOutput{}
         var __sse_duration_ms int = 0
         var __pending_command_id int = 0
         var __pending_command_str str = ""
@@ -179,15 +184,17 @@ store ShellStore {
                         st.kind = "Success"
                         st.message = ""
                         b.status = st
-                        // merged:output.Text 取 streamed_text(流式累积)。
-                        // HTTP:若 __sse_output_text 非空优先用它。
-                        var out RenderedOutput = RenderedOutput{}
-                        if .__sse_output_text != "" {
-                            out.Text = .__sse_output_text
+                        // Plan 052: 优先用 __sse_output(vue 模式 SSE 透传的完整
+                        // 结构化 output,可能是 Table/Record/Code/Error/Text)。
+                        // 为空(所有变体 None)时回退到 streamed_text(VM merged 模式 /
+                        // 流式外部命令的 stdout 累积),包成 {Text: streamed_text}。
+                        if .__sse_output.Text != None {
+                            b.output = .__sse_output
                         } else {
+                            var out RenderedOutput = RenderedOutput{}
                             out.Text = b.streamed_text
+                            b.output = out
                         }
-                        b.output = out
                         b.streamed_text = ""
                         b.duration_ms = .__sse_duration_ms
                     } else {

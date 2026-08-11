@@ -30,11 +30,14 @@ pub type CodeSpan = {
     italic: bool
 }
 
-// RenderedOutput 是 Rust 枚举,serde 用变体名作键(tagged union):
-//   {"Table":{columns,rows}} | {"Text":"..."} | {"Code":{lines,language}}
-//   | {"Error":{message}} | {"Record":{...}}
+// RenderedOutput 是 Rust 枚举,serde externally-tagged(变体名作键):
+//   {"Table":{columns,rows,atom_type}} | {"Text":"..."} | {"Code":{lines,language}}
+//   | {"Error":{message,kind}} | {"Record":{fields,atom_type}} | "Empty"(裸字符串)
 // 字段用 ?T(可选)表达"仅一个变体存在"。前端用 `if .output.Table != None`
 // 分发并窄化类型。RenderedCell 同理:{"Text":"..."} | {"Tagged":{text,tag}}。
+// Plan 052: Table/Record 都带 atom_type(语义标签,如 FileList/MemoryInfo)。
+// Empty 是裸字符串变体(.at 的 ?T 联合表达不了),Plan 052 透传整个 output 后
+// 走 block_body.at 的 else 分支兜底(行为正确,和 None 表现一致)。
 pub type TaggedCell = {
     text: str
     tag: str
@@ -49,6 +52,8 @@ pub type RenderedCell = {
 pub type TableOutput = {
     columns: []str
     rows [][]RenderedCell
+    // Plan 052: 补 atom_type(服务端 renderer.rs:31 真实发送,如 FileList/ProcessList)。
+    atom_type: str
 }
 
 pub type CodeOutput = {
@@ -58,6 +63,8 @@ pub type CodeOutput = {
 
 pub type ErrorOutput = {
     message: str
+    // Plan 052: 补 kind(服务端 renderer.rs:52-55 真实发送,如 NotFound/PermissionDenied)。
+    kind: str
 }
 
 /// Record 变体:key/value 字段列表 + atom_type(语义标签,如 MemoryInfo)。
