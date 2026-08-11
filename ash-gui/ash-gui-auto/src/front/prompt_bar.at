@@ -27,6 +27,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         var in_continuation bool = false
         var history_open bool = false
         var suggestions []CompletionItem = []
+        var ghost_text str = ""
     }
 
     // 侧栏点击工具 → 填入输入框(原生 PromptBar 的 injectedCommand watch)
@@ -94,26 +95,47 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     style: "text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate"
                 }
 
-                // 输入框:value+oninput → v-model 双向绑定;Enter 执行;
-                // onkeyup 触发补全(v-model 会吞 oninput 事件,用 keyup 兜底);
-                // 键盘快捷键:Ctrl+R 搜索 / Ctrl+L 清屏 / Ctrl+D 退出 /
-                // Ctrl+C 清输入 / ↑↓ 历史 / Tab 补全。
-                input {
-                    value: .input
-                    oninput: .OnInput
-                    onkeyup: .OnInput
-                    onenter: .Run(.input)
-                    onkeydown.ctrl.r: .ToggleHistorySearch
-                    // PB-11:Ctrl+L 清屏(归档 blocks),非清输入。绑 OnCtrlL,
-                    // renderer emit 模拟转发到 store.ClearScreen(vm 剥离 callback emit)。
-                    onkeydown.ctrl.l: .OnCtrlL
-                    onkeydown.ctrl.d: .OnCtrlD
-                    onkeydown.ctrl.c: .OnCtrlC
-                    onkeydown.up: .HistoryOlder
-                    onkeydown.down: .HistoryNewer
-                    onkeydown.tab.prevent: .OnTab
-                    style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
-                    placeholder: "type a command…"
+                // Plan 053 M2: ghost text overlay。input 文字透明(只留光标),
+                // 后面的 overlay 显示 input 文字(原色)+ ghost(灰),同字体
+                // 对齐 → 用户看到原色已输入 + 灰色建议续接。手法同 vue 原版
+                // PromptBar.vue:390-399(transparent textarea + 叠加层)。
+                // 用 row+text(stack/span 非标准 view 节点,codegen 不识别)。
+                row {
+                    style: "relative flex-1 items-center"
+                    // overlay 层:absolute 覆盖 input 区域,显示 input + ghost
+                    row {
+                        style: "pointer-events-none absolute inset-0 flex items-center text-sm font-mono-ash whitespace-pre overflow-hidden"
+                        text .input {
+                            style: "text-foreground/90"
+                        }
+                        text .ghost_text {
+                            style: "text-muted-foreground/35"
+                        }
+                    }
+                    // 输入框:value+oninput → v-model 双向绑定;Enter 执行;
+                    // onkeyup 触发补全(v-model 会吞 oninput 事件,用 keyup 兜底);
+                    // 键盘快捷键:Ctrl+R 搜索 / Ctrl+F 接受建议 / Ctrl+→ 接受一词 /
+                    // Ctrl+L 清屏 / Ctrl+D 退出 / Ctrl+C 清输入 / ↑↓ 历史 / Tab 补全。
+                    input {
+                        value: .input
+                        oninput: .OnInput
+                        onkeyup: .OnInput
+                        onenter: .Run(.input)
+                        onkeydown.ctrl.r: .ToggleHistorySearch
+                        // Plan 053 M2: Ctrl+F 接受全部 ghost text,Ctrl+→ 接受一个词。
+                        onkeydown.ctrl.f: .AcceptGhost
+                        onkeydown.ctrl.right: .AcceptGhostWord
+                        // PB-11:Ctrl+L 清屏(归档 blocks),非清输入。绑 OnCtrlL,
+                        // renderer emit 模拟转发到 store.ClearScreen(vm 剥离 callback emit)。
+                        onkeydown.ctrl.l: .OnCtrlL
+                        onkeydown.ctrl.d: .OnCtrlD
+                        onkeydown.ctrl.c: .OnCtrlC
+                        onkeydown.up: .HistoryOlder
+                        onkeydown.down: .HistoryNewer
+                        onkeydown.tab.prevent: .OnTab
+                        style: "w-full bg-transparent outline-none border-0 px-0 text-sm font-mono-ash text-transparent caret-foreground"
+                        placeholder: "type a command…"
+                    }
                 }
             }
         }
@@ -134,6 +156,25 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .suggestions = items
             } else {
                 .suggestions = []
+            }
+            // Plan 053 M2: ghost text = 以当前输入为前缀的最长历史条目
+            // (去掉已输入前缀,只留建议续接)。对齐 vue 原版 PromptBar.vue:299-328。
+            // 倒序遍历历史,找 starts_with(input) 且更长的条目里最长的那个。
+            .ghost_text = ""
+            if .input != "" {
+                var best_ghost str = ""
+                var i int = .history.len() - 1
+                for i >= 0 {
+                    var h str = .history[i]
+                    if h.starts_with(.input) && h.len() > .input.len() {
+                        var g str = h.substr(.input.len(), h.len())
+                        if g.len() > best_ghost.len() {
+                            best_ghost = g
+                        }
+                    }
+                    i = i - 1
+                }
+                .ghost_text = best_ghost
             }
         }
 
@@ -159,6 +200,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .suggestions = []
             .history_open = false
             .in_continuation = false
+            .ghost_text = ""
         }
 
         // Ctrl+D:空输入时请求退出(像 bash);有输入时不动作
@@ -211,17 +253,42 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .suggestions = []
             .history_open = false
             .in_continuation = false
+            .ghost_text = ""
         }
 
         // 退出请求(Ctrl+D 空输入触发 → emit('Exit') → App 处理;浏览器无操作)
         .Exit -> { }
 
+        // Plan 053 M2: Ctrl+F 接受全部 ghost text(对齐 vue acceptGhostFull)。
         .AcceptGhost -> {
-            // ghost text 接受逻辑(从 ghost_text computed 取值)
+            if .ghost_text != "" {
+                .input = .input + .ghost_text
+                .ghost_text = ""
+                .suggestions = []
+            }
         }
 
+        // Plan 053 M2: Ctrl+→ 接受 ghost text 的下一个词(到下一个空白,
+        // 对齐 vue acceptGhostWord)。用 char_at 逐字符扫描。
         .AcceptGhostWord -> {
-            // ghost text 按词接受
+            if .ghost_text != "" {
+                var take str = ""
+                var i int = 0
+                // 跳过前导空白
+                for i < .ghost_text.len() && .ghost_text.char_at(i) == " " {
+                    i = i + 1
+                }
+                // 取到下一个空白
+                for i < .ghost_text.len() && .ghost_text.char_at(i) != " " {
+                    take = take + .ghost_text.char_at(i)
+                    i = i + 1
+                }
+                if take != "" {
+                    .input = .input + take
+                    .ghost_text = ""
+                    .suggestions = []
+                }
+            }
         }
     }
 }
