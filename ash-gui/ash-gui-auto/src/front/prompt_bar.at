@@ -46,7 +46,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
     // expose .Exit:让 .OnCtrlD 条件调用它(expose 会把 .Exit 标记为 used,
     // 生成 Exit() 函数;否则无模板引用时函数不存在)
     expose {
-        .Exit
+        .Exit,
+        // Plan 053 M3 / P5-7: DoTokenize 被 OnInput/AcceptGhost/Word 自调用,
+        // 无模板绑定 → 需 expose 标 used 才生成 function(同 .Exit 模式)。
+        // P5-7 codegen 正解(handler self-call 识别)后可移除。
+        .DoTokenize
     }
 
     // props: cwd str, home str, command_names []str,
@@ -106,10 +110,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     // overlay 层:absolute 覆盖 input 区域,显示 input + ghost
                     row {
                         style: "pointer-events-none absolute inset-0 flex items-center text-sm font-mono-ash whitespace-pre overflow-hidden"
-                        // Plan 053 M3: 语法高亮推迟(complex handler codegen 限制,P5)。
-                        // 暂显示原色 input(M2 ghost text overlay 保持工作)。
-                        text .input {
-                            style: "text-foreground/90"
+                        // Plan 053 M3: 语法高亮 span(DoTokenize 写 highlighted_spans)。
+                        for span in .highlighted_spans {
+                            text .span.text {
+                                style: .span.color
+                            }
                         }
                         text .ghost_text {
                             style: "text-muted-foreground/35"
@@ -284,8 +289,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 }
                 .ghost_text = best_ghost
             }
-            // Plan 053 M3: 输入框语法高亮 span(tokenize 整行)。
-            .highlighted_spans = []
+            // Plan 053 M3: 重新 tokenize 写 highlighted_spans。
+            .DoTokenize()
         }
 
         .PickCompletion(item) -> {
@@ -377,7 +382,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .input = .input + .ghost_text
                 .ghost_text = ""
                 .suggestions = []
-                .highlighted_spans = []
+                .DoTokenize()
             }
         }
 
@@ -400,7 +405,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     .input = .input + take
                     .ghost_text = ""
                     .suggestions = []
-                    .highlighted_spans = []
+                    .DoTokenize()
                 }
             }
         }
