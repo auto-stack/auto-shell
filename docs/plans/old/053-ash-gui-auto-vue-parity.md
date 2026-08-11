@@ -1,7 +1,7 @@
 # Plan 053: ash-gui-auto 对齐 vue 原版 — 输入体验与渲染打磨
 
 > **日期**: 2026-08-11
-> **状态**: 📋 草案（待实施）
+> **状态**: 🔄 实施中（M1-M4/M6 完成，M5 待 P5-6 debounce codegen）
 > **来源**: 全面对比 `ash-gui-vue`（手写原版）与 `ash-gui-auto`（AutoLang 生成版）的功能差距
 > **范围**: `ash-gui-auto/src/front/*.at`（AutoLang 源码）+ `auto-lang` 仓库的 Vue codegen（必要的基础设施修复）
 > **核心目标**: 让 auto 版的**输入体验**（ghost text / 语法高亮 / 多行续行 / 补全 debounce）与**渲染打磨**对齐 vue 原版，使两版在 vue 模式下功能等价。
@@ -218,7 +218,7 @@ Plan 043 把手写 `ash-gui-vue` 反生成为 `.at` 源码驱动的 `ash-gui-aut
 
 ---
 
-### M4: 多行续行检测（A5）
+### M4: 多行续行检测（A5）✅ 已完成（2026-08-11）
 
 **目标**：未闭合 `{ } ( ) [ ] " '` 或尾随 `\` 时 Enter 换行而非执行，提示符 `❯→·`。
 
@@ -247,6 +247,30 @@ Plan 043 把手写 `ash-gui-vue` 反生成为 `.at` 源码驱动的 `ash-gui-aut
 **风险**：
 - **autoGrow**：.at 无 `scrollHeight` 访问。降级方案：(a) 固定 `rows` + CSS `resize-none` + `max-h-[168px] overflow-y-auto`，靠浏览器原生 textarea 滚动（不做高度自适应）；(b) 产物手写 autoGrow watch（脆弱）。**推荐 (a)**——零 codegen 改动，体验略逊但可接受。
 - `.at` 里「放行默认换行」的语义需验证：textarea 的 `onenter` handler 若不 emit Run、也不 prevent，是否产生换行？实施时在产物验证；若不行则 codegen 补 `preventDefault` 条件。
+
+**实施纪要（2026-08-11）**（实际与计划差异）：
+- **module fn 不可用**（P5-4/P5-7：widget 顶层 module fn 不被 codegen）→ 状态机内联进
+  `.DoContinuation`（vue prompt 用）+ `.OnEnter`（执行判断用）两处。
+- **`.OnEnter(cmd)` 用参数而非读字段**：VM 的 handler 内 `.input` 字段读有
+  `GET_FIELD non-i32 obj_id` 编码问题（返回空值）→ 用 `onenter: .OnEnter(.input)`
+  参数传递规避（vue 端等价，产物 `@keyup.enter="OnEnter(input)"`）。
+- **`char_at` 两 target 语义分歧**（新发现）：VM `char_at` 返回 int codepoint
+  （Plan 368 W5，`cli-demo/regex-demo` 依赖 `== 42` 式比较），vue 映射为 `charAt`
+  （string）。M3 tokenize / M4 续行 / M2 AcceptGhostWord 统一改用 `substr(i, i+1)`
+  （两边都返回 string）。
+- **autoGrow 用 `[field-sizing:content]`**（Tailwind 任意属性）——比计划降级方案
+  (a) 更优：自动增高 + `max-h-[168px] overflow-y-auto` 封顶（WebView2/Chrome 123+）。
+- **VM 全链路**：`View::Textarea` 新增 `on_submit`（view.rs）、convert_textarea 接
+  onenter、iced renderer Enter→on_submit、mcp_server submit 动作 + onsubmit 导出、
+  dynamic.rs onenter 字段绑定映射、M1 bridge 扩展 OnEnter（Run 后 input 空 → 桥
+  接 RunCommand）。VM 手工验证：续行保留输入 / 完整命令 Enter 执行 Success / 清空。
+- **tsconfig ES2020→ES2021**（auto-man generate_tsconfig）：codegen 的
+  `replace`→`replaceAll` 需要 es2021 lib（OnEnter 反斜杠接续用）。
+- **P5-7 残留修复**：self-called-only handler 不再尾部 `emit('X')`（不在 defineEmits
+  类型里 → TS2769；DoTokenize 实测）。
+- **已知 VM 抖动（pre-existing）**：MCP 异步 dispatch 偶发丢消息（autoui_type/
+  keyboard/submit），测试已加 re-send 重试缓解；根因是 16ms 订阅 try_recv 与
+  状态读竞态，属 §6 D VM 工作面的独立债。
 
 **验收**：输入 `for i in (1..3) {` 按 Enter 换行，提示符变 `·`；补 `}` 后 Enter 执行。
 
@@ -343,13 +367,13 @@ Plan 043 把手写 `ash-gui-vue` 反生成为 `.at` 源码驱动的 `ash-gui-aut
 
 | 里程碑 | 内容 | 改动层 | 验证 | 依赖 |
 |---|---|---|---|---|
-| **M1** | codegen 字符串方法映射 | auto-lang | HistorySearch `to_lower→toLowerCase` + 单测 | 无（前置） |
-| **M2** | ghost text + Ctrl+F/→ | .at | 输入出灰字、接受建议 | M1 |
-| **M3** | 输入框语法高亮 | .at + 新 module | 命令/串/注释异色 | M1 |
-| **M4** | 多行续行 | .at + 小 codegen | `·` 提示符、续行换行 | M1 |
-| **M5** | 补全 debounce | auto-lang | 连打只请求一次 | 无 |
-| **M6** | 渲染打磨批 | .at + 新 module | 见 §M6 验收 | M1（B2/B4） |
-| **M7** | 验证 | — | 全链路回归 | M1–M6 |
+| **M1** | codegen 字符串方法映射 | auto-lang | HistorySearch `to_lower→toLowerCase` + 单测 | 无（前置）✅ |
+| **M2** | ghost text + Ctrl+F/→ | .at | 输入出灰字、接受建议 | M1 ✅ |
+| **M3** | 输入框语法高亮 | .at + 新 module | 命令/串/注释异色 | M1 ✅ |
+| **M4** | 多行续行 | .at + 小 codegen | `·` 提示符、续行换行 | M1 ✅（2026-08-11） |
+| **M5** | 补全 debounce | auto-lang | 连打只请求一次 | 无 ⏳（P5-6） |
+| **M6** | 渲染打磨批 | .at + 新 module | 见 §M6 验收 | M1 ✅ |
+| **M7** | 验证 | — | 全链路回归 | M1–M6 ⏳ |
 
 **建议顺序**：M1（解锁）→ M6（顺手修 B5 + 低风险打磨）→ M2 → M3 → M4 → M5 → M7。
 M6 放 M1 后是因为 B5 被 M1 自动修复，B2/B4 依赖 M1 的字符串映射。
