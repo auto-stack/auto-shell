@@ -38,6 +38,22 @@ fn format_git_label(branch str, staged int, unstaged int, untracked int, conflic
     return label
 }
 
+// compute_git_label — Plan 051 M3 (GAP-A): 安全地从 PromptContext 构造 git_label。
+// 服务端 PromptContext.git_status 是 Option<GitStatusInfo> —— 非 git 目录时为 null,
+// 直接访问 .git_status.staged 会 null 解引用崩溃。此 wrapper 先判空。
+// api.at 把 git_status 擦成非可选 struct(type 层),但 codegen 生成 any,运行时
+// 形状由服务端决定,故这里用 != None 运行时判断。
+fn compute_git_label(pc PromptContext) str {
+    if pc.git_status != None {
+        return format_git_label(pc.git_branch, pc.git_status.staged, pc.git_status.unstaged, pc.git_status.untracked, pc.git_status.conflicted, pc.git_status.ahead, pc.git_status.behind)
+    }
+    // git_status 为 null(非 git 目录):只显示分支名,或空
+    if pc.git_branch != "" {
+        return "⎇ " + pc.git_branch
+    }
+    return ""
+}
+
 store ShellStore {
     model {
         // ── 核心状态 ──
@@ -117,7 +133,7 @@ store ShellStore {
             // (RunResult handler 不会被 renderer 调用 — update_block_in_state
             // 直接在 Rust 侧更新 block,绕过 store handler。故在 Init 拉一次)。
             .git_info = prompt_context()
-            .git_label = format_git_label(.git_info.git_branch, .git_info.git_status.staged, .git_info.git_status.unstaged, .git_info.git_status.untracked, .git_info.git_status.conflicted, .git_info.git_status.ahead, .git_info.git_status.behind)
+            .git_label = compute_git_label(.git_info)
         }
 
         // ── 命令执行 ──
@@ -180,7 +196,11 @@ store ShellStore {
                             st.message = ""
                         } else {
                             st.kind = "Failed"
-                            st.message = .__sse_status
+                            // Plan 051 M3 (GAP-B): 失败时 __sse_status 形状是
+                            // {"Failed": msg}(externally-tagged 枚举),取 .Failed
+                            // 得到错误消息。.__sse_status 类型在 api.at 是 str,
+                            // codegen 擦成 any,JS 动态派发 .Failed 可行。
+                            st.message = .__sse_status.Failed
                         }
                         b.status = st
                         b.output = None
@@ -252,8 +272,8 @@ store ShellStore {
 
         // ── 刷新 git 信息 ──
         .RefreshGit -> {
-            // EDGE-04-A 已修,可用真实 git_info 嵌套字段访问。
-            .git_label = format_git_label(.git_info.git_branch, .git_info.git_status.staged, .git_info.git_status.unstaged, .git_info.git_status.untracked, .git_info.git_status.conflicted, .git_info.git_status.ahead, .git_info.git_status.behind)
+            // Plan 051 M3:经 compute_git_label 安全访问(防 git_status null)。
+            .git_label = compute_git_label(.git_info)
         }
 
         // ── 侧栏 ──
