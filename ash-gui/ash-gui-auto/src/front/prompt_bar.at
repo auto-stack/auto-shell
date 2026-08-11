@@ -43,14 +43,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         }
     }
 
-    // expose .Exit:让 .OnCtrlD 条件调用它(expose 会把 .Exit 标记为 used,
-    // 生成 Exit() 函数;否则无模板引用时函数不存在)
+    // expose .Exit:保留(P5-7 的 mark_self_called_handlers 已能自动识别
+    // handler 间自调用, .Exit/.DoTokenize 无需 expose 也能生成 function;
+    // 这里保留 .Exit expose 兼容旧 codegen,无害)。
     expose {
-        .Exit,
-        // Plan 053 M3 / P5-7: DoTokenize 被 OnInput/AcceptGhost/Word 自调用,
-        // 无模板绑定 → 需 expose 标 used 才生成 function(同 .Exit 模式)。
-        // P5-7 codegen 正解(handler self-call 识别)后可移除。
-        .DoTokenize
+        .Exit
     }
 
     // props: cwd str, home str, command_names []str,
