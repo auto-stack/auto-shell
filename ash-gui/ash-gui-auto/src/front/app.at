@@ -14,16 +14,21 @@ use back.api: command_list, history, complete, run_command, run_smart, prompt_co
 
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
-              ToggleSidebar, OpenPath(str), ClearScreen }
+              ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int) }
 
     model {
         var sidebar_open bool = true
         var injected_command str = ""
+        // Plan 054 M5: 主题(dark/light)。index.css 已定义 .dark 下的 CSS 变量
+        // 覆盖,toggle 切 <html> 的 .dark class 即可生效。
+        var dark_mode bool = false
     }
 
     computed {
         // Plan 053 M6-B2: 标题栏 cwd 缩写(home 前缀 → ~),内联实现。
         cwd_display => if .store.home != "" && .store.cwd.starts_with(.store.home) { "~" + .store.cwd.substr(.store.home.len(), .store.cwd.len()) } else { .store.cwd }
+        // Plan 054 M5: 主题切换图标(dark=☀ / light=🌙)。
+        theme_glyph => if .dark_mode { "☀" } else { "🌙" }
     }
 
     view {
@@ -65,6 +70,11 @@ widget App {
                             style: "text-xs font-mono-ash text-amber-400/80 shrink-0"
                         }
                     }
+                    // Plan 054 M5: 主题切换(ml-auto 推到标题栏右端)。
+                    text .theme_glyph {
+                        onclick: .ToggleTheme
+                        style: "ml-auto text-sm px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 cursor-pointer select-none"
+                    }
                 }
 
                 // Block 列表(可滚动)
@@ -73,7 +83,8 @@ widget App {
                     home: .store.home,
                     on_open_path: .OpenPath,
                     on_rerun: .Rerun,
-                    on_stop: .Stop
+                    on_stop: .Stop,
+                    on_delete: .DeleteBlock
                 )
 
                 // 命令输入
@@ -135,12 +146,25 @@ widget App {
             store.ClearScreen()
         }
 
+        // Plan 054 M3: 删除指定 block(BlockItem ✕ 按钮 → BlockList → 此处)。
+        .DeleteBlock(id) -> {
+            store.DeleteBlock(id)
+        }
+
         .Exit -> {
             // 在 Tauri 版调用 window.close();在浏览器版无操作
         }
 
         .ToggleSidebar -> {
             .sidebar_open = !.sidebar_open
+        }
+
+        // Plan 054 M5: 切主题。document.documentElement.classList.toggle("dark")
+        // 由 ts_adapter 透传(navigator API 同模式,M6-B3 已验证)。切换后同步
+        // .dark_mode 驱动图标(☀/🌙)。
+        .ToggleTheme -> {
+            document.documentElement.classList.toggle("dark")
+            .dark_mode = !.dark_mode
         }
     }
 }

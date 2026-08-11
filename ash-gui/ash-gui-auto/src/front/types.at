@@ -68,6 +68,8 @@ type Block {
     output RenderedOutput
     streamed_text str
     duration_ms int
+    // Plan 054 M2: 子进程退出码(对齐 CLI $?)。
+    exit_code int
 }
 
 // ═══════════════════════════════════════════════════════════

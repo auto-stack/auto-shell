@@ -215,6 +215,8 @@ pub fn spawn() -> ShellHandle {
                                     status,
                                     output,
                                     duration_ms: started.elapsed().as_millis() as u64,
+                                    // Plan 054 M2: child exit code (0 = success).
+                                    exit_code: shell.last_exit_code(),
                                 },
                             ));
                             let _ = append_history(&cmd);

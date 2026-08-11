@@ -7,8 +7,8 @@
 use block_item: BlockItem
 use types: Block
 
-widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg) {
-    msg Msg { OpenPath(str), Rerun(str), Stop }
+widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg) {
+    msg Msg { OpenPath(str), Rerun(str), Stop, DeleteBlock(int) }
 
     view {
         col {
@@ -35,7 +35,8 @@ widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: ms
                     home: .home,
                     on_open_path: .OpenPath,
                     on_rerun: .Rerun,
-                    on_stop: .Stop
+                    on_stop: .Stop,
+                    on_delete: .DeleteBlock
                 )
             }
         }
@@ -45,5 +46,7 @@ widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: ms
         .OpenPath(path) -> { }
         .Rerun(cmd) -> { }
         .Stop -> { }
+        // Plan 054 M3: 透传 BlockItem 的删除回调给父级(App → store)。
+        .DeleteBlock(id) -> { }
     }
 }

@@ -7,8 +7,8 @@
 use block_body: BlockBody
 use types: Block
 
-widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg) {
-    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand, ToggleCollapse }
+widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg) {
+    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand, CopyOutput, DeleteBlock(int), ToggleCollapse }
 
     model {
         // Plan 049:点击标题行折叠/展开 body。
@@ -27,6 +27,9 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
         // Plan 053 M6-B1: 拍平为单层 if/else-if/else(worktree 缺 plan-408 嵌套
         // if codegen 修复,嵌套 if 的内层分支会漏 return → undefined)。
         duration_label => if .block.duration_ms > 1000 { ((.block.duration_ms / 1000).str() + "s") } else if .block.duration_ms > 0 { (.block.duration_ms.str() + "ms") } else { "" }
+        // Plan 054 M2: 退出码 label + 颜色(非 0 标红,对齐 CLI $?)。
+        exit_label => ":" + .block.exit_code.str()
+        exit_cls => if .block.exit_code != 0 { "text-red-400" } else { "text-muted-foreground" }
         // Plan 049:折叠指示符。
         collapse_glyph => if .collapsed { "▸" } else { "▾" }
     }
@@ -68,9 +71,19 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
                             onclick: .CopyCommand
                             style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
                         }
+                        // Plan 054 M3: 复制输出文本(output.Text 变体)。
+                        button "📋" {
+                            onclick: .CopyOutput
+                            style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                        }
                         button "↻" {
                             onclick: .Rerun(.block.command)
                             style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                        }
+                        // Plan 054 M3: 删除此 block(回调父级 store.DeleteBlock)。
+                        button "✕" {
+                            onclick: .DeleteBlock(.block.id)
+                            style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
                         }
                     }
                     text .status_glyph {
@@ -80,6 +93,12 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
                     if .duration_label != "" {
                         text .duration_label {
                             style: "text-[10px] h-5 font-mono-ash text-muted-foreground"
+                        }
+                    }
+                    // Plan 054 M2: 退出码(完成时显示,非 0 标红)。
+                    if .block.status.kind == "Success" || .block.status.kind == "Failed" {
+                        text .exit_label {
+                            style: "text-[10px] h-5 font-mono-ash " + .exit_cls
                         }
                     }
                 }
@@ -126,6 +145,17 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
                 navigator.clipboard.writeText(.block.command)
             }
         }
+        // Plan 054 M3: 复制输出文本到剪贴板(目前支持 Text 变体;Table/Code
+        // 等结构化输出暂只复制其 Text 字段或空)。
+        .CopyOutput -> {
+            if navigator.clipboard != null {
+                if .block.output.Text != None {
+                    navigator.clipboard.writeText(.block.output.Text)
+                }
+            }
+        }
+        // Plan 054 M3: 删除回调(空 handler — renderer emit on_delete 给父级)。
+        .DeleteBlock(id) -> { }
         .OpenPath(path) -> { }
     }
 }

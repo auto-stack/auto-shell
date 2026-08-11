@@ -6,7 +6,7 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream
+use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel
 use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput
 
 // format_git_label — APP-05/06:格式化 git 分支+状态标签。
@@ -100,6 +100,8 @@ store ShellStore {
         // RunResult handler 判断它为空时回退到 streamed_text。
         var __sse_output RenderedOutput = RenderedOutput{}
         var __sse_duration_ms int = 0
+        // Plan 054 M2: SSE 透传的退出码(对齐 CLI $?)。
+        var __sse_exit_code int = 0
         var __pending_command_id int = 0
         var __pending_command_str str = ""
     }
@@ -108,7 +110,7 @@ store ShellStore {
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen,
-              OpenPath(str) }
+              OpenPath(str), DeleteBlock(int) }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -146,14 +148,29 @@ store ShellStore {
         // struct literals for state structs ("Undefined variable: self").
         // Build via empty literal + field assignment (verified pattern).
         .RunCommand(cmd) -> {
-            // M1:VM 对嵌套 struct 字段赋值(block.status = BlockStatus{...})
-            // 在 handler 连续调用路径下崩溃(Stack Underflow)。故 store 只记
-            // pending{block_id, cmd},block 由 renderer 的 RunCommand 拦截在
-            // Rust 侧构造(含 Running status)后 push 进 blocks。
+            // Plan 054 M1:vue/HTTP 模式 store 自己 push Running block(无 renderer
+            // 桥) + 发命令到后端。VM 模式 renderer 拦截 RunCommand 构造 block,
+            // 此处的 push/run_command 由 VM mock 或 renderer 处理(兼容)。
             var id int = .next_id
             .next_id = .next_id + 1
+            var block Block = Block{}
+            block.id = id
+            block.command = cmd
+            block.cwd = .cwd
+            var st BlockStatus = BlockStatus{}
+            st.kind = "Running"
+            st.message = ""
+            block.status = st
+            block.output = None
+            block.streamed_text = ""
+            block.duration_ms = 0
+            block.exit_code = 0
+            .blocks.push(block)
+            // VM renderer 桥接信号(保留 — renderer 读此提交执行器线程)
             .__pending_command_id = id
             .__pending_command_str = cmd
+            // HTTP 模式:POST /api/run_command,结果经 /api/stream SSE 推回
+            run_command(id, cmd)
         }
 
         // ── 流式输出块(逐行追加到 Running block) ──
@@ -201,6 +218,7 @@ store ShellStore {
                         }
                         b.streamed_text = ""
                         b.duration_ms = .__sse_duration_ms
+                        b.exit_code = .__sse_exit_code
                     } else {
                         if .__sse_status == "Cancelled" {
                             st.kind = "Cancelled"
@@ -217,6 +235,7 @@ store ShellStore {
                         b.output = None
                         b.streamed_text = ""
                         b.duration_ms = .__sse_duration_ms
+                        b.exit_code = .__sse_exit_code
                     }
                 }
             }
@@ -227,6 +246,9 @@ store ShellStore {
         // 此 for 循环实际不执行。真正的取消(CMD-06 只停首个 + 进程 kill)在
         // renderer 的 Cancel 拦截里用 Rust 完成。保留此 handler 供非 vm 路径。
         .Cancel -> {
+            // Plan 054 M1:HTTP 模式 POST /api/cancel(后端 kill 子进程)。
+            // VM 模式 cancel() 是 mock no-op,真取消由 renderer 拦截完成。
+            cancel()
             for b in .blocks {
                 if b.status.kind == "Running" {
                     var st BlockStatus = BlockStatus{}
@@ -300,6 +322,17 @@ store ShellStore {
         // ── 清屏(归档所有 blocks) ──
         .ClearScreen -> {
             .blocks = List<Block>.new([])
+        }
+
+        // Plan 054 M3: 删除指定 block(按 id 过滤,保留其余)。
+        .DeleteBlock(id) -> {
+            var kept List<Block> = List<Block>.new([])
+            for b in .blocks {
+                if b.id != id {
+                    kept.push(b)
+                }
+            }
+            .blocks = kept
         }
     }
 }

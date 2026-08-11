@@ -86,6 +86,10 @@ pub struct CommandResult {
     pub status: CommandStatus,
     pub output: CommandOutputPayload,
     pub duration_ms: u64,
+    /// Plan 054 M2: numeric exit code from the child process (0 = success,
+    /// non-zero = failure). Mirrors CLI `$?`. The frontend can show it next
+    /// to the status glyph.
+    pub exit_code: i32,
 }
 
 #[derive(Serialize, Clone)]
