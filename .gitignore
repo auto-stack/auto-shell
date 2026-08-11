@@ -42,3 +42,4 @@ ash-gui/ash-gui-auto/examples/
 __pycache__/
 *.pyc
 .pytest_cache/
+*.auto/

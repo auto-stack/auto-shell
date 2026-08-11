@@ -231,10 +231,17 @@ pub fn open_path(path str) {
 /// `RunOutput`/`RunResult` action。api.ts 里不再生成(永不调用的)`stream()` fetch fn。
 /// GET /api/stream
 //
-// M0 临时注释:VM 路径目前无法链接 ~Stream<T> 返回类型(整个 api 模块因此 link
-// 失败,所有 api.X 变 undefined)。M1 SSE 桥会恢复此端点。vm 模式下流式输出
-// 暂不可用——block 会停在 Running(smoke 测试只验证 UI 能开 + MCP 能连)。
-// #[api(method = "GET", path = "/api/stream")]
-// pub fn stream() ~Stream<ShellEvent> {
-//     return shell.subscribe()
-// }
+// Plan 051 M1:解注。plan 050 R1 已证伪"VM 无法链接 ~Stream<T>"的旧归因——
+// VM link 只看符号名(loader.rs),与返回类型无关;真因是 BUG-A/B/C(均为 handler
+// 间符号缺失,见 ash-gui-native-plan §9.7)。subscribe() 无 yield,VM 当普通函数
+// 处理,正常 export/link。
+//
+// vue 模式:codegen 从此端点 + ~Stream<ShellEvent> 自动注入 EventSource 到 store
+// composable(见 auto-lang ui_gen/vue.rs SSE wiring),dispatch 经 ②-b 预置字段
+// 模式(plan 051 M2)填 __sse_* ref 后调无参 RunOutput/RunResult。
+// VM --merged 模式:此端点被 codegen 注册为 api route,但命令执行仍由 renderer
+// 的 merged_exec_loop 拦截(维持现状),不依赖此 SSE 流。
+#[api(method = "GET", path = "/api/stream")]
+pub fn stream() ~Stream<ShellEvent> {
+    return shell.subscribe()
+}

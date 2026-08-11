@@ -6,7 +6,7 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_smart, prompt_context, history, open_path
+use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream
 use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput
 
 // format_git_label — APP-05/06:格式化 git 分支+状态标签。

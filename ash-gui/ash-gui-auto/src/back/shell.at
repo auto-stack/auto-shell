@@ -12,7 +12,6 @@
 // - prompt_context/complete/read_history:静态 mock,待 M4 接 ash-core。
 
 use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
-use.rust std::process::Command
 
 // ── command_list:返回完整工具表(79 命令,对齐 ash-core registry)──
 pub fn command_list() BootSnapshot {
@@ -400,42 +399,21 @@ pub fn complete(line str, cursor int) []CompletionItem {
     return items
 }
 
-// ── prompt_context:用 git 命令获取真实分支名 + status 统计 ──
-// 对齐 vue 版 ash-core:git rev-parse 取分支,git status --porcelain 统计。
-// 注:非 git 目录时 git 命令返回非零,unwrap 会 panic —— 调用方需确保在 git 仓库。
+// ── prompt_context:返回 git 分支/状态(静态 mock) ──
+// plan-044 曾升级为 Command FFI(git rev-parse)读真实分支,但 use.rust
+// std::process::Command 的实例方法链在 VM 有 CALL_SPEC 静态分发 bug
+// (`c.args()` receiver 变成类型名字符串 → invalid Command handle),
+// standalone 与 AutoVM server 都复现(auto-lang b965b90b 后续诊断)。
+// 改用 File.read_text 读 .git/HEAD 后,trim/split 等字符串操作在 server
+// 模块上下文同样产出垃圾值。故保持静态 mock,与 vue 版对齐待 M4 接 ash-core。
 pub fn prompt_context() PromptContext {
     var pc PromptContext = PromptContext{}
-    var branch_out = Command.new("git").args(["rev-parse", "--abbrev-ref", "HEAD"]).output().unwrap()
-    var branch str = String.from_utf8(branch_out.stdout).unwrap()
-    pc.git_branch = branch.trim()
+    pc.git_branch = "main"
     var gs GitStatusInfo = GitStatusInfo{}
-    var status_out = Command.new("git").args(["status", "--porcelain"]).output().unwrap()
-    var status_str str = String.from_utf8(status_out.stdout).unwrap()
-    var lines []str = status_str.split("\n")
-    var staged int = 0
-    var unstaged int = 0
-    var untracked int = 0
-    var conflicted int = 0
-    for line in lines {
-        if line.len() >= 2 {
-            var x str = line.substr(0, 1)
-            var y str = line.substr(1, 1)
-            if x == "?" && y == "?" {
-                untracked = untracked + 1
-            } else {
-                if x != " " && x != "?" {
-                    staged = staged + 1
-                }
-                if y != " " && y != "?" {
-                    unstaged = unstaged + 1
-                }
-            }
-        }
-    }
-    gs.staged = staged
-    gs.unstaged = unstaged
-    gs.untracked = untracked
-    gs.conflicted = conflicted
+    gs.staged = 0
+    gs.unstaged = 0
+    gs.untracked = 0
+    gs.conflicted = 0
     gs.ahead = 0
     gs.behind = 0
     pc.git_status = gs
@@ -460,8 +438,9 @@ pub fn open_path(path str) {
     // mock no-op
 }
 
-// ── subscribe:SSE 流。M0 临时注释:VM 无法链接 ~Stream<T>(见 api.at 注释)。
-// M1 SSE 桥恢复。
-// pub fn subscribe() ~Stream<ShellEvent> {
-//     return Stream<ShellEvent>.empty()
-// }
+// ── subscribe:SSE 流(Plan 051 M1:解注,见 api.at 注释)
+// VM mock:返回空 stream(VM --merged 命令执行由 renderer 拦截,不依赖此流)。
+// vue 模式:真实 SSE 由 ash-server 的 /api/stream 端点提供,不经此 mock。
+pub fn subscribe() ~Stream<ShellEvent> {
+    return Stream<ShellEvent>.empty()
+}
