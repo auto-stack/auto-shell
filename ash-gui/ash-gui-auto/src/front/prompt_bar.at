@@ -133,7 +133,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     // GET_FIELD 编码问题,用参数传递规避;vue 端等价)。
                     textarea {
                         value: .input
-                        oninput: .OnInput
+                        oninput: .OnInputComplete
                         onkeyup: .OnInput
                         onenter: .OnEnter(.input)
                         onkeydown.ctrl.r: .ToggleHistorySearch
@@ -271,14 +271,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .in_continuation = false
         }
 
-        // 输入变化 → 后端补全(v-model 已把 .input 更新为当前文本)
+        // Plan 053 M5/P5-6: 输入变化的「立即部分」(ghost text + tokenize +
+        // 续行)绑 onkeyup。后端补全(complete)拆到 .OnInputComplete(下),
+        // 绑 oninput 走 codegen 注入的 80ms debounce + 序列号守卫 —— 避免
+        // 每次 keyup 打后端,且过期结果不覆盖最新建议。
         .OnInput -> {
-            if .input.trim() != "" {
-                var items []CompletionItem = complete(.input, .input.len())
-                .suggestions = items
-            } else {
-                .suggestions = []
-            }
             // Plan 053 M2: ghost text = 以当前输入为前缀的最长历史条目
             // (去掉已输入前缀,只留建议续接)。对齐 vue 原版 PromptBar.vue:299-328。
             // 倒序遍历历史,找 starts_with(input) 且更长的条目里最长的那个。
@@ -303,6 +300,29 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             // Plan 053 M4: 重新算续行标志(未闭合分隔符/引号/尾随 \),驱动
             // prompt 符号切换 + Enter 行为。
             .DoContinuation()
+            // Plan 053 M5: 兜底触发补全。vue 端 OnInputComplete 自带
+            // setTimeout(80ms) 包装 —— oninput 绑定 + 此处自调都经过它的
+            // clearTimeout 合并,停顿后最终只请求一次(对齐 vue 原版 debounce)。
+            // VM 端无 setTimeout 且 textarea 事件支持有限(M3 tokenize 已标注
+            // 「仅 vue 可靠」),此处自调保证 VM 模式经 onkeyup 也能同步取到
+            // 补全建议,不因拆分而丢失。
+            .OnInputComplete()
+        }
+
+        // Plan 053 M5/P5-6: 后端补全(complete)独立 handler,绑 oninput。
+        // .at 无定时器(native_catalog 全表无 setTimeout/debounce),debounce
+        // 由 vue codegen 识别「body 含 complete 调用」自动注入:整个 body 包
+        // setTimeout(80ms) + __completeSeq 序列号;state-ref 赋值(.suggestions=)
+        // 加 if(__seq===__completeSeq) 守卫,丢弃过期结果(对齐 vue 原版
+        // PromptBar.vue:60-84 的 completeTimer/completeSeq)。
+        // VM 模式无 setTimeout,本 handler 同步执行 complete(与拆分前等价)。
+        .OnInputComplete -> {
+            if .input.trim() != "" {
+                var items []CompletionItem = complete(.input, .input.len())
+                .suggestions = items
+            } else {
+                .suggestions = []
+            }
         }
 
         // Plan 053 M4: 续行检测 — 未闭合 { } ( ) [ ] / 引号 / 尾随 \ 时置

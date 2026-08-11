@@ -1,7 +1,7 @@
 # Plan 053: ash-gui-auto 对齐 vue 原版 — 输入体验与渲染打磨
 
 > **日期**: 2026-08-11
-> **状态**: 🔄 实施中（M1-M4/M6 完成，M5 待 P5-6 debounce codegen）
+> **状态**: ✅ 实施完成（M1-M6 全完成；M5 debounce codegen 收尾）
 > **来源**: 全面对比 `ash-gui-vue`（手写原版）与 `ash-gui-auto`（AutoLang 生成版）的功能差距
 > **范围**: `ash-gui-auto/src/front/*.at`（AutoLang 源码）+ `auto-lang` 仓库的 Vue codegen（必要的基础设施修复）
 > **核心目标**: 让 auto 版的**输入体验**（ghost text / 语法高亮 / 多行续行 / 补全 debounce）与**渲染打磨**对齐 vue 原版，使两版在 vue 模式下功能等价。
@@ -298,6 +298,44 @@ Plan 043 把手写 `ash-gui-vue` 反生成为 `.at` 源码驱动的 `ash-gui-aut
 
 **验收**：快速连打 `lslsls` 时，complete 只在停顿后请求一次（Network 面板观察），无过期结果闪烁。
 
+**实施纪要（2026-08-11）**（实际与计划差异）：
+- **路线选择**：计划三方案（codegen 注入 / 产物手写 / 去掉 debounce），实际取
+  **.at 拆分 + codegen 包装 + seq 守卫** —— 把 `OnInput` 的 complete 块拆到独立
+  `.OnInputComplete` handler（对齐 vue 原版 `refreshCompletions` 的独立结构），
+  `OnInput`（ghost/tokenize/continuation，立即）绑 `onkeyup`、`OnInputComplete`
+  （complete，debounced）绑 `oninput`。比纯 codegen AST 自动分离（方案 K）务实可控，
+  符合 M4 纪要的 workaround-优先风格；`.at` 拆分反而让 handler 职责更清晰。
+- **codegen 改动**（auto-shell worktree，commit 见下）：
+  - `ts_adapter.rs`：`AuraTsContext` 加 `debounce_seq_var: Option<String>` +
+    `with_debounce_seq_var`；`transpile_stmt` 的 `Stmt::Expr` 分支前置守卫——
+    `Expr::Bina(lhs, Op::Asn, _)` 且 lhs 是 self-state-ref（`.suggestions`）时，
+    输出 `if (__seq === __completeSeq) { ... }` 包裹赋值。新增 `assign_target_is_state_ref`。
+  - `vue.rs`：新增 `stmts_call_complete`（复用 `extract_api_calls_from_ast_stmts` 骨架，
+    裸名比对 `complete`，**不**用全 api 集——避免 `run_command` 等 eager handler 被误判）；
+    `VueGenerator` 加 `debounced_handlers: HashSet`，`generate_script` 开头填充；
+    state_vars 循环后注入顶层 `let __completeTimer/__completeSeq`；新增
+    `generate_debounced_handler_body`（包 `setTimeout(async()=>{...},80)` +
+    `clearTimeout` + `++__completeSeq`），抽 `handler_ts_ctx` helper 复用 ctx 构建；
+    收集循环分派 + `is_async` 协调（debounced → false，async/await 移入回调）。
+- **产物验证**（`gen/PromptBar.vue`）：顶层 `let __completeTimer: ReturnType<typeof
+  setTimeout> | null` + `let __completeSeq = 0`；`OnInputComplete(): void`（同步）body =
+  `clearTimeout` + `++__completeSeq` + `setTimeout(async () => { if (...) { let items =
+  await complete(...); if (__seq === __completeSeq) suggestions.value = items } else {...} }, 80)`；
+  `OnInput(): void` 只含 ghost/tokenize/continuation；textarea `@input="OnInputComplete"
+  @keyup="OnInput"`。
+- **seq 守卫的必要性**：clearTimeout 只取消未触发的 timer，**已触发正在 await 的旧
+  complete 无法取消**——若旧请求慢于新请求，旧结果 resolve 后会覆盖新结果。守卫在
+  赋值处（`if (__seq === __completeSeq)`）确保只有最新 seq 的结果写入。vue 原版同理。
+- **VM 兜底**：VM 无 setTimeout，且 textarea 事件支持有限（M3 tokenize 已标注「仅
+  vue 可靠」）。为避免拆分后 VM 端 complete 建议丢失（VM 可能仅触发 onkeyup，而
+  `OnInputComplete` 绑 oninput），`OnInput` 末尾自调 `.OnInputComplete()` —— vue 端
+  多次调用经 setTimeout `clearTimeout` 合并（仍只请求一次），VM 端靠 onkeyup 同步
+  触发 complete（与拆分前等价，无回归）。debounce 是 vue 体验优化，VM 模式同步即可。
+- **验证**：codegen 单测 3 条（`test_plan053_p56_*`）+ 既有 7 条 plan053 全通过；
+  `cargo check` 0 error；`vite build` 成功（11s）。`vue-tsc` 的 store 类型错误是
+  pre-existing（§6 C 类型擦除工作面），与 P5-6 无关。
+- **GUI 端到端**（Network 面板连打观察）：codegen 层验证充分，建议手动跑一遍确认。
+
 ---
 
 ### M6: 渲染打磨批（B1 + B2 + B3 + B4）
@@ -371,7 +409,7 @@ Plan 043 把手写 `ash-gui-vue` 反生成为 `.at` 源码驱动的 `ash-gui-aut
 | **M2** | ghost text + Ctrl+F/→ | .at | 输入出灰字、接受建议 | M1 ✅ |
 | **M3** | 输入框语法高亮 | .at + 新 module | 命令/串/注释异色 | M1 ✅ |
 | **M4** | 多行续行 | .at + 小 codegen | `·` 提示符、续行换行 | M1 ✅（2026-08-11） |
-| **M5** | 补全 debounce | auto-lang | 连打只请求一次 | 无 ⏳（P5-6） |
+| **M5** | 补全 debounce | auto-lang + .at | 连打只请求一次 | 无 ✅（P5-6） |
 | **M6** | 渲染打磨批 | .at + 新 module | 见 §M6 验收 | M1 ✅ |
 | **M7** | 验证 | — | 全链路回归 | M1–M6 ⏳ |
 
