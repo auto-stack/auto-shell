@@ -27,6 +27,15 @@ type CodeSpan {
     italic bool
 }
 
+/// 输入框语法高亮的一个着色片段(Plan 053 M3)
+/// text=token 文本, color=inline CSS(如 "color:#34d399;font-weight:bold")。
+/// 用 inline CSS 而非 Tailwind class: .at codegen 的动态 class 拼接走 :style
+/// (非 :class), inline CSS 正好适配; Tailwind 动态 :class 是 codegen 限制(P5-7)。
+type HighlightSpan {
+    text str
+    color str
+}
+
 /// 渲染单元格:纯文本 或 带标签的文本
 type RenderedCell {
     text str

@@ -7,14 +7,14 @@
 use shell_store: ShellStore
 use history_search: HistorySearch
 use back.api: complete
-use types: CompletionItem
+use types: CompletionItem, HighlightSpan
 
 widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {
     msg Msg { Run(str), Injected, Clear, Exit,
               HistoryOlder, HistoryNewer,
               PickCompletion(CompletionItem),
               ToggleHistorySearch,
-              AcceptGhost, AcceptGhostWord, OnCtrlL }
+              AcceptGhost, AcceptGhostWord, OnCtrlL, DoTokenize }
 
     computed {
         // Plan 053 M6-B2: cwd 缩写(home 前缀 → ~),内联实现。
@@ -28,6 +28,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         var history_open bool = false
         var suggestions []CompletionItem = []
         var ghost_text str = ""
+        var highlighted_spans []HighlightSpan = []
     }
 
     // 侧栏点击工具 → 填入输入框(原生 PromptBar 的 injectedCommand watch)
@@ -105,6 +106,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     // overlay 层:absolute 覆盖 input 区域,显示 input + ghost
                     row {
                         style: "pointer-events-none absolute inset-0 flex items-center text-sm font-mono-ash whitespace-pre overflow-hidden"
+                        // Plan 053 M3: 语法高亮推迟(complex handler codegen 限制,P5)。
+                        // 暂显示原色 input(M2 ghost text overlay 保持工作)。
                         text .input {
                             style: "text-foreground/90"
                         }
@@ -142,11 +145,116 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
     }
 
     on {
+        // Plan 053 M3: 重新 tokenize .input 写 highlighted_spans。
+        // 内联 tokenize:widget 文件的顶层 module fn 不被 codegen,store 的
+        // module fn 又不能被 widget use 导入(只认 store/widget),故把状态机
+        // 直接写在 handler 里。用 break(支持)代替 continue(不支持);
+        // color 用 inline CSS(.at 动态 class 走 :style,P5-7)。仅 vue 可靠。
+        .DoTokenize -> {
+            var spans []HighlightSpan = []
+            var line str = .input
+            var n int = line.len()
+            var i int = 0
+            var first_word bool = true
+            var idc str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+            var builtins str = " cd ls l echo cat grep mkdir rm cp mv touch find glob stat du file tee ln head tail sort uniq wc cut tr split rev column diff select get where update insert each build run http_get http_post http_put http_delete pwd help clear exit quit q set export unset use alias unalias source history ps sys which version up u b less more color completions config bind abbr hook def pushd popd dirs env date sleep "
+            for i < n {
+                var c str = line.char_at(i)
+                if c == "#" && (i == 0 || line.char_at(i - 1) == " " || line.char_at(i - 1) == "\t") {
+                    spans.push(HighlightSpan{text: line.substr(i, n), color: "color:#9ca3af;font-style:italic"})
+                    break
+                } else if c == " " || c == "\t" {
+                    var j int = i
+                    for j < n {
+                        var cj str = line.char_at(j)
+                        if cj == " " || cj == "\t" { j = j + 1 } else { break }
+                    }
+                    spans.push(HighlightSpan{text: line.substr(i, j), color: "color:#e5e7eb"})
+                    i = j
+                    first_word = false
+                } else if c == "\"" || c == "'" {
+                    var quote str = c
+                    var j int = i + 1
+                    for j < n {
+                        if line.char_at(j) != quote {
+                            if quote == "\"" && line.char_at(j) == "\\" && j + 1 < n { j = j + 1 }
+                            j = j + 1
+                        } else { break }
+                    }
+                    var e int = j + 1
+                    if e > n { e = n }
+                    spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#fcd34d"})
+                    i = e
+                    first_word = false
+                } else if c == "$" {
+                    var j int = i + 1
+                    if j < n && line.char_at(j) == "{" {
+                        for j < n {
+                            if line.char_at(j) != "}" { j = j + 1 } else { break }
+                        }
+                        var e int = j + 1
+                        if e > n { e = n }
+                        spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#f87171"})
+                        i = e
+                    } else {
+                        for j < n {
+                            if idc.contains(line.char_at(j)) { j = j + 1 } else { break }
+                        }
+                        spans.push(HighlightSpan{text: line.substr(i, j), color: "color:#f87171"})
+                        i = j
+                    }
+                    first_word = false
+                } else if c == "|" || c == ";" || (c == "&" && i + 1 < n && line.char_at(i + 1) == "&") {
+                    var ol int = 1
+                    if c == "|" && i + 1 < n && line.char_at(i + 1) == "|" { ol = 2 }
+                    if c == "&" { ol = 2 }
+                    var e int = i + ol
+                    if e > n { e = n }
+                    spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#f472b6;font-weight:bold"})
+                    i = e
+                    first_word = true
+                } else if c == ">" || c == "<" {
+                    var rl int = 1
+                    if c == ">" && i + 1 < n && line.char_at(i + 1) == ">" { rl = 2 }
+                    var e int = i + rl
+                    if e > n { e = n }
+                    spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#9ca3af"})
+                    i = e
+                    first_word = false
+                } else {
+                    var j int = i
+                    for j < n {
+                        var cj str = line.char_at(j)
+                        if cj == " " || cj == "\t" || cj == "\"" || cj == "'" || cj == "$" || cj == "|" || cj == "&" || cj == ";" || cj == "#" || cj == ">" || cj == "<" { break }
+                        j = j + 1
+                    }
+                    var word str = line.substr(i, j)
+                    if first_word {
+                        if builtins.contains(" " + word + " ") {
+                            spans.push(HighlightSpan{text: word, color: "color:#34d399;font-weight:bold"})
+                        } else {
+                            spans.push(HighlightSpan{text: word, color: "color:#7dd3fc"})
+                        }
+                        first_word = false
+                    } else {
+                        if word.starts_with("-") && word.len() > 1 {
+                            spans.push(HighlightSpan{text: word, color: "color:#d8b4fe"})
+                        } else {
+                            spans.push(HighlightSpan{text: word, color: "color:#e5e7eb"})
+                        }
+                    }
+                    i = j
+                }
+            }
+            .highlighted_spans = spans
+        }
+
         // 纯转发:清状态后由自动 emit('Run', cmd) 发给父级(App.RunCommand 执行)
         .Run(cmd) -> {
             .input = ""
             .history_cursor = -1
             .suggestions = []
+            .highlighted_spans = []
         }
 
         // 输入变化 → 后端补全(v-model 已把 .input 更新为当前文本)
@@ -176,6 +284,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 }
                 .ghost_text = best_ghost
             }
+            // Plan 053 M3: 输入框语法高亮 span(tokenize 整行)。
+            .highlighted_spans = []
         }
 
         .PickCompletion(item) -> {
@@ -201,6 +311,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .history_open = false
             .in_continuation = false
             .ghost_text = ""
+            .highlighted_spans = []
         }
 
         // Ctrl+D:空输入时请求退出(像 bash);有输入时不动作
@@ -254,6 +365,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .history_open = false
             .in_continuation = false
             .ghost_text = ""
+            .highlighted_spans = []
         }
 
         // 退出请求(Ctrl+D 空输入触发 → emit('Exit') → App 处理;浏览器无操作)
@@ -265,6 +377,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .input = .input + .ghost_text
                 .ghost_text = ""
                 .suggestions = []
+                .highlighted_spans = []
             }
         }
 
@@ -287,6 +400,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     .input = .input + take
                     .ghost_text = ""
                     .suggestions = []
+                    .highlighted_spans = []
                 }
             }
         }
