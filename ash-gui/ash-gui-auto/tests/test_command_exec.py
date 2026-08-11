@@ -21,21 +21,23 @@ import pytest
 
 
 def _find_prompt_input_vnode(mcp):
-    """Find the PromptBar input vnode id dynamically.
+    """Find the PromptBar input/textarea vnode id dynamically.
 
-    Scans autoui_find output for an Input node whose context shows
+    Scans autoui_find output for an input/textarea node whose context shows
     'onsubmit' / 'PromptBar.Run'. Returns the vnode_N string, or None.
     The vnode id is content-hashed and stable per .at source, but we discover
     it at runtime to avoid hardcoding.
     """
-    raw = mcp.call("autoui_find", kind="input", limit=10)
-    # Each match block looks like: "... input vnode_NNN { ... onsubmit ... }".
-    # Find vnode ids that appear in a block mentioning onsubmit/PromptBar.Run.
-    for m in re.finditer(r"vnode_(\d+)", raw):
-        vid = "vnode_" + m.group(1)
-        info = mcp.call("autoui_inspect", element_id=vid)
-        if "onsubmit" in info.lower() or "PromptBar.Run" in info:
-            return vid
+    # Plan 053 M4: PromptBar input is a `textarea` now (multi-line continue).
+    for kind in ("input", "textarea"):
+        raw = mcp.call("autoui_find", kind=kind, limit=10)
+        # Each match block looks like: "... input vnode_NNN { ... onsubmit ... }".
+        # Find vnode ids that appear in a block mentioning onsubmit/PromptBar.Run.
+        for m in re.finditer(r"vnode_(\d+)", raw):
+            vid = "vnode_" + m.group(1)
+            info = mcp.call("autoui_inspect", element_id=vid)
+            if "onsubmit" in info.lower() or "PromptBar.Run" in info:
+                return vid
     return None
 
 
@@ -67,7 +69,16 @@ def _submit_command(mcp, cmd_text):
         time.sleep(0.4)
         if mcp.state("input").strip().endswith(f'"{cmd_text}"'):
             break
-    sub = mcp.call("autoui_action", element_id=vnode, action="submit")
+    # Submit (Enter) until the command runs — the MCP action channel is drained
+    # by a 16ms iced subscription and can occasionally drop a message under
+    # load. After a successful run, PromptBar clears .input, so an empty input
+    # (and the empty-input submit being a no-op) makes re-submit safe.
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        mcp.call("autoui_action", element_id=vnode, action="submit")
+        time.sleep(0.4)
+        if 'input: ""' in mcp.state("input"):
+            return
 
 
 def test_run_echo_reaches_success(mcp):

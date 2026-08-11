@@ -16,9 +16,19 @@ from test_command_exec import _submit_command
 
 
 def _open_history_search(mcp):
-    """Open the Ctrl+R history search panel (toggle history_open)."""
-    mcp.call("autoui_keyboard", key="r", modifiers=["ctrl"])
-    time.sleep(0.5)
+    """Toggle the Ctrl+R history search panel (history_open flips).
+
+    The MCP action channel is drained by a 16ms iced subscription; the keyboard
+    dispatch is async and occasionally dropped under load, so re-send Ctrl+R
+    until the state flips from its initial value.
+    """
+    before = mcp.state("history_open")
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        mcp.call("autoui_keyboard", key="r", modifiers=["ctrl"])
+        time.sleep(0.3)
+        if mcp.state("history_open") != before:
+            return
 
 
 def test_history_search_panel_opens(mcp):

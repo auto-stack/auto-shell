@@ -14,11 +14,14 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
               HistoryOlder, HistoryNewer,
               PickCompletion(CompletionItem),
               ToggleHistorySearch,
-              AcceptGhost, AcceptGhostWord, OnCtrlL, DoTokenize }
+              AcceptGhost, AcceptGhostWord, OnCtrlL, DoTokenize,
+              OnEnter(str), DoContinuation }
 
     computed {
         // Plan 053 M6-B2: cwd 缩写(home 前缀 → ~),内联实现。
         cwd_display => if .home != "" && .cwd.starts_with(.home) { "~" + .cwd.substr(.home.len(), .cwd.len()) } else { .cwd }
+        // Plan 053 M4: prompt 符号 — 续行时 `·`,正常 `❯`(对齐 repl.rs:913)。
+        prompt_symbol => if .in_continuation { "·" } else { "❯" }
     }
 
     model {
@@ -90,7 +93,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     on_close: .ToggleHistorySearch
                 )
 
-                text "❯" {
+                text .prompt_symbol {
                     style: "font-mono-ash select-none shrink-0"
                 }
                 text .cwd_display {
@@ -121,11 +124,18 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     // onkeyup 触发补全(v-model 会吞 oninput 事件,用 keyup 兜底);
                     // 键盘快捷键:Ctrl+R 搜索 / Ctrl+F 接受建议 / Ctrl+→ 接受一词 /
                     // Ctrl+L 清屏 / Ctrl+D 退出 / Ctrl+C 清输入 / ↑↓ 历史 / Tab 补全。
-                    input {
+                    //
+                    // Plan 053 M4: input → textarea(支持多行续行)。Enter 由
+                    // onenter(.OnEnter(.input)) 处理:未闭合分隔符/引号/尾随 \
+                    // 时放行换行(续行),否则执行。textarea 的 Enter 默认插换行 —
+                    // 续行时换行保留;执行时 .Run 清空 .input 连带清掉。
+                    // 注:.input 以参数传入 OnEnter(vm 的 handler 内字段读有
+                    // GET_FIELD 编码问题,用参数传递规避;vue 端等价)。
+                    textarea {
                         value: .input
                         oninput: .OnInput
                         onkeyup: .OnInput
-                        onenter: .Run(.input)
+                        onenter: .OnEnter(.input)
                         onkeydown.ctrl.r: .ToggleHistorySearch
                         // Plan 053 M2: Ctrl+F 接受全部 ghost text,Ctrl+→ 接受一个词。
                         onkeydown.ctrl.f: .AcceptGhost
@@ -138,7 +148,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         onkeydown.up: .HistoryOlder
                         onkeydown.down: .HistoryNewer
                         onkeydown.tab.prevent: .OnTab
-                        style: "w-full bg-transparent outline-none border-0 px-0 text-sm font-mono-ash text-transparent caret-foreground"
+                        rows: 1
+                        style: "w-full bg-transparent outline-none border-0 px-0 text-sm font-mono-ash text-transparent caret-foreground resize-none max-h-[168px] overflow-y-auto [field-sizing:content]"
                         placeholder: "type a command…"
                     }
                 }
@@ -161,14 +172,14 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             var idc str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
             var builtins str = " cd ls l echo cat grep mkdir rm cp mv touch find glob stat du file tee ln head tail sort uniq wc cut tr split rev column diff select get where update insert each build run http_get http_post http_put http_delete pwd help clear exit quit q set export unset use alias unalias source history ps sys which version up u b less more color completions config bind abbr hook def pushd popd dirs env date sleep "
             for i < n {
-                var c str = line.char_at(i)
-                if c == "#" && (i == 0 || line.char_at(i - 1) == " " || line.char_at(i - 1) == "\t") {
+                var c str = line.substr(i, i + 1)
+                if c == "#" && (i == 0 || line.substr(i - 1, i) == " " || line.substr(i - 1, i) == "\t") {
                     spans.push(HighlightSpan{text: line.substr(i, n), color: "color:#9ca3af;font-style:italic"})
                     break
                 } else if c == " " || c == "\t" {
                     var j int = i
                     for j < n {
-                        var cj str = line.char_at(j)
+                        var cj str = line.substr(j, j + 1)
                         if cj == " " || cj == "\t" { j = j + 1 } else { break }
                     }
                     spans.push(HighlightSpan{text: line.substr(i, j), color: "color:#e5e7eb"})
@@ -178,8 +189,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     var quote str = c
                     var j int = i + 1
                     for j < n {
-                        if line.char_at(j) != quote {
-                            if quote == "\"" && line.char_at(j) == "\\" && j + 1 < n { j = j + 1 }
+                        if line.substr(j, j + 1) != quote {
+                            if quote == "\"" && line.substr(j, j + 1) == "\\" && j + 1 < n { j = j + 1 }
                             j = j + 1
                         } else { break }
                     }
@@ -190,9 +201,9 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     first_word = false
                 } else if c == "$" {
                     var j int = i + 1
-                    if j < n && line.char_at(j) == "{" {
+                    if j < n && line.substr(j, j + 1) == "{" {
                         for j < n {
-                            if line.char_at(j) != "}" { j = j + 1 } else { break }
+                            if line.substr(j, j + 1) != "}" { j = j + 1 } else { break }
                         }
                         var e int = j + 1
                         if e > n { e = n }
@@ -200,15 +211,15 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         i = e
                     } else {
                         for j < n {
-                            if idc.contains(line.char_at(j)) { j = j + 1 } else { break }
+                            if idc.contains(line.substr(j, j + 1)) { j = j + 1 } else { break }
                         }
                         spans.push(HighlightSpan{text: line.substr(i, j), color: "color:#f87171"})
                         i = j
                     }
                     first_word = false
-                } else if c == "|" || c == ";" || (c == "&" && i + 1 < n && line.char_at(i + 1) == "&") {
+                } else if c == "|" || c == ";" || (c == "&" && i + 1 < n && line.substr(i + 1, i + 2) == "&") {
                     var ol int = 1
-                    if c == "|" && i + 1 < n && line.char_at(i + 1) == "|" { ol = 2 }
+                    if c == "|" && i + 1 < n && line.substr(i + 1, i + 2) == "|" { ol = 2 }
                     if c == "&" { ol = 2 }
                     var e int = i + ol
                     if e > n { e = n }
@@ -217,7 +228,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     first_word = true
                 } else if c == ">" || c == "<" {
                     var rl int = 1
-                    if c == ">" && i + 1 < n && line.char_at(i + 1) == ">" { rl = 2 }
+                    if c == ">" && i + 1 < n && line.substr(i + 1, i + 2) == ">" { rl = 2 }
                     var e int = i + rl
                     if e > n { e = n }
                     spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#9ca3af"})
@@ -226,7 +237,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 } else {
                     var j int = i
                     for j < n {
-                        var cj str = line.char_at(j)
+                        var cj str = line.substr(j, j + 1)
                         if cj == " " || cj == "\t" || cj == "\"" || cj == "'" || cj == "$" || cj == "|" || cj == "&" || cj == ";" || cj == "#" || cj == ">" || cj == "<" { break }
                         j = j + 1
                     }
@@ -257,6 +268,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .history_cursor = -1
             .suggestions = []
             .highlighted_spans = []
+            .in_continuation = false
         }
 
         // 输入变化 → 后端补全(v-model 已把 .input 更新为当前文本)
@@ -288,6 +300,124 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             }
             // Plan 053 M3: 重新 tokenize 写 highlighted_spans。
             .DoTokenize()
+            // Plan 053 M4: 重新算续行标志(未闭合分隔符/引号/尾随 \),驱动
+            // prompt 符号切换 + Enter 行为。
+            .DoContinuation()
+        }
+
+        // Plan 053 M4: 续行检测 — 未闭合 { } ( ) [ ] / 引号 / 尾随 \ 时置
+        // .in_continuation = true。逻辑照搬 vue 原版 needsContinuation
+        // (mirrors repl_mode.rs:96)。纯字符串分析,无后端往返,prompt 即时切换。
+        // widget 顶层 module fn 不被 codegen(与 M3 DoTokenize 同款限制),故内联。
+        .DoContinuation -> {
+            var txt str = .input + "\n"
+            var trimmed str = txt.trim()
+            var needs bool = false
+            if trimmed != "" {
+                if trimmed.ends_with("\\") {
+                    needs = true
+                } else {
+                    var brace int = 0
+                    var paren int = 0
+                    var bracket int = 0
+                    var in_single bool = false
+                    var in_double bool = false
+                    var i int = 0
+                    for i < trimmed.len() {
+                        // 用 substr(i, i+1) 取单字符:char_at 在 VM 返回 int
+                        // codepoint(Plan 368 W5),vue 返回 string,两 target
+                        // 语义不一致;substr 两边都返回 string(M4 续行检测)。
+                        var c str = trimmed.substr(i, i + 1)
+                        // 双引号内的转义字符跳过(\\" 不结束字符串)
+                        if in_double && c == "\\" && i + 1 < trimmed.len() {
+                            i = i + 1
+                        } else if c == "'" {
+                            if !in_double { in_single = !in_single }
+                        } else if c == "\"" {
+                            if !in_single { in_double = !in_double }
+                        } else if c == "{" {
+                            if !in_single && !in_double { brace = brace + 1 }
+                        } else if c == "}" {
+                            if !in_single && !in_double { brace = brace - 1 }
+                        } else if c == "(" {
+                            if !in_single && !in_double { paren = paren + 1 }
+                        } else if c == ")" {
+                            if !in_single && !in_double { paren = paren - 1 }
+                        } else if c == "[" {
+                            if !in_single && !in_double { bracket = bracket + 1 }
+                        } else if c == "]" {
+                            if !in_single && !in_double { bracket = bracket - 1 }
+                        }
+                        i = i + 1
+                    }
+                    needs = brace > 0 || paren > 0 || bracket > 0 || in_single || in_double
+                }
+            }
+            .in_continuation = needs
+        }
+
+        // Plan 053 M4: Enter 处理 — 续行时放行换行(不执行),否则执行命令。
+        // textarea 的 Enter 在 keyup 前已插入 \n,所以 .input 尾部多一个换行:
+        // 续行判断照旧对 .input + "\n" 做(trim 后等价);执行前把续行反斜杠
+        // 接续(\\\n → 空格)并去掉尾随 \ (repl.rs:907-909 语义)。
+        // 注:.Run() 必须放进 if/else 块 —— var 初始化的贪婪解析会把紧随其后的
+        // 裸 .Run(t) 吞成方法链(cmd.trim().Run(t))。
+        // Plan 053 M4: Enter 处理 — 续行时放行换行(不执行),否则执行命令。
+        // cmd 由 onenter 绑定传入(.input 值;textarea 的 Enter 在 keyup 前已
+        // 插入 \n,所以 cmd 尾部多一个换行 — trim 后等价)。
+        // 续行检测内联在 handler 里(cmd 参数,纯字符串分析):vm 的 handler 内
+        // .input 字段读有 GET_FIELD 编码问题,参数传递规避(vue 端等价)。
+        // 执行前把续行反斜杠接续(\\\n → 空格)并去掉尾随 \ (repl.rs:907-909)。
+        // 注:.Run() 必须放进 if/else 块 —— var 初始化的贪婪解析会把紧随其后的
+        // 裸 .Run(t) 吞成方法链(cmd.trim().Run(t))。
+        .OnEnter(cmd) -> {
+            var trimmed str = cmd.trim()
+            var needs bool = false
+            if trimmed != "" {
+                if trimmed.ends_with("\\") {
+                    needs = true
+                } else {
+                    var brace int = 0
+                    var paren int = 0
+                    var bracket int = 0
+                    var in_single bool = false
+                    var in_double bool = false
+                    var i int = 0
+                    for i < trimmed.len() {
+                        var c str = trimmed.substr(i, i + 1)
+                        if in_double && c == "\\" && i + 1 < trimmed.len() {
+                            i = i + 1
+                        } else if c == "'" {
+                            if !in_double { in_single = !in_single }
+                        } else if c == "\"" {
+                            if !in_single { in_double = !in_double }
+                        } else if c == "{" {
+                            if !in_single && !in_double { brace = brace + 1 }
+                        } else if c == "}" {
+                            if !in_single && !in_double { brace = brace - 1 }
+                        } else if c == "(" {
+                            if !in_single && !in_double { paren = paren + 1 }
+                        } else if c == ")" {
+                            if !in_single && !in_double { paren = paren - 1 }
+                        } else if c == "[" {
+                            if !in_single && !in_double { bracket = bracket + 1 }
+                        } else if c == "]" {
+                            if !in_single && !in_double { bracket = bracket - 1 }
+                        }
+                        i = i + 1
+                    }
+                    needs = brace > 0 || paren > 0 || bracket > 0 || in_single || in_double
+                }
+            }
+            if !needs && trimmed != "" {
+                var cmd2 str = cmd.replace("\\\n", " ")
+                var t str = cmd2.trim()
+                if t.ends_with("\\") {
+                    .Run(t.substr(0, t.len() - 1))
+                } else {
+                    .Run(t)
+                }
+            }
         }
 
         .PickCompletion(item) -> {
@@ -384,18 +514,19 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         }
 
         // Plan 053 M2: Ctrl+→ 接受 ghost text 的下一个词(到下一个空白,
-        // 对齐 vue acceptGhostWord)。用 char_at 逐字符扫描。
+        // 对齐 vue acceptGhostWord)。用 substr 逐字符扫描(char_at 在 VM
+        // 返回 int codepoint,与 vue 的 string 语义不一致,统一用 substr)。
         .AcceptGhostWord -> {
             if .ghost_text != "" {
                 var take str = ""
                 var i int = 0
                 // 跳过前导空白
-                for i < .ghost_text.len() && .ghost_text.char_at(i) == " " {
+                for i < .ghost_text.len() && .ghost_text.substr(i, i + 1) == " " {
                     i = i + 1
                 }
                 // 取到下一个空白
-                for i < .ghost_text.len() && .ghost_text.char_at(i) != " " {
-                    take = take + .ghost_text.char_at(i)
+                for i < .ghost_text.len() && .ghost_text.substr(i, i + 1) != " " {
+                    take = take + .ghost_text.substr(i, i + 1)
                     i = i + 1
                 }
                 if take != "" {

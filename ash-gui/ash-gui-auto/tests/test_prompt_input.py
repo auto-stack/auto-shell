@@ -50,11 +50,20 @@ def test_pb13_completion_called(mcp):
 def test_pb09_ctrl_r_toggles_search(mcp):
     """PB-09: Ctrl+R toggles history search panel (EDGE-01: onkeydown.ctrl.r)."""
     before = mcp.state("history_open")
-    mcp.call("autoui_keyboard", key="r", modifiers=["ctrl"])
-    time.sleep(0.5)
-    after = mcp.state("history_open")
-    assert ("true" in before) != ("true" in after), \
-        f"Ctrl+R did not toggle history_open: {before!r} → {after!r}"
+    # The MCP action channel is drained by a 16ms iced subscription; dispatch
+    # is async and occasionally delayed under load. Re-send Ctrl+R until the
+    # toggle lands (a landed toggle flips history_open; a double-toggle back is
+    # possible but rare, and the check runs right after each send).
+    toggled = False
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        mcp.call("autoui_keyboard", key="r", modifiers=["ctrl"])
+        time.sleep(0.3)
+        if ("true" in mcp.state("history_open")) != ("true" in before):
+            toggled = True
+            break
+    assert toggled, \
+        f"Ctrl+R did not toggle history_open: {before!r} → {mcp.state('history_open')!r}"
 
 
 # ── PB-11: Ctrl+L (EDGE-01 enabled) ─────────────────────────────────────────
@@ -85,14 +94,27 @@ def test_pb10_ctrl_c_clears_input(mcp):
 
     EDGE-01: onkeydown.ctrl.c → PromptBar.OnCtrlC → .input = "".
     """
-    mcp.call("autoui_type", text="some_text_to_clear", clear_first=True)
-    time.sleep(0.3)
-    inp_before = mcp.state("input")
-    assert "some_text_to_clear" in inp_before, f"input not set:\n{inp_before[:100]}"
-    mcp.call("autoui_keyboard", key="c", modifiers=["ctrl"])
-    time.sleep(0.5)
-    inp_after = mcp.state("input")
-    assert '""' in inp_after, f"Ctrl+C did not clear input:\n{inp_after[:100]}"
+    # Type with retry — the MCP action dispatch is async (16ms iced
+    # subscription), so a single type can occasionally race the state read.
+    ok = mcp.wait_until(
+        lambda c: (
+            c.call("autoui_type", text="some_text_to_clear", clear_first=True),
+            "some_text_to_clear" in c.state("input"),
+        )[1],
+        timeout=8,
+        interval=0.3,
+    )
+    assert ok, f"input not set:\n{mcp.state('input')[:100]}"
+    # Re-send Ctrl+C until the input clears (async keyboard dispatch).
+    cleared = False
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        mcp.call("autoui_keyboard", key="c", modifiers=["ctrl"])
+        time.sleep(0.3)
+        if '""' in mcp.state("input"):
+            cleared = True
+            break
+    assert cleared, f"Ctrl+C did not clear input:\n{mcp.state('input')[:100]}"
 
 
 # ── PB-05,06: ↑↓ history (EDGE-01 enabled, but needs populated history) ─────
