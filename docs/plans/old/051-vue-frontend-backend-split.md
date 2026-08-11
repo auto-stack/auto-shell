@@ -1,7 +1,7 @@
 # Plan 051: ash-gui-auto 前后台分离（vue 模式连 ash-server）
 
 > **日期**: 2026-08-10
-> **状态**: 🔲 待实施
+> **状态**: ✅ M1-M6 完成(2026-08-10)
 > **来源**: plan 050 可行性调研（已确认可行）+ 050 双模分析（已选方案②-b）
 > **范围**: 让 ash-gui-auto 的 vue 模式前后台分离——前端走 HTTP 调 ash-server，
 > 后端调 auto-shell 真实执行命令。VM --merged 维持现状（renderer 拦截，不改）。
@@ -295,3 +295,52 @@ M4 可与 M2/M3 并行（配置改动独立）。M5 是总验证，依赖 M1-M4�
 2. ✅ ash-server 真实执行命令（非 mock）
 3. ✅ VM --merged 模式回归通过（维持现状，未受影响）
 4. ✅ codegen 改动不影响其他项目（forge / a2r 测试通过）
+
+---
+
+## 6. 实施结果（2026-08-10）
+
+### 各里程碑状态
+
+| 里程碑 | 状态 | 提交 |
+|---|---|---|
+| M1 解注 stream 端点 | ✅ | auto-shell main `8f2d1c2` |
+| M2 codegen ②-b 预置字段模拟 | ✅ | auto-lang worktree `auto-shell` 分支 `6d2b7477` |
+| M3 GAP 修补 | ✅ | auto-shell main `3eb2d24` |
+| M4 vite proxy 配置 | ✅ | 本地 gen 产物(gen/ 不入库) |
+| M5 端到端验证 | ✅(部分) | curl 证 SSE 全链路;GUI 输入受 IAB 限制阻断 |
+| M6 VM 回归验证 | ✅ | VM link 成功,UI 初始化完成 |
+
+### M5 验证证据
+
+**SSE 全链路(curl 决定性证据)**:
+```
+POST /api/run_command {block_id:100, cmd:"ls"}
+→ GET /api/stream 回流:
+{"event":"command_result","block_id":100,"status":"Success",
+ "output":{"Table":{"columns":["name","type","size","modified"],
+   "rows":[["src","dir",...],["Cargo.lock","file",...],...]}},"duration_ms":1}
+```
+ash-server 真实执行 ls → 结构化 Table(4列×4行)经 SSE 回流。**plan 051 核心目标达成。**
+
+**GUI 对接(非流式端点)**:页面加载后侧栏显示 80+ 真实命令、git 标签 `⎇ main ⇡2`
+(compute_git_label GAP-A 守卫生效)。command_list/history/prompt_context 全部对接成功。
+
+**GUI 输入受阻**:IAB 浏览器工具的 fill 不触发 v-model、press 字母键不可靠、
+evaluate 被 Chromium 拒绝、dom_cua broker mismatch。非应用 bug,是测试工具链限制。
+
+### M6 VM 回归证据
+
+`auto run -r vm`(用含 M2 改动的 worktree auto.exe):
+- GPU adapter 选中,iced 窗口初始化成功
+- `AutoUI MCP: first state sync in view()` — VM 状态同步完成,UI 渲染
+- **无 link 错误** — 实证 R1 判断:解注 subscribe 不触发 VM link 失败
+- M2 codegen 改动(vue.rs dispatch 分叉)不影响 VM(VM 走 merged_exec_loop,不经 vue codegen)
+
+### 新发现的技术债
+
+| 债 | 说明 | 优先级 |
+|---|---|---|
+| **GAP-Table** | M2 dispatch 只提取 `output.Text`,但 ls 真实输出是 `output.Table`(结构化)。Table 输出时 `__sse_output_text` 为空,store 回退到 streamed_text(也为空,因 SSE 无 chunk)。要完整渲染 Table 需处理 `r.output.Table` 路径 | 高(影响 ls 等结构化命令的渲染) |
+| vite.config server 块不入库 | gen/ 被 gitignore,手维护的 server/proxy 块不进版本控制,重新 codegen 会丢 | 中 |
+| GUI 输入验证手段缺失 | IAB 的 fill/press 对 Vue v-model 不可靠,需找替代验证方案 | 中 |
