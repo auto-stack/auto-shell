@@ -186,9 +186,13 @@ store ShellStore {
                         b.status = st
                         // Plan 052: 优先用 __sse_output(vue 模式 SSE 透传的完整
                         // 结构化 output,可能是 Table/Record/Code/Error/Text)。
-                        // 为空(所有变体 None)时回退到 streamed_text(VM merged 模式 /
-                        // 流式外部命令的 stdout 累积),包成 {Text: streamed_text}。
-                        if .__sse_output.Text != None {
+                        // 判断"有没有变体":任一变体字段非 None 即说明 SSE 透传了
+                        // 完整 output(Table 时 .Text 是 None,故不能只看 .Text)。
+                        // (原 `!= RenderedOutput{}` 写法在 .at 解析器下语法错误,
+                        //  改为显式 || 变体判断 —— Plan 053 M6 修正。)
+                        // VM merged 模式 renderer 不填 __sse_output(所有变体 None),
+                        // 走 streamed_text 回退。
+                        if .__sse_output.Text != None || .__sse_output.Table != None || .__sse_output.Record != None || .__sse_output.Code != None || .__sse_output.Error != None {
                             b.output = .__sse_output
                         } else {
                             var out RenderedOutput = RenderedOutput{}

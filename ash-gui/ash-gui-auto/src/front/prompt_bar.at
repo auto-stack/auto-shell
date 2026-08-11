@@ -17,7 +17,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
               AcceptGhost, AcceptGhostWord, OnCtrlL }
 
     computed {
-        cwd_display => .cwd
+        // Plan 053 M6-B2: cwd 缩写(home 前缀 → ~),内联实现。
+        cwd_display => if .home != "" && .cwd.starts_with(.home) { "~" + .cwd.substr(.home.len(), .cwd.len()) } else { .cwd }
     }
 
     model {

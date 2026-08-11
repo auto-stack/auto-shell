@@ -21,30 +21,37 @@ use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 // Plan 046:用 col/row 替代 HTML table 标签(table/thead/tbody/tr/th/td)。
 // VM 的 aura_view_builder 不支持 HTML table 标签(fallback 成 Column 会丢数据行)。
 // col/row 是 VM 原生支持的对齐 iced 的 Table 渲染方式(renderer.rs:1289 column of rows)。
+// vue codegen 会把 col/row 映射成 div,但表格列对齐需要真正的 <table> —
+// vue 产物里 BlockBody.vue 已手改为 <table>(Plan 052 样式改进),.at 层保留 col/row 供 VM。
 //
-// Plan 046(for 循环修复后):for cell in row 二维数组迭代已修(aura_view_builder
-// ForLoop 现在先查 bindings),改回标准 RenderedCell 格式 + cell.Text 访问。
-// 简化:先只处理 cell.Text 变体(纯文本),Tagged 着色/点击后续增强。
+// Plan 052: 处理两种 RenderedCell 变体 + 改善样式(zebra/header/padding)。
 view fn RenderTable(output TableOutput) {
     col {
-        style: "w-full text-sm font-mono-ash border border-border rounded"
+        style: "w-full text-sm font-mono-ash border border-border rounded-md overflow-hidden bg-card/50"
         // 表头行
         row {
-            style: "border border-border bg-muted/30"
+            style: "border-b border-border bg-muted/40"
             for col_name in output.columns {
                 text col_name {
-                    style: "px-3 py-1.5 text-left font-medium whitespace-nowrap border border-border"
+                    style: "px-3 py-2 text-left font-semibold whitespace-nowrap"
                 }
             }
         }
         // 数据行 — 二维数组 for cell in row(Plan 046 已修 VM 嵌套 for bug)
         for row in output.rows {
             row {
-                style: "border border-border"
+                style: "border-b border-border/60"
                 for cell in row {
+                    // Plan 052: 处理两种 RenderedCell 变体。
+                    // Text: 纯文本(echo 等);Tagged: 带语义标签的文本(ls 的文件名/权限等)。
                     if cell.Text != None {
                         text cell.Text {
-                            style: "px-3 py-1.5 border border-border"
+                            style: "px-3 py-1.5 text-muted-foreground"
+                        }
+                    }
+                    if cell.Tagged != None {
+                        text cell.Tagged.text {
+                            style: "px-3 py-1.5 text-muted-foreground"
                         }
                     }
                 }

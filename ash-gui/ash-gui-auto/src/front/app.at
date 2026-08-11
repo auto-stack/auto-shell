@@ -21,6 +21,11 @@ widget App {
         var injected_command str = ""
     }
 
+    computed {
+        // Plan 053 M6-B2: 标题栏 cwd 缩写(home 前缀 → ~),内联实现。
+        cwd_display => if .store.home != "" && .store.cwd.starts_with(.store.home) { "~" + .store.cwd.substr(.store.home.len(), .store.cwd.len()) } else { .store.cwd }
+    }
+
     view {
         row {
             style: "w-full h-full bg-background"
@@ -52,7 +57,7 @@ widget App {
                     text "·" {
                         style: "text-muted-foreground/40"
                     }
-                    text .store.cwd {
+                    text .cwd_display {
                         style: "text-xs font-mono-ash text-sky-300/80 truncate"
                     }
                     if .store.git_label != "" {
