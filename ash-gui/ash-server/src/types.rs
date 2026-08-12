@@ -116,6 +116,16 @@ pub struct CommandOutput {
 ///
 /// Plan 042 M1: unifies the two emit sites in the original `shell_worker.rs`
 /// (`command-result` and `command-output`) into one enum.
+/// Plan 055 Phase A: 后台作业信息(作业控制 `cmd &`)。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct JobInfo {
+    pub id: u32,
+    pub command: String,
+    pub state: String,
+    pub exit_code: Option<i32>,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum ShellEvent {
@@ -123,4 +133,8 @@ pub enum ShellEvent {
     CommandOutput { block_id: usize, chunk: String },
     /// The final result of a command (success or failure).
     CommandResult(CommandResult),
+    /// Plan 055 Phase A: 作业控制事件(后台 `cmd &` + jobs 列表 + kill)。
+    JobStarted { job_id: u32, block_id: usize, cmd: String },
+    JobDone { job_id: u32, exit_code: i32, cmd: String },
+    JobList(Vec<JobInfo>),
 }

@@ -41,6 +41,12 @@ enum CommandReq {
     PromptContext {
         reply: tokio::sync::oneshot::Sender<PromptContext>,
     },
+    /// Plan 055 Phase A: list background jobs.
+    Jobs {
+        reply: tokio::sync::oneshot::Sender<Vec<JobInfo>>,
+    },
+    /// Plan 055 Phase A: kill a background job by id.
+    KillJob { job_id: u32 },
 }
 
 /// Handle into the Shell worker. `Clone + Send` — stash in axum state or
@@ -126,6 +132,20 @@ impl ShellHandle {
         self.cancel.store(true, Ordering::SeqCst);
     }
 
+    /// Plan 055 Phase A: list background jobs (`cmd &`)。
+    pub async fn jobs(&self) -> Result<Vec<JobInfo>, String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(CommandReq::Jobs { reply: reply_tx })
+            .map_err(|_| "worker channel closed".to_string())?;
+        reply_rx.await.map_err(|_| "worker dropped reply".to_string())
+    }
+
+    /// Plan 055 Phase A: kill a background job by id.
+    pub fn kill_job(&self, job_id: u32) {
+        let _ = self.tx.send(CommandReq::KillJob { job_id });
+    }
+
     /// Subscribe to streaming events (command-output / command-result).
     pub fn subscribe(&self) -> broadcast::Receiver<ShellEvent> {
         self.event_rx.subscribe()
@@ -165,6 +185,8 @@ pub fn spawn() -> ShellHandle {
 
             let captured: Arc<Mutex<Option<RenderedOutput>>> = Arc::new(Mutex::new(None));
             let smart_block: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+            // Plan 055 Phase A: 后台作业管理(复用 CLI JobManager,worker 线程局部)。
+            let mut job_mgr = auto_shell::job::JobManager::new();
 
             runtime.block_on(async move {
                 // M1: capture structured output via a RenderHook.
@@ -190,36 +212,95 @@ pub fn spawn() -> ShellHandle {
 
                 // Main loop.
                 while let Some(req) = rx.recv().await {
+                    // Plan 055 Phase A: reap finished background jobs → JobDone。
+                    for (jid, jcmd, jcode) in job_mgr.reap_finished() {
+                        let _ = event_tx_for_thread.send(ShellEvent::JobDone {
+                            job_id: jid,
+                            exit_code: jcode,
+                            cmd: jcmd,
+                        });
+                    }
                     match req {
                         CommandReq::Run { block_id, cmd } => {
-                            cancel_for_thread.store(false, Ordering::SeqCst);
-                            let cwd = shell.pwd().to_string_lossy().to_string();
-                            let started = Instant::now();
-                            let (status, output) = match run_command(
-                                &mut shell,
-                                &cmd,
-                                &captured,
-                                &cancel_for_thread,
-                                block_id,
-                                &event_tx_for_thread,
-                            )
-                            .await
-                            {
-                                Ok(out) => (CommandStatus::Success, out),
-                                Err(msg) => (CommandStatus::Failed(msg), RenderedOutput::Empty),
-                            };
-                            let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
-                                CommandResult {
+                            // Plan 055 Phase A: 后台 `cmd &` — spawn_external_background
+                            // + 注册 job + 发 JobStarted(不阻塞主循环,reaper 下轮收)。
+                            let trimmed = cmd.trim();
+                            if trimmed.ends_with('&') && !trimmed.ends_with("&&") {
+                                let cmd_part = trimmed.trim_end_matches('&').trim();
+                                let cwd_bg = shell.pwd().to_path_buf();
+                                match ash_core::cmd::external::spawn_external_background(
+                                    cmd_part,
+                                    &cwd_bg,
+                                ) {
+                                    Ok(child) => {
+                                        let job_id = job_mgr.add(cmd_part.to_string(), child);
+                                        let _ = event_tx_for_thread.send(ShellEvent::JobStarted {
+                                            job_id,
+                                            block_id,
+                                            cmd: cmd_part.to_string(),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
+                                            CommandResult {
+                                                block_id,
+                                                cwd: cwd_bg.to_string_lossy().to_string(),
+                                                status: CommandStatus::Failed(format!("{e}")),
+                                                output: RenderedOutput::Empty,
+                                                duration_ms: 0,
+                                                exit_code: -1,
+                                            },
+                                        ));
+                                    }
+                                }
+                            } else {
+                                cancel_for_thread.store(false, Ordering::SeqCst);
+                                let cwd = shell.pwd().to_string_lossy().to_string();
+                                let started = Instant::now();
+                                let (status, output) = match run_command(
+                                    &mut shell,
+                                    &cmd,
+                                    &captured,
+                                    &cancel_for_thread,
                                     block_id,
-                                    cwd,
-                                    status,
-                                    output,
-                                    duration_ms: started.elapsed().as_millis() as u64,
-                                    // Plan 054 M2: child exit code (0 = success).
-                                    exit_code: shell.last_exit_code(),
-                                },
-                            ));
-                            let _ = append_history(&cmd);
+                                    &event_tx_for_thread,
+                                )
+                                .await
+                                {
+                                    Ok(out) => (CommandStatus::Success, out),
+                                    Err(msg) => (CommandStatus::Failed(msg), RenderedOutput::Empty),
+                                };
+                                let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
+                                    CommandResult {
+                                        block_id,
+                                        cwd,
+                                        status,
+                                        output,
+                                        duration_ms: started.elapsed().as_millis() as u64,
+                                        // Plan 054 M2: child exit code (0 = success).
+                                        exit_code: shell.last_exit_code(),
+                                    },
+                                ));
+                                let _ = append_history(&cmd);
+                            }
+                        }
+                        CommandReq::Jobs { reply } => {
+                            let jobs: Vec<JobInfo> = job_mgr
+                                .jobs_raw()
+                                .iter()
+                                .map(|(id, j)| JobInfo {
+                                    id: *id,
+                                    command: j.command.clone(),
+                                    state: format!("{:?}", j.state),
+                                    exit_code: None,
+                                })
+                                .collect();
+                            let _ = reply.send(jobs);
+                        }
+                        CommandReq::KillJob { job_id } => {
+                            if let Some(mut job) = job_mgr.remove(job_id) {
+                                let _ = job.child.kill();
+                            }
                         }
                         CommandReq::RunSmart { block_id, name, args, reply } => {
                             if let Ok(mut slot) = smart_block.lock() {

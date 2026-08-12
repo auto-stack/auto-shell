@@ -51,6 +51,9 @@ pub fn create_router(shell: ShellHandle) -> Router {
         .route("/api/run_smart", post(run_smart))
         .route("/api/cancel", post(cancel))
         .route("/api/open_path", post(open_path))
+        // Plan 055 Phase A: 作业控制。
+        .route("/api/jobs", get(jobs))
+        .route("/api/kill_job", post(kill_job))
         .route("/api/stream", get(stream_sse))
         .with_state(state)
 }
@@ -128,6 +131,28 @@ async fn run_smart(
 
 async fn cancel(State(state): State<AppState>) -> impl IntoResponse {
     state.shell.cancel();
+    StatusCode::OK
+}
+
+/// Plan 055 Phase A: 列出后台作业(`cmd &`)。
+async fn jobs(State(state): State<AppState>) -> impl IntoResponse {
+    match state.shell.jobs().await {
+        Ok(j) => Json(j).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct KillJobBody {
+    job_id: u32,
+}
+
+/// Plan 055 Phase A: kill 后台作业。
+async fn kill_job(
+    State(state): State<AppState>,
+    Json(body): Json<KillJobBody>,
+) -> impl IntoResponse {
+    state.shell.kill_job(body.job_id);
     StatusCode::OK
 }
 
