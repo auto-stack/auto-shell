@@ -80,7 +80,7 @@ store ShellStore {
         var sidebar_open bool = true
 
         // Plan 055 Phase A: 后台作业列表(`cmd &`)。
-        var jobs List<JobInfo> = List<JobInfo>.new([])
+        var job_list List<JobInfo> = List<JobInfo>.new([])
 
         // ── git_label(APP-05/06):格式化的 git 分支+状态标签 ──
         // computed 多行 body 在 vm 风险,改用 handler 调 module fn 写此字段。
@@ -150,7 +150,7 @@ store ShellStore {
             .git_info = prompt_context()
             .git_label = compute_git_label(.git_info)
             // Plan 055 Phase A: 拉取后台作业列表。
-            .jobs = jobs()
+            .job_list = jobs()
         }
 
         // ── 命令执行 ──
@@ -359,13 +359,13 @@ store ShellStore {
         // Plan 055 Phase A: 刷新后台作业列表(轮询;SSE JobStarted/JobDone
         // 实时 dispatch 留 A.3)。RunCommand 后台 `&` 后可手动点标题栏刷新。
         .RefreshJobs -> {
-            .jobs = jobs()
+            .job_list = jobs()
         }
 
         // Plan 055 Phase A: kill 后台作业 + 刷新列表。
         .KillJob(job_id) -> {
             kill_job(job_id)
-            .jobs = jobs()
+            .job_list = jobs()
         }
 
         // Plan 055 Phase A.3: SSE JobStarted/JobDone 实时更新 jobs(无需轮询)。
@@ -376,18 +376,18 @@ store ShellStore {
             ji.command = .__sse_job_cmd
             ji.state = "Running"
             ji.exit_code = 0
-            .jobs.push(ji)
+            .job_list.push(ji)
         }
 
         .JobDone -> {
             // 移除已完成的 job(按 id 过滤,保留其余)。
             var kept List<JobInfo> = List<JobInfo>.new([])
-            for j in .jobs {
+            for j in .job_list {
                 if j.id != .__sse_job_id {
                     kept.push(j)
                 }
             }
-            .jobs = kept
+            .job_list = kept
         }
     }
 }

@@ -32,7 +32,7 @@ widget App {
         // Plan 055 Phase A: 后台作业计数(标题栏,点击刷新)。
         // 注:不去 .str()——JS '+' 自动 coerce number 成字符串;加 .str()
         // 产物是 length.str()(JS number 无 .str() 方法,jobs 非空时会 throw)。
-        jobs_label => "⚙ " + .store.jobs.len()
+        jobs_label => "⚙ " + .store.job_list.len()
     }
 
     view {
@@ -75,16 +75,16 @@ widget App {
                         }
                     }
                     // Plan 055 Phase A: 后台作业计数(点击刷新 jobs;ml-auto 推右)。
-                    if .store.jobs.len() > 0 {
+                    if .store.job_list.len() > 0 {
                         text .jobs_label {
                             onclick: .RefreshJobs
-                            style: "ml-auto text-xs px-1.5 py-0.5 rounded text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer select-none"
+                            style: "text-xs px-1.5 py-0.5 rounded text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer select-none"
                         }
                     }
                     // Plan 054 M5: 主题切换。
                     text .theme_glyph {
                         onclick: .ToggleTheme
-                        style: if .store.jobs.len() > 0 { "text-sm px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 cursor-pointer select-none" } else { "ml-auto text-sm px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 cursor-pointer select-none" }
+                        style: if .store.job_list.len() > 0 { "text-sm px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 cursor-pointer select-none" } else { "ml-auto text-sm px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 cursor-pointer select-none" }
                     }
                 }
 
