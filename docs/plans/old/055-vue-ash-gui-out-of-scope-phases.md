@@ -282,8 +282,11 @@ a2r 模式表格相关 E0599 清零;`ls` 输出在 iced 表格视图渲染(非�
 | **D6** VM prompt_context | ⏭️ 跳过(VM 专属;vue 走 ash-server 真实 git) | — |
 | **B** 管道流式(多段 OS pipe 链) | ✅ | auto-shell `47023f4` |
 | **E(a)** store ref scalar 类型化 | ✅ | auto-lang `91e50ad7` |
-| **A** 作业控制(A.1 后端 + A.2 前端轮询) | ✅ | auto-shell `8240bec`/`f184518` |
-| **E(b/c/e)** handler 参数 / composable 返回 interface / User import | ⏳ 后续(E(a)已铺路) | — |
+| **A** 作业控制(A.1 后端 + A.2 前端 + A.3 SSE 实时) | ✅ | auto-shell `8240bec`/`f184518`/`cc39676` + auto-lang `8fab89e9` |
+| **E(a)** store ref scalar 类型化 | ✅ | auto-lang `91e50ad7` |
+| **E(b)** handler 参数类型化 | ✅ | auto-lang `78010f56` |
+| **E(c)** composable 返回 interface | ⏳ 大(reactive 语义复杂,后续) | — |
+| **E(e)** User import | ⏭️ 不需(E(a/b) User 回退 any) | — |
 | **D4** 复制 / **F** Tauri / **D1** / **G** | ⏳ 按需(重型批次) | — |
 
 **本轮验证**:C(less 放行 200)/ B(where|findstr 200,echo 单段无回归)/ E(a)(ref<string>×8 / ref<number>×5 / ref<boolean>×1,User 回退 any)/ D5(ToggleCollapse 回调链 regen)。vite build 全 exit 0。前端 5173 + ash-server :3000 在线。
