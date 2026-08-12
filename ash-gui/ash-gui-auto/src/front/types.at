@@ -75,6 +75,14 @@ type Block {
     collapsed bool
 }
 
+/// Plan 055 Phase A: 后台作业信息(作业控制 `cmd &`)。
+type JobInfo {
+    id int
+    command str
+    state str
+    exit_code int
+}
+
 // ═══════════════════════════════════════════════════════════
 // 事件 payload
 // ═══════════════════════════════════════════════════════════

@@ -6,8 +6,8 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel
-use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput
+use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job
+use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput, JobInfo
 
 // format_git_label — APP-05/06:格式化 git 分支+状态标签。
 // 对齐 Vue App.vue:75-92:"⎇ main +2 !1 ?3 ✗0 ⇡1 ⇣0"。
@@ -79,6 +79,9 @@ store ShellStore {
         // ── 侧栏开关 ──
         var sidebar_open bool = true
 
+        // Plan 055 Phase A: 后台作业列表(`cmd &`)。
+        var jobs List<JobInfo> = List<JobInfo>.new([])
+
         // ── git_label(APP-05/06):格式化的 git 分支+状态标签 ──
         // computed 多行 body 在 vm 风险,改用 handler 调 module fn 写此字段。
         // 格式对齐 Vue App.vue:75-92:"⎇ main +2 !1 ?3 ✗0 ⇡1 ⇣0"。
@@ -110,7 +113,7 @@ store ShellStore {
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen,
-              OpenPath(str), DeleteBlock(int), ToggleCollapse(int) }
+              OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int) }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -141,6 +144,8 @@ store ShellStore {
             // 直接在 Rust 侧更新 block,绕过 store handler。故在 Init 拉一次)。
             .git_info = prompt_context()
             .git_label = compute_git_label(.git_info)
+            // Plan 055 Phase A: 拉取后台作业列表。
+            .jobs = jobs()
         }
 
         // ── 命令执行 ──
@@ -344,6 +349,18 @@ store ShellStore {
                     b.collapsed = !b.collapsed
                 }
             }
+        }
+
+        // Plan 055 Phase A: 刷新后台作业列表(轮询;SSE JobStarted/JobDone
+        // 实时 dispatch 留 A.3)。RunCommand 后台 `&` 后可手动点标题栏刷新。
+        .RefreshJobs -> {
+            .jobs = jobs()
+        }
+
+        // Plan 055 Phase A: kill 后台作业 + 刷新列表。
+        .KillJob(job_id) -> {
+            kill_job(job_id)
+            .jobs = jobs()
         }
     }
 }

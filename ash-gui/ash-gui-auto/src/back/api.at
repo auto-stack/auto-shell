@@ -145,6 +145,15 @@ pub type ShellEvent = {
     result: CommandResult
 }
 
+/// Plan 055 Phase A: 后台作业信息(作业控制 `cmd &`)。
+/// exit_code 在 Done 时由后端填(Running 时为 0);state = "Running"/"Done"/...。
+pub type JobInfo = {
+    id: int
+    command: str
+    state: str
+    exit_code: int
+}
+
 pub type ToolEntry = {
     name: str
     description: str
@@ -223,6 +232,20 @@ pub fn cancel() {
 #[api(method = "POST", path = "/api/open_path")]
 pub fn open_path(path str) {
     shell.open_path(path)
+}
+
+/// 列出后台作业(Plan 055 Phase A 作业控制)
+/// GET /api/jobs
+#[api(method = "GET", path = "/api/jobs")]
+pub fn jobs() []JobInfo {
+    return shell.jobs()
+}
+
+/// kill 后台作业(Plan 055 Phase A)
+/// POST /api/kill_job
+#[api(method = "POST", path = "/api/kill_job")]
+pub fn kill_job(job_id int) {
+    shell.kill_job(job_id)
 }
 
 // ═══════════════════════════════════════════════════════════
