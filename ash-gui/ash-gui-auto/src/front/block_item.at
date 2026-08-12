@@ -24,7 +24,10 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
         // int 用 .str() 转 str(auto.int.str)再拼接 —— int + str 直接拼接会出错。
         // Plan 053 M6-B1: 拍平为单层 if/else-if/else(worktree 缺 plan-408 嵌套
         // if codegen 修复,嵌套 if 的内层分支会漏 return → undefined)。
-        duration_label => if .block.duration_ms > 1000 { ((.block.duration_ms / 1000).str() + "s") } else if .block.duration_ms > 0 { (.block.duration_ms.str() + "ms") } else { "" }
+        // Plan 055: 简化全 ms(避免 Bina `/1000` receiver 调方法,codegen
+        // 对 Bina receiver 不加括号 → `1000.toString()` JS 错)。str() 映射
+        // toString(codegen map_method_to_js)。
+        duration_label => if .block.duration_ms > 0 { (.block.duration_ms.str() + "ms") } else { "" }
         // Plan 054 M2: 退出码 label + 颜色(非 0 标红,对齐 CLI $?)。
         exit_label => ":" + .block.exit_code.str()
         exit_cls => if .block.exit_code != 0 { "text-red-400" } else { "text-muted-foreground" }
