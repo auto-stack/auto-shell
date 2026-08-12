@@ -9,8 +9,8 @@ widget ToolSidebar(commands: List<ToolEntry>, smart_commands: List<SmartCommandE
     msg Msg { Pick(str), RunSmart(str) }
 
     view {
-        col {
-            style: "w-56 shrink-0 border-r border-border bg-card/30 overflow-y-auto"
+        scroll {
+            style: "w-56 shrink-0 border-r border-border bg-card/30"
 
             // Commands 标题
             text "Commands" {

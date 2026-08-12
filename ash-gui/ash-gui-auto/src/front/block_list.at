@@ -11,8 +11,8 @@ widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: ms
     msg Msg { OpenPath(str), Rerun(str), Stop, DeleteBlock(int), ToggleCollapse(int) }
 
     view {
-        col {
-            style: "flex-1 overflow-y-auto p-3 gap-2.5"
+        scroll {
+            style: "flex-1 p-3 gap-2.5"
 
             if .blocks.len() == 0 {
                 col {
