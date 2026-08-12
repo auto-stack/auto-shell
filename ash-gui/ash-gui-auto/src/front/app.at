@@ -30,7 +30,9 @@ widget App {
         // Plan 054 M5: 主题切换图标(dark=☀ / light=🌙)。
         theme_glyph => if .dark_mode { "☀" } else { "🌙" }
         // Plan 055 Phase A: 后台作业计数(标题栏,点击刷新)。
-        jobs_label => "⚙ " + .store.jobs.len().str()
+        // 注:不去 .str()——JS '+' 自动 coerce number 成字符串;加 .str()
+        // 产物是 length.str()(JS number 无 .str() 方法,jobs 非空时会 throw)。
+        jobs_label => "⚙ " + .store.jobs.len()
     }
 
     view {
