@@ -105,6 +105,11 @@ store ShellStore {
         var __sse_duration_ms int = 0
         // Plan 054 M2: SSE 透传的退出码(对齐 CLI $?)。
         var __sse_exit_code int = 0
+        // Plan 055 Phase A.3: SSE 透传的作业事件字段(JobStarted/JobDone
+        // 无参 handler 读,对齐 __sse_* 预置模式)。
+        var __sse_job_id int = 0
+        var __sse_job_cmd str = ""
+        var __sse_job_exit int = 0
         var __pending_command_id int = 0
         var __pending_command_str str = ""
     }
@@ -113,7 +118,7 @@ store ShellStore {
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen,
-              OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int) }
+              OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int), JobStarted, JobDone }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -361,6 +366,28 @@ store ShellStore {
         .KillJob(job_id) -> {
             kill_job(job_id)
             .jobs = jobs()
+        }
+
+        // Plan 055 Phase A.3: SSE JobStarted/JobDone 实时更新 jobs(无需轮询)。
+        // __sse_job_* 由 codegen SSE dispatch 预置(同 RunOutput/RunResult 模式)。
+        .JobStarted -> {
+            var ji JobInfo = JobInfo{}
+            ji.id = .__sse_job_id
+            ji.command = .__sse_job_cmd
+            ji.state = "Running"
+            ji.exit_code = 0
+            .jobs.push(ji)
+        }
+
+        .JobDone -> {
+            // 移除已完成的 job(按 id 过滤,保留其余)。
+            var kept List<JobInfo> = List<JobInfo>.new([])
+            for j in .jobs {
+                if j.id != .__sse_job_id {
+                    kept.push(j)
+                }
+            }
+            .jobs = kept
         }
     }
 }
