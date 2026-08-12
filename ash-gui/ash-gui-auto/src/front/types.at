@@ -70,6 +70,9 @@ type Block {
     duration_ms int
     // Plan 054 M2: 子进程退出码(对齐 CLI $?)。
     exit_code int
+    // Plan 055 D5: 折叠状态移到 block 数据(per-block,避免 VM 单根 state
+    // 合并导致点一个全折叠;vue 模式每实例本就独立,此字段两者统一)。
+    collapsed bool
 }
 
 // ═══════════════════════════════════════════════════════════

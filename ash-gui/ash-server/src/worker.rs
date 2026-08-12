@@ -673,19 +673,17 @@ fn is_shell_builtin(name: &str) -> bool {
 }
 
 fn is_terminal_only_command(name: &str) -> bool {
-    matches!(name, "less" | "more" | "color")
+    // Plan 055 Phase C: less/more 放行 —— 无 tty 时多数实现直接 cat 内容到
+    // stdout,GUI 走流式路径(spawn_external_stream)+ block 已可滚动浏览。
+    // 只保留 color(终端真彩检测在 webview CSS 恒为真彩,无意义)。
+    matches!(name, "color")
 }
 
 fn terminal_only_message(name: &str) -> String {
     match name {
-        "less" | "more" => format!(
-            "{name} 是终端翻页器,需要交互式终端(raw mode + 键盘控制)。\n\
-             在 GUI 里,长输出已在上方块区可滚动浏览(M4 流式输出)——无需 {name}。\n\
-             如需完整的终端交互,请用 CLI 版 ash 运行此命令。"
-        ),
         "color" => String::from(
-            "color 显示终端的 24-bit 真彩能力,依赖 crossterm 终端 API。\n\
-             GUI 走 webview CSS 渲染,无终端颜色概念——此命令不适用。",
+            "color 检测终端色彩能力,依赖 crossterm 终端 API。\n\
+             GUI 走 webview CSS 渲染,恒为 24-bit 真彩——无需检测。",
         ),
         _ => format!("{name} 是终端专属命令,GUI 不支持。"),
     }

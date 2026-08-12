@@ -110,7 +110,7 @@ store ShellStore {
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen,
-              OpenPath(str), DeleteBlock(int) }
+              OpenPath(str), DeleteBlock(int), ToggleCollapse(int) }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -165,6 +165,7 @@ store ShellStore {
             block.streamed_text = ""
             block.duration_ms = 0
             block.exit_code = 0
+            block.collapsed = false
             .blocks.push(block)
             // VM renderer 桥接信号(保留 — renderer 读此提交执行器线程)
             .__pending_command_id = id
@@ -333,6 +334,16 @@ store ShellStore {
                 }
             }
             .blocks = kept
+        }
+
+        // Plan 055 D5: 切换 block 折叠(per-block,避免 VM 单根 state 合并
+        // 导致点一个全折叠;vue 模式本就 per-instance,此 handler 两者统一)。
+        .ToggleCollapse(id) -> {
+            for b in .blocks {
+                if b.id == id {
+                    b.collapsed = !b.collapsed
+                }
+            }
         }
     }
 }

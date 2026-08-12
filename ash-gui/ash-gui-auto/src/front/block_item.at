@@ -7,13 +7,11 @@
 use block_body: BlockBody
 use types: Block
 
-widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg) {
-    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand, CopyOutput, DeleteBlock(int), ToggleCollapse }
+widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
+    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand, CopyOutput, DeleteBlock(int), ToggleCollapse(int) }
 
-    model {
-        // Plan 049:点击标题行折叠/展开 body。
-        var collapsed bool = false
-    }
+    // Plan 055 D5: collapsed 移到 block 数据(per-block,避免 VM 单根 state
+    // 合并致全折叠);model 不再持有折叠状态。
 
     computed {
         // Plan 053 M6-B2: cwd 缩写(home 前缀 → ~),内联(纯 module fn 文件
@@ -31,7 +29,7 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
         exit_label => ":" + .block.exit_code.str()
         exit_cls => if .block.exit_code != 0 { "text-red-400" } else { "text-muted-foreground" }
         // Plan 049:折叠指示符。
-        collapse_glyph => if .collapsed { "▸" } else { "▾" }
+        collapse_glyph => if .block.collapsed { "▸" } else { "▾" }
     }
 
     view {
@@ -46,7 +44,7 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
                 style: "items-center gap-2 mb-1.5 group cursor-pointer"
                 text .collapse_glyph {
                     style: "text-muted-foreground select-none text-xs w-4"
-                    onclick: .ToggleCollapse
+                    onclick: .ToggleCollapse(.block.id)
                 }
                 text "❯" {
                     style: "text-muted-foreground select-none"
@@ -105,7 +103,7 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
             }
 
             // cwd 行 + 流式 + 输出主体(Plan 049:折叠时隐藏)
-            if !.collapsed {
+            if !.block.collapsed {
                 // cwd 行
                 if .cwd_display != "" {
                     row {
@@ -132,10 +130,9 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
 
     on {
         .Stop -> { }
-        // Plan 049:点击标题行切换折叠状态。
-        .ToggleCollapse -> {
-            .collapsed = !.collapsed
-        }
+        // Plan 055 D5: 折叠回调(空 handler — renderer emit on_toggle_collapse(id)
+        // 给父级,由 store.ToggleCollapse 翻 blocks[id].collapsed)。
+        .ToggleCollapse(id) -> { }
         .Rerun(cmd) -> { }
         // 复制命令到剪贴板(navigator API 由 ts_adapter 透传)
         // Plan 053 M6-B3: 非安全上下文(http)navigator.clipboard 可能不可用,

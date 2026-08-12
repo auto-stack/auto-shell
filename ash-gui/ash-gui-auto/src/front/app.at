@@ -14,7 +14,7 @@ use back.api: command_list, history, complete, run_command, run_smart, prompt_co
 
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
-              ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int) }
+              ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int), ToggleCollapse(int) }
 
     model {
         var sidebar_open bool = true
@@ -84,7 +84,8 @@ widget App {
                     on_open_path: .OpenPath,
                     on_rerun: .Rerun,
                     on_stop: .Stop,
-                    on_delete: .DeleteBlock
+                    on_delete: .DeleteBlock,
+                    on_toggle_collapse: .ToggleCollapse
                 )
 
                 // 命令输入
@@ -149,6 +150,11 @@ widget App {
         // Plan 054 M3: 删除指定 block(BlockItem ✕ 按钮 → BlockList → 此处)。
         .DeleteBlock(id) -> {
             store.DeleteBlock(id)
+        }
+
+        // Plan 055 D5: 切换 block 折叠(BlockItem ▸/▾ → BlockList → 此处)。
+        .ToggleCollapse(id) -> {
+            store.ToggleCollapse(id)
         }
 
         .Exit -> {
