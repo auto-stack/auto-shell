@@ -472,42 +472,57 @@ async fn run_streaming_external(
         return Ok(None);
     }
     let pipe_cmds: Vec<String> = segments.into_iter().map(|s| s.command).collect();
-    if pipe_cmds.len() != 1 {
-        return Ok(None);
+
+    // Plan 055 Phase B: 多段管道流式。每段必须是外部命令(非 builtin/auto/
+    // alias/DSL stage),否则整条落 shell.execute 一次性。逐段过滤。
+    for seg in &pipe_cmds {
+        if pipe_stages::parse_pipe_stage(seg).is_some() {
+            return Ok(None);
+        }
+        let parts = ext::parse_command(seg);
+        if parts.is_empty() {
+            return Ok(None);
+        }
+        let name = &parts[0];
+        if shell.is_auto_expression_pub(seg)
+            || shell.registry().get(name).is_some()
+            || shell.has_auto_function(name)
+            || shell.aliases().contains_key(name.as_str())
+            || auto_shell::cmd::builtin::is_legacy_builtin(name)
+            || is_shell_builtin(name)
+        {
+            return Ok(None);
+        }
     }
-    let single = &pipe_cmds[0];
-    if pipe_stages::parse_pipe_stage(single).is_some() {
+    // terminal-only(color):单段返回提示(原行为);多段管道里无意义落 shell.execute。
+    if pipe_cmds.len() == 1 {
+        let name = ext::parse_command(&pipe_cmds[0]).remove(0);
+        if is_terminal_only_command(&name) {
+            return Ok(Some(RenderedOutput::Text(terminal_only_message(&name))));
+        }
+    } else if pipe_cmds.iter().any(|seg| {
+        ext::parse_command(seg)
+            .first()
+            .map_or(false, |n| is_terminal_only_command(n))
+    }) {
         return Ok(None);
-    }
-    let parts = ext::parse_command(single);
-    if parts.is_empty() {
-        return Ok(None);
-    }
-    let cmd_name = &parts[0];
-    if shell.is_auto_expression_pub(single) {
-        return Ok(None);
-    }
-    if shell.registry().get(cmd_name).is_some() {
-        return Ok(None);
-    }
-    if shell.has_auto_function(cmd_name) {
-        return Ok(None);
-    }
-    if shell.aliases().contains_key(cmd_name.as_str()) {
-        return Ok(None);
-    }
-    if auto_shell::cmd::builtin::is_legacy_builtin(cmd_name) || is_shell_builtin(cmd_name) {
-        return Ok(None);
-    }
-    if is_terminal_only_command(cmd_name) {
-        return Ok(Some(RenderedOutput::Text(terminal_only_message(cmd_name))));
     }
 
     let cwd = shell.pwd();
-    let stream = match ext::spawn_external_stream(single, &cwd) {
+    // OS pipe 链:首段 spawn_external_stream,后续 spawn_external_chained
+    // (prev.stdout → next.stdin,kernel 级,同 CLI execute_pipeline_with_auto)。
+    // cancel 只 kill 末段 handle,上游靠 SIGPIPE 自然退出(写已关闭的 pipe)。
+    let mut stream = match ext::spawn_external_stream(&pipe_cmds[0], &cwd) {
         Ok(s) => s,
         Err(e) => return Err(format!("{e}")),
     };
+    for seg in &pipe_cmds[1..] {
+        let raw = stream.into_raw_stdout();
+        stream = match ext::spawn_external_chained(seg, &cwd, raw) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("{e}")),
+        };
+    }
 
     let cancel_clone = cancel.clone();
     let event_tx_clone = event_tx.clone();
