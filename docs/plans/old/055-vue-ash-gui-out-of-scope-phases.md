@@ -270,3 +270,21 @@ a2r 模式表格相关 E0599 清零;`ls` 输出在 iced 表格视图渲染(非�
 3. **重型批次**(大,按需):Phase D1(crate 拆分)+ F(Tauri,依赖后端)+ G(a2r 止血/废弃)。
 
 各 Phase 独立,可按需挑选,不强制全做。建议每 Phase 单独 commit + 验证(沿用 plan 054 模式:改 .at/codegen → regen → vite build → 端到端)。
+
+---
+
+## 实施进度(2026-08-12)
+
+| Phase | 状态 | commit |
+|---|---|---|
+| **C** 终端命令降级 | ✅ | auto-shell `08b5d58` |
+| **D5** 折叠 per-block | ✅ | auto-shell `08b5d58` |
+| **D6** VM prompt_context | ⏭️ 跳过(VM 专属;vue 走 ash-server 真实 git) | — |
+| **B** 管道流式(多段 OS pipe 链) | ✅ | auto-shell `47023f4` |
+| **E(a)** store ref scalar 类型化 | ✅ | auto-lang `91e50ad7` |
+| **A** 作业控制 | ⏳ 留下轮(后端 worker 重构 + 前端 jobs 面板 + codegen SSE,大) | — |
+| **E(b/c/e)** handler 参数 / composable 返回 interface / User import | ⏳ 后续(E(a)已铺路) | — |
+| **D4** 复制 / **F** Tauri / **D1** / **G** | ⏳ 按需(重型批次) | — |
+
+**本轮验证**:C(less 放行 200)/ B(where|findstr 200,echo 单段无回归)/ E(a)(ref<string>×8 / ref<number>×5 / ref<boolean>×1,User 回退 any)/ D5(ToggleCollapse 回调链 regen)。vite build 全 exit 0。前端 5173 + ash-server :3000 在线。
+
