@@ -282,7 +282,7 @@ a2r 模式表格相关 E0599 清零;`ls` 输出在 iced 表格视图渲染(非�
 | **D6** VM prompt_context | ⏭️ 跳过(VM 专属;vue 走 ash-server 真实 git) | — |
 | **B** 管道流式(多段 OS pipe 链) | ✅ | auto-shell `47023f4` |
 | **E(a)** store ref scalar 类型化 | ✅ | auto-lang `91e50ad7` |
-| **A** 作业控制 | ⏳ 留下轮(后端 worker 重构 + 前端 jobs 面板 + codegen SSE,大) | — |
+| **A** 作业控制(A.1 后端 + A.2 前端轮询) | ✅ | auto-shell `8240bec`/`f184518` |
 | **E(b/c/e)** handler 参数 / composable 返回 interface / User import | ⏳ 后续(E(a)已铺路) | — |
 | **D4** 复制 / **F** Tauri / **D1** / **G** | ⏳ 按需(重型批次) | — |
 
