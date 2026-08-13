@@ -30,7 +30,7 @@ view fn RenderTable(output TableOutput) {
         style: "w-full text-sm font-mono-ash border border-border rounded-md overflow-hidden bg-card/50"
         // 表头行
         row {
-            style: "border-b border-border bg-muted/40"
+            style: "display:grid; grid-template-columns: repeat(" + output.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04)"
             for col_name in output.columns {
                 text col_name {
                     style: "px-3 py-2 text-left font-semibold whitespace-nowrap"
@@ -40,18 +40,18 @@ view fn RenderTable(output TableOutput) {
         // 数据行 — 二维数组 for cell in row(Plan 046 已修 VM 嵌套 for bug)
         for row in output.rows {
             row {
-                style: "border-b border-border/60"
+                style: "display:grid; grid-template-columns: repeat(" + output.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.06)"
                 for cell in row {
                     // Plan 052: 处理两种 RenderedCell 变体。
                     // Text: 纯文本(echo 等);Tagged: 带语义标签的文本(ls 的文件名/权限等)。
                     if cell.Text != None {
                         text cell.Text {
-                            style: "px-3 py-1.5 text-muted-foreground"
+                            style: "px-3 py-1.5 text-muted-foreground text-left overflow-hidden text-ellipsis whitespace-nowrap"
                         }
                     }
                     if cell.Tagged != None {
                         text cell.Tagged.text {
-                            style: "px-3 py-1.5 text-muted-foreground"
+                            style: "px-3 py-1.5 text-muted-foreground text-left overflow-hidden text-ellipsis whitespace-nowrap"
                         }
                     }
                 }
