@@ -10,9 +10,19 @@ use types: Block
 widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
     msg Msg { OpenPath(str), Rerun(str), Stop, DeleteBlock(int), ToggleCollapse(int) }
 
+    computed {
+        // Plan 053 后续:最新 block 的 id(列表非空时取末尾元素),用于给最新块
+        // 传 is_latest 以高亮边框。空列表给 -1(此时 for 不渲染,无副作用)。
+        latest_id => if .blocks.len() > 0 { .blocks[.blocks.len() - 1].id } else { -1 }
+    }
+
     view {
         scroll {
             style: "flex-1 p-3 gap-2.5"
+            // Plan 053 后续:自动滚到底部。auto_scroll 由 vue codegen 识别 → 生成
+            // watch(blocks) + 末尾 sentinel div + nextTick(scrollIntoView),新命令
+            // 出现/输出流式时都钉在底部。VM 端忽略此属性(无副作用)。
+            auto_scroll: "blocks"
 
             if .blocks.len() == 0 {
                 col {
@@ -33,6 +43,7 @@ widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: ms
                 BlockItem(
                     block: .b,
                     home: .home,
+                    is_latest: .b.id == .latest_id,
                     on_open_path: .OpenPath,
                     on_rerun: .Rerun,
                     on_stop: .Stop,

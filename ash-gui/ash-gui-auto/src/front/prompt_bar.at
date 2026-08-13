@@ -18,8 +18,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
               OnEnter(str), DoContinuation }
 
     computed {
-        // Plan 053 M6-B2: cwd 缩写(home 前缀 → ~),内联实现。
-        cwd_display => if .home != "" && .cwd.starts_with(.home) { "~" + .cwd.substr(.home.len(), .cwd.len()) } else { .cwd }
+        // Plan 053 后续:pwd 仅在顶端标题栏(app.at)显示,输入框不再显示 cwd,
+        // 故本 widget 不再需要 cwd_display(home/cwd props 保留,签名不动)。
         // Plan 053 M4: prompt 符号 — 续行时 `·`,正常 `❯`(对齐 repl.rs:913)。
         prompt_symbol => if .in_continuation { "·" } else { "❯" }
     }
@@ -80,10 +80,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 }
             }
 
-            // 输入行:❯ cwd + textarea
+            // 输入行:❯ + textarea(Plan 053 后续:pwd 仅留顶端标题栏,此行不再显示)。
+            // 行用单一静态 style(gap-2 给 ❯ 与输入 8px 间距);续行颜色挪到
+            // prompt_symbol —— 旧 .at 两 style 合一 + row 动态 class 缺失致 gap 丢失。
             row {
                 style: "relative items-center gap-2"
-                style: if .in_continuation { "text-amber-400" } else { "text-emerald-500" }
 
                 // 历史搜索弹层
                 HistorySearch(
@@ -94,10 +95,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 )
 
                 text .prompt_symbol {
-                    style: "font-mono-ash select-none shrink-0"
-                }
-                text .cwd_display {
-                    style: "text-[11px] text-sky-300/80 font-mono-ash shrink-0 max-w-[40%] truncate"
+                    style: "font-mono-ash select-none shrink-0 " + if .in_continuation { "text-amber-400" } else { "text-emerald-500" }
                 }
 
                 // Plan 053 M2: ghost text overlay。input 文字透明(只留光标),

@@ -7,7 +7,7 @@
 use block_body: BlockBody
 use types: Block
 
-widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
+widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
     msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand, CopyOutput, DeleteBlock(int), ToggleCollapse(int) }
 
     // Plan 055 D5: collapsed 移到 block 数据(per-block,避免 VM 单根 state
@@ -37,7 +37,9 @@ widget BlockItem(block: Block, home: str, on_open_path: msg, on_rerun: msg, on_s
 
     view {
         col {
-            style: "border-border bg-card/60 px-3 py-2.5 shadow-sm overflow-hidden rounded-lg border"
+            // Plan 053 后续:最新块加亮色边框 + 细 ring 区分(依赖 PLAN-026 的 col
+            // 动态 class,已合并 master)。is_latest 由 BlockList 传入(末尾块为 true)。
+            style: "border-border bg-card/60 px-3 py-2.5 shadow-sm overflow-hidden rounded-lg border " + if .is_latest { "border-sky-400/70 ring-1 ring-sky-400/30" } else { "" }
 
             // 头部:❯ command + 操作 + 状态(Plan 049:点击折叠/展开)
             // VM 限制:row 元素不支持 onclick(convert_row 会丢弃 events),
