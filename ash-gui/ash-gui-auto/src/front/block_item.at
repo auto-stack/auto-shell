@@ -120,9 +120,11 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
 
                 // 流式输出(运行中时显示)
                 if .block.status.kind == "Running" && .block.streamed_text != "" {
-                    // Plan 053 后续:长输出限高 + AutoUI ScrollArea(与侧栏一致的半透明滚动条)。
-                    scroll {
-                        style: "max-h-[400px] mb-2"
+                    // Plan 053 后续:长输出限高 + 原生 overflow + .ash-scroll(AutoUI 风格
+                    // 细/半透明滚动条,见 index.css)。不用 reka-ui scroll——其 bar 需确定
+                    // 高度检测溢出,与 max-h(限高)不兼容会致 bar 看不见。
+                    col {
+                        style: "max-h-[400px] overflow-y-auto ash-scroll mb-2"
                         text .block.streamed_text {
                             style: "text-xs font-mono-ash text-foreground/80 whitespace-pre-wrap"
                         }
@@ -130,11 +132,11 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 }
 
                 // 输出主体—— Plan 053 后续:show/cat 等长结果限高 max-h-[400px],超出在
-                // block 内部用 AutoUI ScrollArea 滚动(半透明滚动条,同侧栏/结果面板),
-                // 不再用原生 overflow-y-auto。
+                // block 内部滚动。用原生 overflow-y-auto + .ash-scroll(AutoUI 风格滚动条),
+                // 不用 reka-ui scroll(其 bar 与 max-h 不兼容)。
                 if .block.output != None {
-                    scroll {
-                        style: "max-h-[400px]"
+                    col {
+                        style: "max-h-[400px] overflow-y-auto ash-scroll"
                         BlockBody(output: .block.output, on_open_path: .OpenPath)
                     }
                 }
