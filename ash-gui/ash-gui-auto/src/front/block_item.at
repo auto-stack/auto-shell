@@ -120,14 +120,22 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
 
                 // 流式输出(运行中时显示)
                 if .block.status.kind == "Running" && .block.streamed_text != "" {
-                    text .block.streamed_text {
-                        style: "text-xs font-mono-ash text-foreground/80 whitespace-pre-wrap mb-2"
+                    // Plan 053 后续:长输出限高 + 内部滚动,避免单个 block 无限拉长。
+                    col {
+                        style: "max-h-[400px] overflow-y-auto mb-2"
+                        text .block.streamed_text {
+                            style: "text-xs font-mono-ash text-foreground/80 whitespace-pre-wrap"
+                        }
                     }
                 }
 
-                // 输出主体
+                // 输出主体—— Plan 053 后续:show/cat 等长结果限高 max-h-[400px],
+                // 超出部分在 block 内部滚动(overflow-y-auto),不再无限加高 block。
                 if .block.output != None {
-                    BlockBody(output: .block.output, on_open_path: .OpenPath)
+                    col {
+                        style: "max-h-[400px] overflow-y-auto"
+                        BlockBody(output: .block.output, on_open_path: .OpenPath)
+                    }
                 }
             }
         }
