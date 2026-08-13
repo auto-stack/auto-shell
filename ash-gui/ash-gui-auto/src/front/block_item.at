@@ -37,9 +37,12 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
 
     view {
         col {
-            // Plan 053 后续:最新块加亮色边框 + 细 ring 区分(依赖 PLAN-026 的 col
-            // 动态 class,已合并 master)。is_latest 由 BlockList 传入(末尾块为 true)。
-            style: "border-border bg-card/60 px-3 py-2.5 shadow-sm overflow-hidden rounded-lg border " + if .is_latest { "border-sky-400/70 ring-1 ring-sky-400/30" } else { "" }
+            // Plan 053 后续:最新块加亮色边框 + 细 ring 区分。基础类走静态 style(→ class);
+            // is_latest 高亮走动态 class(→ :class)—— Tailwind 类名必须走 class 通道,
+            // 放 style(→ :style)会被当 CSS 声明而失效(这也是上次高亮消失的根因)。
+            // is_latest 由 BlockList 传入(末尾块为 true)。
+            style: "border-border bg-card/60 px-3 py-2.5 shadow-sm overflow-hidden rounded-lg border"
+            class: if .is_latest { "border-sky-400/70 ring-1 ring-sky-400/30" } else { "" }
 
             // 头部:❯ command + 操作 + 状态(Plan 049:点击折叠/展开)
             // VM 限制:row 元素不支持 onclick(convert_row 会丢弃 events),
@@ -90,7 +93,8 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                         }
                     }
                     text .status_glyph {
-                        style: "text-xs font-mono-ash " + .status_cls
+                        style: "text-xs font-mono-ash"
+                        class: .status_cls
                     }
                     // BL-08..10:duration badge(仅完成时 duration_ms > 0 显示)。
                     if .duration_label != "" {
@@ -101,7 +105,8 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     // Plan 054 M2: 退出码(完成时显示,非 0 标红)。
                     if .block.status.kind == "Success" || .block.status.kind == "Failed" {
                         text .exit_label {
-                            style: "text-[10px] h-5 font-mono-ash " + .exit_cls
+                            style: "text-[10px] h-5 font-mono-ash"
+                            class: .exit_cls
                         }
                     }
                 }

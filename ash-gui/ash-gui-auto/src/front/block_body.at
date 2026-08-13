@@ -30,7 +30,7 @@ use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 // 已在 extract.rs substitute_expr 的 Call 分支补上 callee 替换,故此 grid 方案
 // 现在 vue/VM 都正确生成,无需手改 gen。
 //
-// Plan 052: 处理两种 RenderedCell 变体 + zebra (cache-bust)/header/padding 样式。
+// Plan 052: 处理两种 RenderedCell 变体 + zebra/header/padding 样式。
 view fn RenderTable(output TableOutput) {
     col {
         style: "w-full text-sm font-mono-ash border border-border rounded-md overflow-hidden bg-card/50"
@@ -56,8 +56,15 @@ view fn RenderTable(output TableOutput) {
                         }
                     }
                     if cell.Tagged != None {
-                        text cell.Tagged.text {
-                            style: "px-3 py-1.5 text-muted-foreground text-left overflow-hidden text-ellipsis whitespace-nowrap"
+                        // Plan 053 后续:按 kind 着色(对齐 ash-gui-vue cellStyle.ts /
+                        // iced tag_color):Dir→sky, CodeAtRs→emerald, Executable→cyan,
+                        // Config→amber, Permission→muted, Plain→foreground。用 col 包一层
+                        // 走 class:(text 节点不支持 class: 绑定,col 支持 → :class),颜色
+                        // 类级联到内部 text;Tailwind 类名不可走 style(→ :style 会失效)。
+                        col {
+                            style: "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap"
+                            class: if cell.Tagged.kind == "Dir" { "text-sky-400" } else if cell.Tagged.kind == "CodeAtRs" { "text-emerald-400" } else if cell.Tagged.kind == "Executable" { "text-cyan-300" } else if cell.Tagged.kind == "Config" { "text-amber-300" } else if cell.Tagged.kind == "Permission" { "text-muted-foreground" } else { "text-foreground" }
+                            text cell.Tagged.text { }
                         }
                     }
                 }
