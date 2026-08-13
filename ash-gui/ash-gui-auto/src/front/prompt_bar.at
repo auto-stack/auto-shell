@@ -32,6 +32,14 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         var suggestions []CompletionItem = []
         var ghost_text str = ""
         var highlighted_spans []HighlightSpan = []
+        // Plan 053 后续:Tab 循环补全状态。tab_active=正在 Tab 循环;tab_candidates=
+        // 进入循环时缓存的候选(循环期间 input 已被补全、.suggestions 会变,故另存);
+        // tab_index=当前选中下标;tab_just_completed=标记"本次 input 变化是 Tab 触发的",
+        // 让紧跟的 keyup(OnInput)不要误判为用户输入而结束循环。
+        var tab_active bool = false
+        var tab_index int = 0
+        var tab_candidates []CompletionItem = []
+        var tab_just_completed bool = false
     }
 
     // 侧栏点击工具 → 填入输入框(原生 PromptBar 的 injectedCommand watch)
@@ -274,37 +282,45 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // 绑 oninput 走 codegen 注入的 80ms debounce + 序列号守卫 —— 避免
         // 每次 keyup 打后端,且过期结果不覆盖最新建议。
         .OnInput -> {
-            // Plan 053 M2: ghost text = 以当前输入为前缀的最长历史条目
-            // (去掉已输入前缀,只留建议续接)。对齐 vue 原版 PromptBar.vue:299-328。
-            // 倒序遍历历史,找 starts_with(input) 且更长的条目里最长的那个。
-            .ghost_text = ""
-            if .input != "" {
-                var best_ghost str = ""
-                var i int = .history.len() - 1
-                for i >= 0 {
-                    var h str = .history[i]
-                    if h.starts_with(.input) && h.len() > .input.len() {
-                        var g str = h.substr(.input.len(), h.len())
-                        if g.len() > best_ghost.len() {
-                            best_ghost = g
-                        }
-                    }
-                    i = i - 1
+            // Plan 053 后续:Tab 循环补全状态机。Tab 补全会改 .input,紧接着 Tab 的
+            // keyup 也走本 handler —— 用 tab_just_completed 区分:是 Tab 触发的就只清
+            // 标记、把候选列表恢复成缓存的 tab_candidates(保持循环期间稳定),并跳过
+            // ghost/补全重算(否则补全到的全名会再触发一次 complete,候选行就空了);
+            // 否则若 tab_active,说明用户输入了字符 → 结束循环。
+            if .tab_just_completed {
+                .tab_just_completed = false
+                .ghost_text = ""
+                .suggestions = .tab_candidates
+            } else {
+                if .tab_active {
+                    .tab_active = false
+                    .tab_candidates = []
                 }
-                .ghost_text = best_ghost
+                // Plan 053 M2: ghost text = 以当前输入为前缀的最长历史条目
+                // (去掉已输入前缀,只留建议续接)。对齐 vue 原版 PromptBar.vue:299-328。
+                .ghost_text = ""
+                if .input != "" {
+                    var best_ghost str = ""
+                    var i int = .history.len() - 1
+                    for i >= 0 {
+                        var h str = .history[i]
+                        if h.starts_with(.input) && h.len() > .input.len() {
+                            var g str = h.substr(.input.len(), h.len())
+                            if g.len() > best_ghost.len() {
+                                best_ghost = g
+                            }
+                        }
+                        i = i - 1
+                    }
+                    .ghost_text = best_ghost
+                }
+                // Plan 053 M3: 重新 tokenize 写 highlighted_spans。
+                .DoTokenize()
+                // Plan 053 M4: 续行标志(未闭合分隔符/引号/尾随 \)→ prompt 符号 + Enter 行为。
+                .DoContinuation()
+                // Plan 053 M5: 兜底触发补全(vue 端 OnInputComplete 自带 80ms debounce)。
+                .OnInputComplete()
             }
-            // Plan 053 M3: 重新 tokenize 写 highlighted_spans。
-            .DoTokenize()
-            // Plan 053 M4: 重新算续行标志(未闭合分隔符/引号/尾随 \),驱动
-            // prompt 符号切换 + Enter 行为。
-            .DoContinuation()
-            // Plan 053 M5: 兜底触发补全。vue 端 OnInputComplete 自带
-            // setTimeout(80ms) 包装 —— oninput 绑定 + 此处自调都经过它的
-            // clearTimeout 合并,停顿后最终只请求一次(对齐 vue 原版 debounce)。
-            // VM 端无 setTimeout 且 textarea 事件支持有限(M3 tokenize 已标注
-            // 「仅 vue 可靠」),此处自调保证 VM 模式经 onkeyup 也能同步取到
-            // 补全建议,不因拆分而丢失。
-            .OnInputComplete()
         }
 
         // Plan 053 M5/P5-6: 后端补全(complete)独立 handler,绑 oninput。
@@ -473,8 +489,27 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
 
         // Tab:应用第一个补全候选
         .OnTab -> {
-            if .suggestions.len() > 0 {
-                .PickCompletion(.suggestions[0])
+            // Plan 053 后续:Tab 循环补全。首次 Tab 缓存当前 suggestions 进循环;
+            // 后续 Tab(用户未再输入)在缓存候选里循环下标。PickCompletion 每次替换
+            // 最后一个 token,故循环候选依次替换即可(show Ca → Cargo.lock → Cargo.toml
+            // → Cargo.lock …)。用户一旦输入字符,OnInput 会清 tab_active 结束循环。
+            if .tab_active && .tab_candidates.len() > 0 {
+                .tab_index = .tab_index + 1
+                if .tab_index >= .tab_candidates.len() {
+                    .tab_index = 0
+                }
+            } else {
+                if .suggestions.len() > 0 {
+                    .tab_candidates = .suggestions
+                    .tab_index = 0
+                    .tab_active = true
+                } else {
+                    .tab_active = false
+                }
+            }
+            if .tab_active {
+                .tab_just_completed = true
+                .PickCompletion(.tab_candidates[.tab_index])
             }
         }
 
