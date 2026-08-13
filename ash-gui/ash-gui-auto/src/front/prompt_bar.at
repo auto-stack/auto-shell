@@ -291,6 +291,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .tab_just_completed = false
                 .ghost_text = ""
                 .suggestions = .tab_candidates
+                // 重新 tokenize + 续行检测:Tab 补全改了 .input,必须更新 highlighted_spans
+                // —— 输入框可见文字靠 overlay 渲染 spans(textarea 文字透明),不重算
+                // spans 的话补全进去的字(如 Cargo.lock)在 overlay 里仍是旧 input,看不见。
+                .DoTokenize()
+                .DoContinuation()
             } else {
                 if .tab_active {
                     .tab_active = false
