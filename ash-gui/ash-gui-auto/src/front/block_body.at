@@ -21,37 +21,42 @@ use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
 // Plan 046:用 col/row 替代 HTML table 标签(table/thead/tbody/tr/th/td)。
 // VM 的 aura_view_builder 不支持 HTML table 标签(fallback 成 Column 会丢数据行)。
 // col/row 是 VM 原生支持的对齐 iced 的 Table 渲染方式(renderer.rs:1289 column of rows)。
-// vue codegen 会把 col/row 映射成 div,但表格列对齐需要真正的 <table> —
-// vue 产物里 BlockBody.vue 已手改为 <table>(Plan 052 样式改进),.at 层保留 col/row 供 VM。
 //
-// Plan 052: 处理两种 RenderedCell 变体 + 改善样式(zebra/header/padding)。
+// 列对齐用 **flex + 每格 flex-1**(等宽列),而非 grid + repeat(N 列):后者要把
+// output.columns.len() 写进「动态 style 表达式」,而 codegen 的 substitute_expr
+// 不对动态 style 做 view-fn 参数替换(只替换 for/if 的裸 Ident 头)→ 产物里留下
+// output.columns.length(应为 output.Table.columns.length)→ 运行时 undefined
+// → 整个 Table 渲染失败(空块)。flex 方案全用静态 style,绕开该 codegen 缺陷,
+// vue/VM 都正确,无需手改 gen。
+//
+// Plan 052: 处理两种 RenderedCell 变体 + zebra/header/padding 样式。
 view fn RenderTable(output TableOutput) {
     col {
         style: "w-full text-sm font-mono-ash border border-border rounded-md overflow-hidden bg-card/50"
         // 表头行
         row {
-            style: "display:grid; grid-template-columns: repeat(" + output.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04)"
+            style: "flex w-full border-b border-border/60 bg-muted/40"
             for col_name in output.columns {
                 text col_name {
-                    style: "px-3 py-2 text-left font-semibold whitespace-nowrap"
+                    style: "flex-1 min-w-[80px] px-3 py-2 text-left font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
                 }
             }
         }
         // 数据行 — 二维数组 for cell in row(Plan 046 已修 VM 嵌套 for bug)
         for row in output.rows {
             row {
-                style: "display:grid; grid-template-columns: repeat(" + output.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.06)"
+                style: "flex w-full border-b border-border/60"
                 for cell in row {
                     // Plan 052: 处理两种 RenderedCell 变体。
                     // Text: 纯文本(echo 等);Tagged: 带语义标签的文本(ls 的文件名/权限等)。
                     if cell.Text != None {
                         text cell.Text {
-                            style: "px-3 py-1.5 text-muted-foreground text-left overflow-hidden text-ellipsis whitespace-nowrap"
+                            style: "flex-1 min-w-[80px] px-3 py-1.5 text-muted-foreground text-left overflow-hidden text-ellipsis whitespace-nowrap"
                         }
                     }
                     if cell.Tagged != None {
                         text cell.Tagged.text {
-                            style: "px-3 py-1.5 text-muted-foreground text-left overflow-hidden text-ellipsis whitespace-nowrap"
+                            style: "flex-1 min-w-[80px] px-3 py-1.5 text-muted-foreground text-left overflow-hidden text-ellipsis whitespace-nowrap"
                         }
                     }
                 }
