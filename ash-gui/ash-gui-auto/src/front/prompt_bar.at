@@ -116,10 +116,15 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     // overlay 层:absolute 覆盖 input 区域,显示 input + ghost
                     row {
                         style: "pointer-events-none absolute inset-0 flex items-center text-sm font-mono-ash whitespace-pre overflow-hidden"
-                        // Plan 053 M3: 语法高亮 span(DoTokenize 写 highlighted_spans)。
+                        // Plan 053 M3 / 后续:语法高亮 span(DoTokenize 写 highlighted_spans,
+                        // 产语义 kind)。此处是渲染层:kind → Tailwind 类的薄映射。用 Tailwind
+                        // 类(而非 inline CSS)是因为:text 节点的 style: If 经 codegen 走 :class
+                        // (CSS 声明在 :class 失效,类名才行);且 Tailwind 类经共享 color.rs 调色板
+                        // 能同时落到 vue(CSS)与 VM(iced RGB)—— 即 block 状态色那套可移植通道。
+                        // .span.kind 来自逻辑层(target-neutral)。
                         for span in .highlighted_spans {
                             text .span.text {
-                                style: .span.color
+                                style: if .span.kind == "Command" { "text-emerald-400 font-bold" } else if .span.kind == "ExternalCmd" { "text-sky-300" } else if .span.kind == "String" { "text-amber-300" } else if .span.kind == "Variable" { "text-red-400" } else if .span.kind == "Operator" { "text-pink-400 font-bold" } else if .span.kind == "Redirect" { "text-gray-400" } else if .span.kind == "Comment" { "text-gray-400 italic" } else if .span.kind == "Flag" { "text-purple-300" } else { "text-gray-200" }
                             }
                         }
                         text .ghost_text {
@@ -164,11 +169,12 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
     }
 
     on {
-        // Plan 053 M3: 重新 tokenize .input 写 highlighted_spans。
-        // 内联 tokenize:widget 文件的顶层 module fn 不被 codegen,store 的
-        // module fn 又不能被 widget use 导入(只认 store/widget),故把状态机
-        // 直接写在 handler 里。用 break(支持)代替 continue(不支持);
-        // color 用 inline CSS(.at 动态 class 走 :style,P5-7)。仅 vue 可靠。
+        // Plan 053 M3 / 后续(逻辑可移植化):重新 tokenize .input 写 highlighted_spans。
+        // 内联 tokenize:widget 文件的顶层 module fn 不被 codegen,store 的 module fn
+        // 又不能被 widget use 导入,故状态机直接写在 handler 里。用 break(支持)代替
+        // continue(不支持)。状态机逻辑不变;只把产出从「inline CSS 色串」改成「语义 kind」
+        // (Command/ExternalCmd/String/Variable/Operator/Redirect/Comment/Flag/Whitespace/
+        // Arg)→ 逻辑层 target-neutral。各 target 的 kind→色 渲染在视图层 span if-chain。
         .DoTokenize -> {
             var spans []HighlightSpan = []
             var line str = .input
@@ -180,7 +186,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             for i < n {
                 var c str = line.substr(i, i + 1)
                 if c == "#" && (i == 0 || line.substr(i - 1, i) == " " || line.substr(i - 1, i) == "\t") {
-                    spans.push(HighlightSpan{text: line.substr(i, n), color: "color:#9ca3af;font-style:italic"})
+                    spans.push(HighlightSpan{text: line.substr(i, n), kind: "Comment"})
                     break
                 } else if c == " " || c == "\t" {
                     var j int = i
@@ -188,7 +194,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         var cj str = line.substr(j, j + 1)
                         if cj == " " || cj == "\t" { j = j + 1 } else { break }
                     }
-                    spans.push(HighlightSpan{text: line.substr(i, j), color: "color:#e5e7eb"})
+                    spans.push(HighlightSpan{text: line.substr(i, j), kind: "Whitespace"})
                     i = j
                     first_word = false
                 } else if c == "\"" || c == "'" {
@@ -202,7 +208,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     }
                     var e int = j + 1
                     if e > n { e = n }
-                    spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#fcd34d"})
+                    spans.push(HighlightSpan{text: line.substr(i, e), kind: "String"})
                     i = e
                     first_word = false
                 } else if c == "$" {
@@ -213,13 +219,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         }
                         var e int = j + 1
                         if e > n { e = n }
-                        spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#f87171"})
+                        spans.push(HighlightSpan{text: line.substr(i, e), kind: "Variable"})
                         i = e
                     } else {
                         for j < n {
                             if idc.contains(line.substr(j, j + 1)) { j = j + 1 } else { break }
                         }
-                        spans.push(HighlightSpan{text: line.substr(i, j), color: "color:#f87171"})
+                        spans.push(HighlightSpan{text: line.substr(i, j), kind: "Variable"})
                         i = j
                     }
                     first_word = false
@@ -229,7 +235,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     if c == "&" { ol = 2 }
                     var e int = i + ol
                     if e > n { e = n }
-                    spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#f472b6;font-weight:bold"})
+                    spans.push(HighlightSpan{text: line.substr(i, e), kind: "Operator"})
                     i = e
                     first_word = true
                 } else if c == ">" || c == "<" {
@@ -237,7 +243,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     if c == ">" && i + 1 < n && line.substr(i + 1, i + 2) == ">" { rl = 2 }
                     var e int = i + rl
                     if e > n { e = n }
-                    spans.push(HighlightSpan{text: line.substr(i, e), color: "color:#9ca3af"})
+                    spans.push(HighlightSpan{text: line.substr(i, e), kind: "Redirect"})
                     i = e
                     first_word = false
                 } else {
@@ -250,16 +256,16 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     var word str = line.substr(i, j)
                     if first_word {
                         if builtins.contains(" " + word + " ") {
-                            spans.push(HighlightSpan{text: word, color: "color:#34d399;font-weight:bold"})
+                            spans.push(HighlightSpan{text: word, kind: "Command"})
                         } else {
-                            spans.push(HighlightSpan{text: word, color: "color:#7dd3fc"})
+                            spans.push(HighlightSpan{text: word, kind: "ExternalCmd"})
                         }
                         first_word = false
                     } else {
                         if word.starts_with("-") && word.len() > 1 {
-                            spans.push(HighlightSpan{text: word, color: "color:#d8b4fe"})
+                            spans.push(HighlightSpan{text: word, kind: "Flag"})
                         } else {
-                            spans.push(HighlightSpan{text: word, color: "color:#e5e7eb"})
+                            spans.push(HighlightSpan{text: word, kind: "Arg"})
                         }
                     }
                     i = j
