@@ -1,7 +1,10 @@
 # ash-gui-auto
 
-Auto(.at)版本的 ash-gui —— 用 [auto-lang](../../../../../auto-lang) 的 iced
-原生渲染器跑 ash-gui。VM 模式(开发/测试)+ a2r 模式(可分发二进制,开发中)。
+Auto(.at)版本的 ash-gui。三种运行形态:
+
+- **VM 模式**(开发/测试,推荐)—— [auto-lang](../../../../../auto-lang) 的 iced 原生渲染器,运行时解析 `.at`;
+- **Vue/浏览器模式** —— `auto gen` 生成 Vue 前端,浏览器里跑,连 [ash-server](../ash-server) 真后端(详见下文);
+- **a2r 模式**(可分发二进制,开发中)—— 生成 Rust → 独立 iced 二进制。
 
 ## 运行
 
@@ -18,6 +21,37 @@ auto run -r vm
 打开 iced 窗口(标题 "Auto - App"),MCP UI 服务端监听 `http://127.0.0.1:9247/mcp`。
 
 > `pac.at` 的 `render: "vue"` 是默认值;VM 模式用 `-r vm` 命令行参数覆盖,不改 pac.at。
+
+### Vue/浏览器模式(连 ash-server 真后端)
+
+`pac.at: render: "vue"` 时,`auto gen` 把 Vue 前端生成到 `gen/front/vue/`。浏览器版与 [ash-gui-vue](../ash-gui-vue) 共用同一个后端 —— **[ash-server](../ash-server)**(独立 HTTP 服务,包装 ash-core,默认监听 `:3000`)。
+
+> ⚠️ **不要用 `auto run` 跑浏览器版真后端**:`auto run`(默认 vue)会自动构建并运行 codegen 生成的桩后端 `examples/rust-workspace/ash-gui-auto-back`(只返空默认值的脚手架,**不执行命令**),并把 vite 的 `/api` 代理到它(默认 `:8080`)。要跑真命令,必须手动起 ash-server,并让 vite 代理过去。
+
+**前置**:`auto gen` 已生成 `gen/front/vue/`,且装好依赖(在 `gen/front/vue/` 跑 `npm install` 或你用的包管理器)。
+
+两个终端启动:
+
+```bash
+# 终端 1 — 真 ash-core 后端(ash-server)
+cd ash-gui/ash-server && cargo run            # → http://localhost:3000
+
+# 终端 2 — Vue 前端开发服务器(vite),/api 代理到 ash-server
+cd ash-gui/ash-gui-auto/gen/front/vue
+AUTO_FRONT_PORT=5173 AUTO_HTTP_PORT=3000 npm run dev   # → http://localhost:5173
+```
+
+浏览器打开 **http://localhost:5173** 。`.at` 改动后重跑 `auto gen` 刷新 `gen/`(vite HMR 只热更 gen 产物,不会重新生成)。
+
+`/api` 代理由 `gen/front/vue/vite.config.ts` 控制(运行时读环境变量,**无需重生成**):
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `AUTO_FRONT_PORT` | `3000` | vite 端口。ash-server 已占 3000,浏览器版务必改成别的(如 `5173`) |
+| `AUTO_HTTP_PORT` | `8080` | `/api` 代理目标端口。连 ash-server 设为 `3000` |
+| `AUTO_HTTP_PROXY` | (空) | 完整代理目标 URL,优先于 `AUTO_HTTP_PORT`(如 `http://localhost:3000`) |
+
+> ash-server 是手写的独立 crate(`ash-gui/ash-server`),不在 `auto gen` 产物范围;改后端逻辑直接改它源码再 `cargo run` 即可。
 
 ### A2R 模式(可分发二进制,开发中)
 
