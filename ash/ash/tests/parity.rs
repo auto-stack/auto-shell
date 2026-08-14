@@ -133,30 +133,42 @@ fn resolve_bash() -> Option<PathBuf> {
     static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
     RESOLVED
         .get_or_init(|| {
-            // Windows: prefer full Git bash paths; the bare "bash" may be WSL.
+            // Windows: prefer full Git bash paths; the bare "bash" may be WSL
+            // (CreateProcess searches System32 before PATH, so the broken WSL
+            // launcher there wins over Git bash on PATH). Git's install root
+            // varies by machine — derive it from `git --exec-path`.
             // Unix: "bash" is the real bash.
-            let candidates: &[&str] = if cfg!(windows) {
-                &[
-                    r"C:\Program Files\Git\bin\bash.exe",
-                    r"C:\Program Files\Git\usr\bin\bash.exe",
-                    "bash",
-                ]
-            } else {
-                &["bash"]
-            };
-            for c in candidates {
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            if cfg!(windows) {
+                if let Some(root) = git_install_root() {
+                    for rel in ["bin", "usr\\bin"] {
+                        candidates.push(root.join(rel).join("bash.exe"));
+                    }
+                }
+                candidates.push(PathBuf::from(r"C:\Program Files\Git\bin\bash.exe"));
+                candidates.push(PathBuf::from(r"C:\Program Files\Git\usr\bin\bash.exe"));
+            }
+            candidates.push(PathBuf::from("bash"));
+            for c in &candidates {
                 // Probe: a real bash prints BASH_VERSION. WSL bash also has it,
                 // but if a full Git path exists it is preferred and wins first.
                 if let Ok(o) = Command::new(c).args(["-c", "echo $BASH_VERSION"]).output() {
                     let out = String::from_utf8_lossy(&o.stdout);
                     if !out.trim().is_empty() {
-                        return Some(PathBuf::from(c));
+                        return Some(c.clone());
                     }
                 }
             }
             None
         })
         .clone()
+}
+
+/// Git's install root, derived from `git --exec-path` (mingw64 layout).
+fn git_install_root() -> Option<PathBuf> {
+    let out = Command::new("git").arg("--exec-path").output().ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Path::new(&p).ancestors().nth(3).map(Path::to_path_buf)
 }
 
 /// Execute a PowerShell script via subprocess. Returns (stdout, exit_code).

@@ -114,6 +114,19 @@ fn strip_ansi(s: &str) -> String {
 
 fn resolve_bash() -> String {
     if cfg!(windows) {
+        // Git's install root varies by machine (Program Files, D:\soft\Git,
+        // scoop, portable). Derive it from `git --exec-path`
+        // (<root>\mingw64\libexec\git-core → up 3 = <root>), because a bare
+        // "bash" resolves to C:\Windows\System32\bash.exe (the WSL launcher)
+        // before PATH is ever consulted.
+        if let Some(root) = git_install_root() {
+            for rel in ["bin", r"usr\bin"] {
+                let cand = root.join(rel).join("bash.exe");
+                if cand.exists() {
+                    return cand.to_string_lossy().into_owned();
+                }
+            }
+        }
         for c in [
             r"C:\Program Files\Git\bin\bash.exe",
             r"C:\Program Files\Git\usr\bin\bash.exe",
@@ -124,6 +137,13 @@ fn resolve_bash() -> String {
         }
     }
     "bash".to_string()
+}
+
+/// Git's install root, derived from `git --exec-path` (mingw64 layout).
+fn git_install_root() -> Option<std::path::PathBuf> {
+    let out = Command::new("git").arg("--exec-path").output().ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    std::path::Path::new(&p).ancestors().nth(3).map(std::path::Path::to_path_buf)
 }
 
 /// `ls *.rs` lists the same files as bash (ash's `find -name` currently returns
