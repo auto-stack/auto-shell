@@ -11,7 +11,7 @@
 // - run_command:no-op(命令执行由 renderer 的 merged_exec_loop 拦截,见 M3)。
 // - prompt_context/complete/read_history:静态 mock,待 M4 接 ash-core。
 
-use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry
+use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry, JobInfo
 
 // ── command_list:返回完整工具表(79 命令,对齐 ash-core registry)──
 pub fn command_list() BootSnapshot {
@@ -435,6 +435,17 @@ pub fn cancel() {
 }
 
 pub fn open_path(path str) {
+    // mock no-op
+}
+
+// ── jobs / kill_job:mock(Plan 055 Phase A 后台作业;VM mock 无作业,返回空)。
+// 真实实现在 ash-server/ash-core;此处仅为让 VM merged 模式能 link(api.at
+// 的 jobs()/kill_job() 调 shell.jobs()/shell.kill_job(),缺这俩 VM 启动失败)。
+pub fn jobs() []JobInfo {
+    return List<JobInfo>.new([])
+}
+
+pub fn kill_job(job_id int) {
     // mock no-op
 }
 
