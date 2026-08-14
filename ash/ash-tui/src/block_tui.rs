@@ -1229,6 +1229,39 @@ fn render_structured_block(
         return Ok(());
     }
 
+    // Plan 042 M6: Code — syntax-highlighted spans carry RGB + bold/italic, so
+    // render them as colored ratatui spans (like the GUI/web do) instead of
+    // flattening to plain text.
+    if let RenderedOutput::Code { lines, .. } = rendered {
+        let height = 1u16 + lines.len() as u16;
+        let header_cmd = command.to_string();
+        let code_lines = lines.clone();
+        terminal.insert_before(height, move |buf| {
+            render_block_header(buf, &header_cmd, exit_code, elapsed);
+            for (i, spans) in code_lines.iter().enumerate() {
+                let y = buf.area.y + 1 + i as u16;
+                if y >= buf.area.bottom() {
+                    break;
+                }
+                let line_spans: Vec<Span> = spans
+                    .iter()
+                    .map(|s| {
+                        let mut style = Style::default().fg(Color::Rgb(s.r, s.g, s.b));
+                        if s.bold {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        if s.italic {
+                            style = style.add_modifier(Modifier::ITALIC);
+                        }
+                        Span::styled(s.text.clone(), style)
+                    })
+                    .collect();
+                buf.set_line(buf.area.x, y, &Line::from(line_spans), buf.area.width);
+            }
+        })?;
+        return Ok(());
+    }
+
     // Non-table: text rendering (same as the plain execute path).
     let body_text = match rendered {
         RenderedOutput::Text(t) => Some(t.clone()),
@@ -1248,6 +1281,8 @@ fn render_structured_block(
             Some(lines.join("\n"))
         }
         RenderedOutput::Table { .. } => unreachable!(),
+        // Handled by the colored-spans branch above (early return).
+        RenderedOutput::Code { .. } => unreachable!(),
     };
     let body_lines: Vec<String> = body_text
         .map(|s| s.lines().map(|l| l.to_string()).collect())
@@ -1562,12 +1597,35 @@ fn render_block(
     body_lines: &[String],
     is_error: bool,
 ) {
-    use ratatui_core::style::{Color, Modifier, Style};
-    use ratatui_core::text::{Line, Span};
+    render_block_header(buf, command, exit_code, elapsed);
+
+    // ── Body ──
+    let body_style = if is_error {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    for (i, ln) in body_lines.iter().enumerate() {
+        let y = buf.area.y + 1 + i as u16;
+        if y >= buf.area.bottom() {
+            break;
+        }
+        buf.set_string(buf.area.x, y, ln, body_style);
+    }
+}
+
+/// The header row shared by every block: "❯ {command}  ...pad...  {duration}
+/// {icon}". Split out of `render_block` so the Code path (colored spans, not
+/// plain body lines) can reuse it.
+fn render_block_header(
+    buf: &mut ratatui_core::buffer::Buffer,
+    command: &str,
+    exit_code: i32,
+    elapsed: std::time::Duration,
+) {
     use unicode_width::UnicodeWidthStr;
 
     let w = buf.area.width;
-    // ── Header: "❯ {command}  ...pad...  {duration}  {icon}" ──
     let dur = crate::block_header::format_duration(elapsed);
     let (icon, icon_color) = if exit_code == 0 {
         ("✓", Color::Green)
@@ -1586,20 +1644,6 @@ fn render_block(
     spans.push(Span::styled(right, Style::default().fg(icon_color)));
     let header_line = Line::from(spans);
     buf.set_line(buf.area.x, buf.area.y, &header_line, w);
-
-    // ── Body ──
-    let body_style = if is_error {
-        Style::default().fg(Color::Red)
-    } else {
-        Style::default().add_modifier(Modifier::DIM)
-    };
-    for (i, ln) in body_lines.iter().enumerate() {
-        let y = buf.area.y + 1 + i as u16;
-        if y >= buf.area.bottom() {
-            break;
-        }
-        buf.set_string(buf.area.x, y, ln, body_style);
-    }
 }
 
 /// Strip ANSI escape sequences from a string.
