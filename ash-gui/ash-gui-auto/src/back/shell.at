@@ -450,8 +450,11 @@ pub fn kill_job(job_id int) {
 }
 
 // ── subscribe:SSE 流(Plan 051 M1:解注,见 api.at 注释)
-// VM mock:返回空 stream(VM --merged 命令执行由 renderer 拦截,不依赖此流)。
+// VM mock:no-op(VM --merged 命令执行由 renderer 拦截,不消费此流)。
 // vue 模式:真实 SSE 由 ash-server 的 /api/stream 端点提供,不经此 mock。
+// 注:`~Stream<ShellEvent>` 是类型注解(vue codegen 据此生成 EventSource),
+// VM 当普通函数、不返回 Stream 值 —— Stream 非 VM 运行时类型,原先的
+// `return Stream<ShellEvent>.empty()` 会致 "Undefined variable: Stream"
+// → back.api 导入失败 → complete 不可用 → PromptBar.OnInputComplete link 失败。
 pub fn subscribe() ~Stream<ShellEvent> {
-    return Stream<ShellEvent>.empty()
 }
