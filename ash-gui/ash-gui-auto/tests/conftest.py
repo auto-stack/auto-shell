@@ -56,11 +56,14 @@ def vm_process():
         pytest.skip(f"auto binary not found at {AUTO_BIN}; set AUTO_BIN env var")
 
     print(f"\n[startup] launching: {AUTO_BIN} run -r vm (cwd={PROJECT_ROOT})")
+    # Plan 057: set ASH_TEST_VM_LOG=<path> to capture VM stdout/stderr for
+    # crash triage (default: DEVNULL, as before).
+    vm_log = os.environ.get("ASH_TEST_VM_LOG")
     proc = subprocess.Popen(
         [AUTO_BIN, "run", "-r", "vm"],
         cwd=str(PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=open(vm_log, "w") if vm_log else subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if vm_log else subprocess.DEVNULL,
     )
     try:
         yield proc
@@ -98,13 +101,16 @@ def mcp(vm_process):
 
     # Wait for the UI to render its first frame (iced needs a few seconds).
     # Poll snapshot until it contains a known marker or aura_/vnode_ ids.
+    # Plan 057: also wait for the sidebar ("Commands" heading) — Init's boot
+    # data populates it a few frames after the first paint; tests like APP-07
+    # snapshot immediately and raced the sidebar under system load.
     print("[startup] waiting for UI to render...")
     rendered = False
-    for i in range(20):
+    for i in range(30):
         time.sleep(2)
         try:
             snap = client.snapshot()
-            if "aura_" in snap or "vnode_" in snap or "ash" in snap:
+            if "Commands" in snap or ("aura_" in snap or "vnode_" in snap or "ash" in snap):
                 print(f"[startup] UI rendered after {(i + 1) * 2}s")
                 rendered = True
                 break
@@ -112,6 +118,18 @@ def mcp(vm_process):
             pass
     if not rendered:
         print("[startup] WARNING: UI may not have rendered; running tests anyway...")
+
+    # Second gate: the sidebar must be populated before sidebar-sensitive
+    # tests run (APP-07/TS-*). Retry up to 20s, then proceed regardless.
+    for i in range(10):
+        try:
+            if "Commands" in client.snapshot():
+                if i > 0:
+                    print(f"[startup] sidebar ready after {(i + 1) * 2}s extra")
+                break
+        except Exception:
+            pass
+        time.sleep(2)
 
     return client
 

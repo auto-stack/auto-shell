@@ -351,7 +351,28 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // onenter: .OnEnter(.input) 的已验证模式)—— VM 的 handler 内 .input
         // 字段读有 GET_FIELD 编码问题(求值成 Int 0,见 onenter 的同类规避
         // 注释),此前 complete(.input,…) 实际发的是 complete(0,1),候选恒空。
+        // Plan 057 (2.3): per-keystroke 管线整合(tokenize + 续行 + 补全)。
+        // 背景:iced text_editor 只有 on_action/on_change 通道,**无 keyup**,
+        // 故 .OnInput(绑 onkeyup)在 VM 从不触发 —— tokenize/续行原先住在
+        // OnInput 里,VM 下是死路;实测 sibling 调用(RET 下溢保护后)已可从
+        // 本 handler 调 .DoTokenize()/.DoContinuation()。
+        // ghost text **不**搬过来:handler 里读 `.history` prop(数组 prop 的
+        // handler 内读取)会静默中止整个 handler(实测探针 .history.len() 即
+        // 触发,tokenize/spans 连带全空)。ghost 保持只在 OnInput(vue keyup)
+        // 生效;VM 暂无 ghost,待 auto-lang 修 prop 读取后合并。
+        // vue 端:OnInput(keyup)即时跑 ghost/tokenize,本 handler 80ms debounce
+        // 重复 tokenize —— 幂等。
         .OnInputComplete(v str) -> {
+            if .tab_just_completed {
+                .tab_just_completed = false
+            } else {
+                if .tab_active {
+                    .tab_active = false
+                    .tab_candidates = []
+                }
+                .DoTokenize()
+                .DoContinuation()
+            }
             if v.trim() != "" {
                 .suggestions = complete(v, v.len())
             } else {
