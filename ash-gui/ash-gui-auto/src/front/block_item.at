@@ -68,33 +68,35 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     if .block.status.kind == "Running" {
                         button "■" {
                             onclick: .Stop
-                            style: "px-1.5 py-0.5 text-[11px] rounded text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-red-400 hover:text-red-300 hover:bg-red-500/10"
                         }
                     }
                     row {
                         style: "items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
                         button "⧉" {
                             onclick: .CopyCommand
-                            style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
                         }
                         // Plan 054 M3: 复制输出文本(output.Text 变体)。
-                        button "📋" {
+                        button "≡" {
                             onclick: .CopyOutput
-                            style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
                         }
                         button "↻" {
                             onclick: .Rerun(.block.command)
-                            style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
                         }
                         // Plan 054 M3: 删除此 block(回调父级 store.DeleteBlock)。
                         button "✕" {
                             onclick: .DeleteBlock(.block.id)
-                            style: "px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
                         }
                     }
                     text .status_glyph {
-                        style: "text-xs font-mono-ash"
-                        class: .status_cls
+                        // Plan 053 后续:状态色三元内联进 style(→ Vue :class 三元)。
+                        // `class: .status_cls`(Dot 引用)在 text 节点上被 codegen
+                        // 丢弃(容器节点才支持 class: 绑定),Vue 端 ✓/✗ 一直没颜色。
+                        style: if .block.status.kind == "Success" { "text-xs font-mono-ash text-emerald-500" } else if .block.status.kind == "Failed" { "text-xs font-mono-ash text-red-500" } else { "text-xs font-mono-ash text-amber-500" }
                     }
                     // BL-08..10:duration badge(仅完成时 duration_ms > 0 显示)。
                     if .duration_label != "" {
@@ -105,8 +107,8 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     // Plan 054 M2: 退出码(完成时显示,非 0 标红)。
                     if .block.status.kind == "Success" || .block.status.kind == "Failed" {
                         text .exit_label {
-                            style: "text-[10px] h-5 font-mono-ash"
-                            class: .exit_cls
+                            // 同上:exit_cls 三元内联(exit_code 非 0 标红)。
+                            style: if .block.exit_code != 0 { "text-[10px] h-5 font-mono-ash text-red-400" } else { "text-[10px] h-5 font-mono-ash text-muted-foreground" }
                         }
                     }
                 }

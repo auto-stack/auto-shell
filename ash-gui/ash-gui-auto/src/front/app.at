@@ -21,14 +21,16 @@ widget App {
         var injected_command str = ""
         // Plan 054 M5: 主题(dark/light)。index.css 已定义 .dark 下的 CSS 变量
         // 覆盖,toggle 切 <html> 的 .dark class 即可生效。
-        var dark_mode bool = false
+        // 默认 true:浏览器脚手架 index.html 硬编码 <html class="dark">(深色),
+        // VM/iced 由本字段驱动调色板 —— 两端默认一致为深色。
+        var dark_mode bool = true
     }
 
     computed {
         // Plan 053 M6-B2: 标题栏 cwd 缩写(home 前缀 → ~),内联实现。
         cwd_display => if .store.home != "" && .store.cwd.starts_with(.store.home) { "~" + .store.cwd.substr(.store.home.len(), .store.cwd.len()) } else { .store.cwd }
         // Plan 054 M5: 主题切换图标(dark=☀ / light=🌙)。
-        theme_glyph => if .dark_mode { "☀" } else { "🌙" }
+        theme_glyph => if .dark_mode { "☀" } else { "☾" }
         // Plan 055 Phase A: 后台作业计数(标题栏,点击刷新)。
         // 注:不去 .str()——JS '+' 自动 coerce number 成字符串;加 .str()
         // 产物是 length.str()(JS number 无 .str() 方法,jobs 非空时会 throw)。
@@ -56,7 +58,7 @@ widget App {
                 // 标题栏:侧栏开关 + cwd + git
                 row {
                     style: "items-center gap-2 px-3 h-9 border-b border-border bg-card/40 shrink-0"
-                    button "🛠" {
+                    button "☰" {
                         onclick: .ToggleSidebar
                         style: "text-xs px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
                     }

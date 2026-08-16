@@ -95,6 +95,11 @@ pub type Block = {
     output: RenderedOutput
     streamed_text: str
     duration_ms: int
+    // 前端本地状态(shell_store RunCommand 就地赋值,不经后端):VM 的 Block
+    // 泛型缺这两字段时,.block.collapsed/.block.exit_code 读取失败,
+    // collapse_glyph/exit_label computed 回退成 "${...}" 字面量。
+    exit_code: int
+    collapsed: bool
 }
 
 pub type GitStatusInfo = {

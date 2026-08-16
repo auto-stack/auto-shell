@@ -35,10 +35,11 @@ view fn RenderTable(output TableOutput) {
     col {
         style: "w-full text-sm font-mono-ash border border-border rounded-md overflow-hidden bg-card/50"
         // 表头行
+        // 表头行(grid 列对齐:vue 端 :style 生效;iced 忽略 CSS 声明,flex 兜底)
         row {
             style: "display:grid; grid-template-columns: repeat(" + output.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04)"
-            for col_name in output.columns {
-                text col_name {
+            for cname in output.columns {
+                text cname {
                     style: "px-3 py-2 text-left font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
                 }
             }
@@ -58,13 +59,12 @@ view fn RenderTable(output TableOutput) {
                     if cell.Tagged != None {
                         // Plan 053 后续:按 kind 着色(对齐 ash-gui-vue cellStyle.ts /
                         // iced tag_color):Dir→sky, CodeAtRs→emerald, Executable→cyan,
-                        // Config→amber, Permission→muted, Plain→foreground。用 col 包一层
-                        // 走 class:(text 节点不支持 class: 绑定,col 支持 → :class),颜色
-                        // 类级联到内部 text;Tailwind 类名不可走 style(→ :style 会失效)。
-                        col {
-                            style: "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap"
-                            class: if cell.Tagged.kind == "Dir" { "text-sky-400" } else if cell.Tagged.kind == "CodeAtRs" { "text-emerald-400" } else if cell.Tagged.kind == "Executable" { "text-cyan-300" } else if cell.Tagged.kind == "Config" { "text-amber-300" } else if cell.Tagged.kind == "Permission" { "text-muted-foreground" } else { "text-foreground" }
-                            text cell.Tagged.text { }
+                        // Config→amber, Permission→muted, Plain→foreground。
+                        // 颜色三元走 style(→ Vue :class / iced 动态求值)—— 这是
+                        // 唯一的跨 target 通道:class: 三元 Vue 容器支持、但 iced 的
+                        // extract_style 只读静态字符串会整体丢弃(高亮反复丢失的根因)。
+                        text cell.Tagged.text {
+                            style: if cell.Tagged.kind == "Dir" { "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap text-sky-400" } else if cell.Tagged.kind == "CodeAtRs" { "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap text-emerald-400" } else if cell.Tagged.kind == "Executable" { "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap text-cyan-300" } else if cell.Tagged.kind == "Config" { "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap text-amber-300" } else if cell.Tagged.kind == "Permission" { "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground" } else { "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap text-foreground" }
                         }
                     }
                 }

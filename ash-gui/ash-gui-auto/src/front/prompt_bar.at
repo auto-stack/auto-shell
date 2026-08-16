@@ -103,7 +103,10 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 )
 
                 text .prompt_symbol {
-                    style: "font-mono-ash select-none shrink-0 " + if .in_continuation { "text-amber-400" } else { "text-emerald-500" }
+                    // Plan 053 后续:与上方高亮 span 同款约定 —— style: If 三元经
+                    // codegen 走 Vue :class(类名有效);Tailwind 色类经共享
+                    // color.rs 调色板同时落 vue(CSS) 与 VM(iced RGB)。
+                    style: if .in_continuation { "font-mono-ash select-none shrink-0 text-amber-400" } else { "font-mono-ash select-none shrink-0 text-emerald-500" }
                 }
 
                 // Plan 053 M2: ghost text overlay。input 文字透明(只留光标),
@@ -341,6 +344,9 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // 加 if(__seq===__completeSeq) 守卫,丢弃过期结果(对齐 vue 原版
         // PromptBar.vue:60-84 的 completeTimer/completeSeq)。
         // VM 模式无 setTimeout,本 handler 同步执行 complete(与拆分前等价)。
+        // 注意:此处**不要**调用 .DoTokenize() —— handler 内嵌套调用 sibling
+        // handler 会破坏 VM 调用帧(new_sp 下溢 panic,exit 101),高亮 spans
+        // 也会乱序(输入 ls 显示 sl)。真实键入走 keyup→.OnInput 的 DoTokenize。
         .OnInputComplete -> {
             if .input.trim() != "" {
                 var items []CompletionItem = complete(.input, .input.len())
