@@ -2,13 +2,49 @@
 
 Auto(.at)版本的 ash-gui。三种运行形态:
 
-- **VM 模式**(开发/测试,推荐)—— [auto-lang](../../../../../auto-lang) 的 iced 原生渲染器,运行时解析 `.at`;
-- **Vue/浏览器模式** —— `auto gen` 生成 Vue 前端,浏览器里跑,连 [ash-server](../ash-server) 真后端(详见下文);
+- **VM+HTTP 模式**(日常使用,推荐)—— iced 原生窗口 + [ash-server](../ash-server) 真 ash-core 后端,`run_vm.ps1`/`run_vm.sh` 一键启动;
+- **VM merged 模式**(开发/测试)—— 单进程,`#[api]` 走 `back/shell.at` mock,命令由 renderer 侧 `std::process` 执行(无 ash-core 语义);
+- **Vue/浏览器模式** —— `auto gen` 生成 Vue 前端,浏览器里跑,连同一个 ash-server;
 - **a2r 模式**(可分发二进制,开发中)—— 生成 Rust → 独立 iced 二进制。
 
 ## 运行
 
-### VM 模式(开发 + 测试,推荐)
+### VM+HTTP 模式(日常使用,推荐 —— Plan 057)
+
+**一条命令**:检测/启动 ash-server(:3000)→ 设 `AUTO_BACKEND` → `auto run -r vm`。
+命令执行、补全、历史、git 标签、jobs 全部走真 ash-core 会话,结构化输出
+(Table/kind 着色)由 ash-server 真实渲染:
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File run_vm.ps1
+# 复用已在跑的 ash-server / 指定端口 / 指定 auto 二进制
+.\run_vm.ps1 -NoServer -Port 3000 -AutoBin D:\autostack\auto-lang\target\debug\auto.exe
+```
+
+```bash
+# Linux/macOS/Git Bash
+./run_vm.sh            # ./run_vm.sh -p 3000 -n(复用 server)
+```
+
+等价的手动方式(脚本做的事):
+
+```bash
+# 终端 1:ash-server(真 ash-core 后端)
+cd ash-gui/ash-server && cargo run            # → http://localhost:3000
+
+# 终端 2:VM,#[api] 调用直连 ash-server
+cd ash-gui/ash-gui-auto
+AUTO_BACKEND=http://127.0.0.1:3000 auto run -r vm
+```
+
+Plan 057 起 `AUTO_BACKEND` 非空即为**一等模式**:VM codegen 把 `#[api]` 裸名调用
+(run_command/complete/history/prompt_context/jobs/…)编译为 HTTP(原先仅
+`--no-merge` 启用且 URL 硬编码),renderer 只做 SSE 泵。job 事件(job_started/
+job_done)、cwd 回写、git 刷新、真实 exit_code 均经 SSE/桥接层生效。
+MCP UI 服务默认 `:9247`,冲突时用 `AUTOUI_MCP_PORT` 避让。
+
+### VM merged 模式(开发 + 测试)
 
 VM 模式在运行时解析 `.at` → `DynamicComponent` → iced 窗口,热重载快,无需代码生成。
 
@@ -19,6 +55,9 @@ auto run -r vm
 ```
 
 打开 iced 窗口(标题 "Auto - App"),MCP UI 服务端监听 `http://127.0.0.1:9247/mcp`。
+此模式下补全/git/jobs 是 `back/shell.at` 的静态 mock,命令执行不经过 ash-core
+(别名/管道 DSL/结构化渲染均无)—— 仅适合 UI 迭代;要真 shell 能力用上面的
+VM+HTTP 模式。
 
 > `pac.at` 的 `render: "vue"` 是默认值;VM 模式用 `-r vm` 命令行参数覆盖,不改 pac.at。
 
