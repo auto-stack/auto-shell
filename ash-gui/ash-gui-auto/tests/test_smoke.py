@@ -19,7 +19,7 @@ import pytest
 def test_mcp_server_responds(mcp):
     """MCP server is up and responds to tools/list."""
     tools = mcp.tools_list()
-    assert len(tools) == 12, f"Expected 12 autoui tools, got {len(tools)}: {tools}"
+    assert len(tools) == 13, f"Expected 13 autoui tools, got {len(tools)}: {tools}"
     # Spot-check a few critical tools
     for expected in ["autoui_snapshot", "autoui_action", "autoui_state", "autoui_find"]:
         assert expected in tools, f"Missing tool: {expected}"

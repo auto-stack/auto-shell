@@ -29,15 +29,23 @@ def _find_prompt_input_vnode(mcp):
     it at runtime to avoid hardcoding.
     """
     # Plan 053 M4: PromptBar input is a `textarea` now (multi-line continue).
-    for kind in ("input", "textarea"):
-        raw = mcp.call("autoui_find", kind=kind, limit=10)
-        # Each match block looks like: "... input vnode_NNN { ... onsubmit ... }".
-        # Find vnode ids that appear in a block mentioning onsubmit/PromptBar.Run.
-        for m in re.finditer(r"vnode_(\d+)", raw):
-            vid = "vnode_" + m.group(1)
-            info = mcp.call("autoui_inspect", element_id=vid)
-            if "onsubmit" in info.lower() or "PromptBar.Run" in info:
-                return vid
+    # The live VTree backing autoui_find appears later than the first paint
+    # (snapshot() may already answer while find still reports "No live VTree
+    # snapshot yet"), so retry the scan for a few seconds before giving up.
+    import time as _time
+
+    deadline = _time.time() + 15
+    while _time.time() < deadline:
+        for kind in ("input", "textarea"):
+            raw = mcp.call("autoui_find", kind=kind, limit=10)
+            # Each match block looks like: "... input vnode_NNN { ... onsubmit ... }".
+            # Find vnode ids that appear in a block mentioning onsubmit/PromptBar.Run.
+            for m in re.finditer(r"vnode_(\d+)", raw):
+                vid = "vnode_" + m.group(1)
+                info = mcp.call("autoui_inspect", element_id=vid)
+                if "onsubmit" in info.lower() or "PromptBar.Run" in info:
+                    return vid
+        _time.sleep(1)
     return None
 
 

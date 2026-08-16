@@ -1,9 +1,18 @@
 # 056 — VM(iced)版 ash-gui-auto:剩余问题与同步 Vue 改进的路线
 
 - 日期:2026-08-13
-- 状态:**未开始**(阻塞性问题已定位,待 auto-lang VM 侧修复后推进)
+- 状态:**已被 057 接棒**(见 `docs/plans/057-vm-ash-gui-usability.md`)
 - 上游:plan-053(输入/面板打磨)、plan-055(jobs)、055 的 Phase 1 逻辑可移植化(commit `3f92d85`)
 - 关联调研:`designs/ash-gui-native-plan.md` §9.7(三个 VM bug 的二分定位)
+
+> **2026-08-16 状态纠偏**:
+> - §2 阻塞 A(VM link 失败)**已修** — auto-lang commit `b0434cff0`(2026-08-14,
+>   "Plan 056 blocker A":sibling 调用可见性集合补 on/lifecycle handler),
+>   VM 已可启动运行(auto-shell `f663b6e` 后全量测试 54 pass + 43 skip)。
+> - §3 表中"block 限高+内部滚动""text 三元着色"**已落地** — auto-lang `958819ab2`
+>   (ash-gui VM 渲染引擎对齐系列 9 处修复)。
+> - 剩余项(输入高亮/ghost overlay、表格列对齐、动态样式、剪贴板)+ 执行语义
+>   (AUTO_BACKEND 一等模式)由 **plan-057** 接棒。
 
 ## 0. 背景与目标
 
