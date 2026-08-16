@@ -32,13 +32,20 @@ function Test-Server([int]$P) {
 }
 
 if (-not $NoServer -and -not (Test-Server $Port)) {
-    Write-Host "[run_vm] starting ash-server on :$Port (cargo run, first build may take a while)..."
-    Push-Location $ServerDir
-    try {
-        # 后台窗口跑 ash-server;VM 关闭后它保留(手动关闭该窗口即可停服)。
-        Start-Process -FilePath "cargo" -ArgumentList "run" -WorkingDirectory $ServerDir `
-            -WindowStyle Minimized
-    } finally { Pop-Location }
+    # 优先用已构建的 ash-server.exe(与 cargo run 等价但启动快且不依赖
+    # cargo 在 PATH —— Plan 057 健壮性:Start-Process cargo 曾偶发不存活)。
+    $serverExe = Join-Path $ServerDir "target\debug\ash-server.exe"
+    if (Test-Path $serverExe) {
+        Write-Host "[run_vm] starting ash-server on :$Port (built exe)..."
+        Start-Process -FilePath $serverExe -WorkingDirectory $ServerDir -WindowStyle Minimized
+    } else {
+        Write-Host "[run_vm] building/starting ash-server on :$Port (cargo run, first build may take a while)..."
+        Push-Location $ServerDir
+        try {
+            Start-Process -FilePath "cargo" -ArgumentList "run" -WorkingDirectory $ServerDir `
+                -WindowStyle Minimized
+        } finally { Pop-Location }
+    }
     $ok = $false
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Seconds 1
