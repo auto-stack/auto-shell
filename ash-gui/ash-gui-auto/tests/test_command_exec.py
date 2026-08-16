@@ -81,12 +81,16 @@ def _submit_command(mcp, cmd_text):
     # by a 16ms iced subscription and can occasionally drop a message under
     # load. After a successful run, PromptBar clears .input, so an empty input
     # (and the empty-input submit being a no-op) makes re-submit safe.
+    # Plan 057: typing now populates the completion suggestions row, which
+    # rebuilds the vtree and invalidates the cached vnode id (content hash) —
+    # re-resolve the textarea id on every attempt.
     deadline = time.time() + 8
     while time.time() < deadline:
         mcp.call("autoui_action", element_id=vnode, action="submit")
         time.sleep(0.4)
         if 'input: ""' in mcp.state("input"):
             return
+        vnode = _find_prompt_input_vnode(mcp) or vnode
 
 
 def test_run_echo_reaches_success(mcp):

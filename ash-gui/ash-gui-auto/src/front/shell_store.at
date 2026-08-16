@@ -117,7 +117,7 @@ store ShellStore {
     msg Msg { Init, RunCommand(str), RunResult, RunOutput,
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
-              SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, ClearScreen,
+              SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, RefreshContext, ClearScreen,
               OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int), JobStarted, JobDone }
 
     computed {
@@ -130,13 +130,14 @@ store ShellStore {
     on {
         // ── 初始化:拉取 boot 数据 + 历史 + git ──
         .Init -> {
-            // cwd 用 "."(当前工作目录)而非 mock 的 /home/user —— M1 执行器
-            // 会在此 cwd 执行 std::process::Command,/home/user 在 Windows 无效。
-            .cwd = "."
-            .home = "."
+            // Plan 057:cwd/home 取自 BootSnapshot —— HTTP 模式下来自真后端
+            // (ash-server 的 Shell 会话 cwd/home);merged 模式 mock 返回 "."
+            // (执行器在进程 cwd 执行,与原硬编码 "." 等价)。
+            var snap BootSnapshot = command_list()
+            .cwd = snap.cwd
+            .home = snap.home
             // 调 command_list() 拉取侧栏命令表(Plan 044 M2:79 命令,对齐 vue 版)。
             // 路径同 vue:store.Init → command_list → 侧栏 ToolSidebar。
-            var snap BootSnapshot = command_list()
             .commands = snap.commands
             .smart_commands = snap.smart_commands
             var names List<str> = List<str>.new([])
@@ -317,6 +318,16 @@ store ShellStore {
         // ── 刷新 git 信息 ──
         .RefreshGit -> {
             // Plan 051 M3:经 compute_git_label 安全访问(防 git_status null)。
+            .git_label = compute_git_label(.git_info)
+        }
+
+        // ── 刷新 prompt 上下文(git 分支/状态)──
+        // Plan 057:renderer 在 command_result 后触发(cd 换分支/改仓库状态后
+        // 标题栏 git 标签及时更新)。HTTP 模式 prompt_context() 走真后端;
+        // merged 模式为 mock(静态,无害)。RefreshGit 只重算 label 不拉新数据,
+        // 故单独一个 handler。
+        .RefreshContext -> {
+            .git_info = prompt_context()
             .git_label = compute_git_label(.git_info)
         }
 

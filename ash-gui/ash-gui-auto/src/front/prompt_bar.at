@@ -147,7 +147,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     // GET_FIELD 编码问题,用参数传递规避;vue 端等价)。
                     textarea {
                         value: .input
-                        oninput: .OnInputComplete
+                        oninput: .OnInputComplete(.input)
                         onkeyup: .OnInput
                         onenter: .OnEnter(.input)
                         onkeydown.ctrl.r: .ToggleHistorySearch
@@ -347,10 +347,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // 注意:此处**不要**调用 .DoTokenize() —— handler 内嵌套调用 sibling
         // handler 会破坏 VM 调用帧(new_sp 下溢 panic,exit 101),高亮 spans
         // 也会乱序(输入 ls 显示 sl)。真实键入走 keyup→.OnInput 的 DoTokenize。
-        .OnInputComplete -> {
-            if .input.trim() != "" {
-                var items []CompletionItem = complete(.input, .input.len())
-                .suggestions = items
+        // Plan 057:补全入参改经 handler 参数 v(view 侧 .input 显式传参,镜像
+        // onenter: .OnEnter(.input) 的已验证模式)—— VM 的 handler 内 .input
+        // 字段读有 GET_FIELD 编码问题(求值成 Int 0,见 onenter 的同类规避
+        // 注释),此前 complete(.input,…) 实际发的是 complete(0,1),候选恒空。
+        .OnInputComplete(v str) -> {
+            if v.trim() != "" {
+                .suggestions = complete(v, v.len())
             } else {
                 .suggestions = []
             }

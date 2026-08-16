@@ -24,6 +24,12 @@ use crate::types::*;
 enum CommandReq {
     /// Run `cmd`, attribute the result to `block_id`.
     Run { block_id: usize, cmd: String },
+    /// Plan 057: periodic no-op that drives the job reaper — previously the
+    /// reaper only ran when a new request arrived, so `job_done` events (and
+    /// the removal from the jobs list) were delayed until the user's next
+    /// interaction. Sent every 2s by a ticker task holding a Clone-able
+    /// sender clone.
+    Tick,
     /// Run a SmartCommand body against the worker's live Shell.
     RunSmart {
         block_id: usize,
@@ -169,6 +175,8 @@ pub fn spawn() -> ShellHandle {
     let cancel_for_thread = cancel.clone();
     let event_tx_for_thread = event_tx.clone();
     let boot_for_thread = boot.clone();
+    // Plan 057: worker-side sender clone for the job-reaper ticker.
+    let tick_tx = tx.clone();
 
     std::thread::Builder::new()
         .name("ash-server-shell".into())
@@ -199,6 +207,20 @@ pub fn spawn() -> ShellHandle {
                     event_tx: event_tx_for_thread.clone(),
                 }));
 
+                // Plan 057: drive the job reaper on a 2s ticker so job_done
+                // events (and jobs-list removal) arrive in real time instead
+                // of waiting for the next user request.
+                {
+                    let tick_tx = tick_tx.clone();
+                    tokio::spawn(async move {
+                        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                        loop {
+                            interval.tick().await;
+                            let _ = tick_tx.send(CommandReq::Tick);
+                        }
+                    });
+                }
+
                 // M7: completion engine inputs.
                 let completion_sigs: Vec<auto_shell::completions::CompletionSignature> =
                     shell.registry().params().into_iter().map(Into::into).collect();
@@ -221,6 +243,9 @@ pub fn spawn() -> ShellHandle {
                         });
                     }
                     match req {
+                        // Plan 057: Tick only exists to run the reaper at the
+                        // top of this loop (job_done events in real time).
+                        CommandReq::Tick => {}
                         CommandReq::Run { block_id, cmd } => {
                             // Plan 055 Phase A: 后台 `cmd &` — spawn_external_background
                             // + 注册 job + 发 JobStarted(不阻塞主循环,reaper 下轮收)。
@@ -257,19 +282,40 @@ pub fn spawn() -> ShellHandle {
                                 cancel_for_thread.store(false, Ordering::SeqCst);
                                 let cwd = shell.pwd().to_string_lossy().to_string();
                                 let started = Instant::now();
-                                let (status, output) = match run_command(
-                                    &mut shell,
-                                    &cmd,
-                                    &captured,
-                                    &cancel_for_thread,
-                                    block_id,
-                                    &event_tx_for_thread,
-                                )
-                                .await
-                                {
-                                    Ok(out) => (CommandStatus::Success, out),
-                                    Err(msg) => (CommandStatus::Failed(msg), RenderedOutput::Empty),
-                                };
+                                // Plan 057: run_command 现在带上流式路径的子进程
+                                // 真实退出码(None = execute() 路径,沿用
+                                // shell.last_exit_code())。非零码按 shell 语义
+                                // 报 Failed("exit code N")—— 修复流式外部命令
+                                // 失败(如未知命令经 cmd /C 退出 1)被误报
+                                // Success/exit 0 的问题。
+                                let (status, output, exit_code) =
+                                    match run_command(
+                                        &mut shell,
+                                        &cmd,
+                                        &captured,
+                                        &cancel_for_thread,
+                                        block_id,
+                                        &event_tx_for_thread,
+                                    )
+                                    .await
+                                    {
+                                        Ok((out, streamed_code)) => {
+                                            let code = streamed_code
+                                                .unwrap_or_else(|| shell.last_exit_code());
+                                            if code != 0 {
+                                                (
+                                                    CommandStatus::Failed(format!("exit code {code}")),
+                                                    out,
+                                                    code,
+                                                )
+                                            } else {
+                                                (CommandStatus::Success, out, code)
+                                            }
+                                        }
+                                        Err(msg) => {
+                                            (CommandStatus::Failed(msg), RenderedOutput::Empty, -1)
+                                        }
+                                    };
                                 let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
                                     CommandResult {
                                         block_id,
@@ -278,7 +324,7 @@ pub fn spawn() -> ShellHandle {
                                         output,
                                         duration_ms: started.elapsed().as_millis() as u64,
                                         // Plan 054 M2: child exit code (0 = success).
-                                        exit_code: shell.last_exit_code(),
+                                        exit_code,
                                     },
                                 ));
                                 let _ = append_history(&cmd);
@@ -487,6 +533,9 @@ fn completion_to_item(c: auto_shell::completions::Completion) -> CompletionItem 
 
 /// Run a command. Tries the streaming path for simple external commands (M4),
 /// otherwise falls back to `shell.execute()` (full preprocessing, M1).
+/// Plan 057: returns `(rendered, exit_code)` — `exit_code` is `Some` only for
+/// the streaming path (the child's real exit code); the `execute()` path
+/// returns `None` and the caller uses `shell.last_exit_code()`.
 async fn run_command(
     shell: &mut auto_shell::Shell,
     cmd: &str,
@@ -494,14 +543,16 @@ async fn run_command(
     cancel: &Arc<AtomicBool>,
     block_id: usize,
     event_tx: &broadcast::Sender<ShellEvent>,
-) -> Result<RenderedOutput, String> {
+) -> Result<(RenderedOutput, Option<i32>), String> {
     if let Ok(mut slot) = captured.lock() {
         *slot = None;
     }
 
     // M4: streaming path for simple external commands.
-    if let Some(rendered) = run_streaming_external(shell, cmd, cancel, block_id, event_tx).await? {
-        return Ok(rendered);
+    if let Some((rendered, exit_code)) =
+        run_streaming_external(shell, cmd, cancel, block_id, event_tx).await?
+    {
+        return Ok((rendered, Some(exit_code)));
     }
 
     // Default: full preprocessing via shell.execute().
@@ -509,13 +560,13 @@ async fn run_command(
     if let Ok(slot) = captured.lock() {
         if let Some(rendered) = slot.as_ref() {
             if !matches!(rendered, RenderedOutput::Empty) {
-                return Ok(rendered.clone());
+                return Ok((rendered.clone(), None));
             }
         }
     }
     match result {
-        Ok(Some(s)) => Ok(RenderedOutput::Text(s)),
-        Ok(None) => Ok(RenderedOutput::Empty),
+        Ok(Some(s)) => Ok((RenderedOutput::Text(s), None)),
+        Ok(None) => Ok((RenderedOutput::Empty, None)),
         Err(e) => Err(format!("{e}")),
     }
 }
@@ -528,7 +579,7 @@ async fn run_streaming_external(
     cancel: &Arc<AtomicBool>,
     block_id: usize,
     event_tx: &broadcast::Sender<ShellEvent>,
-) -> Result<Option<RenderedOutput>, String> {
+) -> Result<Option<(RenderedOutput, i32)>, String> {
     use ash_core::cmd::external as ext;
     use ash_core::parser::{pipeline as chain_parser, pipe_stages, redirect};
 
@@ -579,7 +630,7 @@ async fn run_streaming_external(
     if pipe_cmds.len() == 1 {
         let name = ext::parse_command(&pipe_cmds[0]).remove(0);
         if is_terminal_only_command(&name) {
-            return Ok(Some(RenderedOutput::Text(terminal_only_message(&name))));
+            return Ok(Some((RenderedOutput::Text(terminal_only_message(&name)), 0)));
         }
     } else if pipe_cmds.iter().any(|seg| {
         ext::parse_command(seg)
@@ -605,6 +656,11 @@ async fn run_streaming_external(
         };
     }
 
+    // Plan 057: drain 会消费 stream(lines() 取走 stdout),先克隆末段的退出
+    // 状态句柄 —— 排空 stdout 后轮询取子进程真实退出码(此前流式路径从不
+    // 上报退出码,未知命令经 cmd /C 退出 1 也被报成 Success/exit 0)。
+    let status_handle = stream.exit_status_handle();
+
     let cancel_clone = cancel.clone();
     let event_tx_clone = event_tx.clone();
     let kill = stream.kill_handle();
@@ -617,7 +673,18 @@ async fn run_streaming_external(
     if cancel.load(Ordering::SeqCst) {
         return Err("cancelled".to_string());
     }
-    Ok(Some(rendered))
+    // stdout EOF 通常与进程退出同时;短暂轮询等 status 线程落值,超时按 0
+    // (避免竞态误报失败)。
+    let mut exit_code = 0i32;
+    for _ in 0..40 {
+        let status = status_handle.lock().unwrap().clone();
+        if let Some(st) = status {
+            exit_code = st.code().unwrap_or(-1);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Ok(Some((rendered, exit_code)))
 }
 
 fn drain_stream(

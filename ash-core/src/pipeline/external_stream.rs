@@ -166,6 +166,14 @@ impl ExternalStream {
         self.exit_status.lock().unwrap().clone()
     }
 
+    /// Clone the shared exit-status handle (Plan 057: ash-server streaming
+    /// path polls it after draining stdout to surface the child's real exit
+    /// code — consuming the stream via `lines()` would orphan the only other
+    /// reference).
+    pub fn exit_status_handle(&self) -> Arc<Mutex<Option<ExitStatus>>> {
+        self.exit_status.clone()
+    }
+
     /// Returns true if the process has finished.
     pub fn is_finished(&self) -> bool {
         self.exit_status.lock().unwrap().is_some()
