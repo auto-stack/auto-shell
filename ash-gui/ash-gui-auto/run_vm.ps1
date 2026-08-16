@@ -19,8 +19,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # ash-gui/
-$ServerDir = Join-Path $RepoRoot "ash-server"
+# PSScriptRoot = ash-gui-auto;上一级是 ash-gui/,ash-server 在其下。
+$ServerDir = Join-Path (Split-Path -Parent $PSScriptRoot) "ash-server"
 
 # ── 1. ash-server 就绪检查/启动 ────────────────────────────────────────────
 function Test-Server([int]$P) {
@@ -51,7 +51,7 @@ Write-Host "[run_vm] ash-server ready on :$Port"
 # ── 2. 定位 auto 二进制 ────────────────────────────────────────────────────
 if (-not $AutoBin) {
     # 默认:auto-lang/target/debug/auto.exe(auto-lang 与 auto-shell 同级于 autostack)
-    $langRoot = Split-Path -Parent $RepoRoot
+    $langRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # autostack/
     $guesses = @(
         (Join-Path $langRoot "auto-lang\target\debug\auto.exe"),
         "auto.exe"

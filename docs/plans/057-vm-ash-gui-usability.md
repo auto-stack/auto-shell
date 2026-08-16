@@ -63,24 +63,40 @@ VM 版"粗糙"两层根因:
   哈希);conftest 侧栏就绪门(修 APP-07 启动竞态)+ ASH_TEST_VM_LOG。
 - 全量:55 pass + 43 skip(基线 54;剩余 1-4 个顺序/负载 flake 与基线同款)。
 
-## 2. 关键诊断发现(供后续修复)
+## 2. 关键诊断发现(供后续修复)—— ✅ 2026-08-16 三项已全部解决
 
-1. **VM handler 内 `.input` 字段读求值成 Int 0**:仅发生在 **API 调用参数
-   位置**(emit_api_http_call 的 arg 编译上下文);普通语句位置的字段读正常
-   (实验:`.ghost_text="["+.input+"]"` 正确)。规避:参数经 handler 参数 v
-   传入(view 侧显式传参,镜像 onenter 模式)。
-2. **handler 内读数组 prop(`.history`)静默中止整个 handler**:探针
-   `.history.len()` 即触发,后续语句全部不执行(tokenize/spans 连带全空)。
-   → ghost text 暂时只留 vue。GET_FIELD 日志佐证:`non-i32 obj_id ... field=history`。
-3. **表格块视图渲染缺最后一步**:Table 变体块的 state 数据正确、条件分支
-   判断正确(字面量 marker 渲染),但块内**动态文本内容**(含 `.block.command`
-   级深链)不出现;echo/Text 块正常。已定位:块 item 文本不走 untracked
-   convert_text_element(调试埋点证实 ✓/:0 等不经过),tracked 孪生共享
-   helper 但探针仍不渲染——需对 tracked 路径(约 :2985 起)单独埋点排查,
-   疑 cached view 或 bindings 上下文差异。**echo 的 Text 输出体是否渲染
-   也待确认**('hello_view' 此前与命令按钮 label 混淆)。
+1. ~~**VM handler 内 `.input` 字段读求值成 Int 0**~~ **(已解决,复查为连环污染)**
+   复查 emit_api_http_call(codegen.rs:4280):body 参数走与普通位置**完全相同**
+   的 `compile_expr`,不存在独立的参数位编译缺陷。原 Int 0 观察是在 §2.2 中止
+   bug 修复前采集的连环污染(.history 读失败 → legacy 重试污染调用帧)。
+   fake-backend 契约测试复核:`complete(.input, .input.len())` 发出
+   `{"line":"ec","cursor":2}`,参数位字段读正常。prompt_bar.at 已改回直用
+   `.input`(原 v 参数规避保留给 ghost 匹配,语义等价)。
+2. ~~**handler 内读数组 prop(`.history`)静默中止整个 handler**~~ **(已解决,四层修复)**
+   根因链:① `Value::Array` 无法 nanobox 进 VM 栈(读回 double 垃圾)→
+   vm_bridge ensure_child_state 把数组 prop 转**堆 ListData**(存 Int id);
+   ② `Unknown.len` 无 native → stdlib 补 `("List","len")`(接受 i32/对象 tag
+   的堆 id,downcast ListData<i32>/<Value>/<String>);③ `app.at` 的
+   `history: .store.history` 是 **computed** → VM `.store.X` 展平只读裸字段,
+   FieldNotFound → prop 恒 unresolved → 改传 `.store.persisted_history`;
+   ④ dynamic.rs 吞错(Err→legacy→Err=>{})→ 补 ASH_DEBUG_VM_LOG=1 门控日志。
+   **ghost text 已恢复双端**(截图验证:"ec"+灰显"ho http_mode_test")。
+3. ~~**表格块视图渲染缺最后一步**~~ **(已解决,self 根解析)**
+   根因:parser dot_item 把 `.a.b.c` 建成 `Dot(Dot(Ident("self"),a),b)...`,
+   根是 `Ident("self")` 而非字段名;resolve_expr_to_value 的 Ident 臂把它当
+   名叫 "self" 的字段查 → None → 整条深链解析为空 → 文本节点被"视觉空"过滤。
+   单层 `.field` 因 Dot 臂特判侥幸存活。修复:Ident("self")/`.` 解析为 state
+   对象本身(aura_view_builder.rs:3576),深链自然续走。表格 4 列对齐+表头+
+   dir/file 着色截图验证通过。
 4. **sibling handler 调用不再 exit 101**(RET 下溢保护生效),f663b6e 的
    规避注释已过时(代码中已更新)。
+5. **Str.substr 字节边界 panic(回归中发现,已修)**:session 级测试实例偶发
+   `end byte index 1 is not a char boundary; it is inside '⎇'`(git_label 的
+   多字节首字符)→ 整个 app 进程死亡 → 后续测试连环 ConnectionError。
+   .at 的 tokenize/ghost 扫描用 `substr(i,i+1)` 逐字节走,多字节字符处
+   索引落在字符中间。修复:shim_str_substr 对 start/end 做字符边界钳制
+   (ASCII 行为不变),并留 ASH_DEBUG_SUBSTR=1 门控诊断。触发调用方为
+   偶发路径(全套件 0 次复现),钳制后无进程死亡风险。
 
 ## 3. 明确不做(维持原计划)
 
@@ -88,15 +104,14 @@ merged 内嵌 ash-core;a2r;VM 嵌套调用帧根因;交互式命令(PTY);store �
 
 ## 4. 剩余工作(下轮)
 
-1. **表格块渲染收尾**(上节 §2.3):tracked 路径埋点 → 修 bindings/缓存差异;
-   2.4 的列对齐基建已就位,修好即自动获得。
-2. **ghost text(VM)**:等 auto-lang 修 handler 内数组 prop 读取(§2.2)后,
-   把 ghost 逻辑并回 OnInputComplete。
-3. **2.6 剪贴板**:native fn `os.set_clipboard`(arboard 已在依赖树,参照
+1. ~~表格块渲染收尾~~(§2.3 已解决)、~~ghost text(VM)~~(§2.2 已解决)。
+2. **2.6 剪贴板**:native fn `os.set_clipboard`(arboard 已在依赖树,参照
    __preview_copy)+ block_item 复制按钮接线(navigator.clipboard 在 VM 无效)。
-4. **Phase 3**:merged 模式 cd 特判回写 cwd(merged_exec_loop 已有 show/ls
+3. **Phase 3**:merged 模式 cd 特判回写 cwd(merged_exec_loop 已有 show/ls
    特判先例)。
-5. **Phase 4**:conftest http_backend fixture(起 ash-server :3011 + 注入
+4. **Phase 4**:conftest http_backend fixture(起 ash-server :3011 + 注入
    AUTO_BACKEND)+ 解锁 BACK-01..08/BB-02..13/PB-05/06/08/TS-02/04 skip;
    vue codegen 产物重生成(auto gen)适配 .at 改动;vue-tsc 验证。
-6. gen/front/vue 重生成 + `auto build` 全量验证(.at 多处改动后 vue 产物未更新)。
+5. gen/front/vue 重生成 + `auto build` 全量验证(.at 多处改动后 vue 产物未更新)。
+6. run_vm.ps1 健壮性:优先用已构建的 target/debug/auto.exe(现 cargo
+   Start-Process 偶发不存活,脚本已回退直启 ash-server.exe)。

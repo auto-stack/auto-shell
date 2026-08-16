@@ -347,21 +347,21 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // 注意:此处**不要**调用 .DoTokenize() —— handler 内嵌套调用 sibling
         // handler 会破坏 VM 调用帧(new_sp 下溢 panic,exit 101),高亮 spans
         // 也会乱序(输入 ls 显示 sl)。真实键入走 keyup→.OnInput 的 DoTokenize。
-        // Plan 057:补全入参改经 handler 参数 v(view 侧 .input 显式传参,镜像
-        // onenter: .OnEnter(.input) 的已验证模式)—— VM 的 handler 内 .input
-        // 字段读有 GET_FIELD 编码问题(求值成 Int 0,见 onenter 的同类规避
-        // 注释),此前 complete(.input,…) 实际发的是 complete(0,1),候选恒空。
+                // Plan 057 (Bug 1 复查结论):complete 的 body 参数走与普通位置
+                // 相同的 compile_expr,无独立编码缺陷;此前观察到的
+                // complete(0,1) 是 Bug 2(.history 读中止+legacy 重试污染调用
+                // 帧)修复前的连环污染。fake-backend 契约测试已复核
+                // complete(.input, .input.len()) 发出 {"line":"ec","cursor":2}。
         // Plan 057 (2.3): per-keystroke 管线整合(tokenize + 续行 + 补全)。
         // 背景:iced text_editor 只有 on_action/on_change 通道,**无 keyup**,
         // 故 .OnInput(绑 onkeyup)在 VM 从不触发 —— tokenize/续行原先住在
         // OnInput 里,VM 下是死路;实测 sibling 调用(RET 下溢保护后)已可从
         // 本 handler 调 .DoTokenize()/.DoContinuation()。
-        // ghost text **不**搬过来:handler 里读 `.history` prop(数组 prop 的
-        // handler 内读取)会静默中止整个 handler(实测探针 .history.len() 即
-        // 触发,tokenize/spans 连带全空)。ghost 保持只在 OnInput(vue keyup)
-        // 生效;VM 暂无 ghost,待 auto-lang 修 prop 读取后合并。
-        // vue 端:OnInput(keyup)即时跑 ghost/tokenize,本 handler 80ms debounce
-        // 重复 tokenize —— 幂等。
+                // ghost text:Plan 057 (Bug 2 修复)后双端可用 —— 数组 prop
+                // (.history)经 ensure_child_state 转堆 ListData 存储,handler 内
+                // 读取不再静默中止;List.len native 已补。
+                // vue 端:OnInput(keyup)即时跑 ghost/tokenize,本 handler 80ms debounce
+                // 重复 tokenize —— 幂等。
         .OnInputComplete(v str) -> {
             if .tab_just_completed {
                 .tab_just_completed = false
@@ -370,11 +370,32 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     .tab_active = false
                     .tab_candidates = []
                 }
+                // ghost text = 以当前输入为前缀的最长历史条目(Plan 053 M2)。
+                // Plan 057 (Bug 2 修复):数组 prop(.history)经 ensure_child_state
+                // 转堆 ListData 存储,handler 内读取不再静默中止 —— ghost 从
+                // vue-only 恢复为双端。ghost 匹配用参数 v(派发时快照,与
+                // complete 的 .input 现读等价,均经契约测试验证)。
+                .ghost_text = ""
+                if v != "" {
+                    var best_ghost str = ""
+                    var gi int = .history.len() - 1
+                    for gi >= 0 {
+                        var gh str = .history[gi]
+                        if gh.starts_with(v) && gh.len() > v.len() {
+                            var gg str = gh.substr(v.len(), gh.len())
+                            if gg.len() > best_ghost.len() {
+                                best_ghost = gg
+                            }
+                        }
+                        gi = gi - 1
+                    }
+                    .ghost_text = best_ghost
+                }
                 .DoTokenize()
                 .DoContinuation()
             }
             if v.trim() != "" {
-                .suggestions = complete(v, v.len())
+                .suggestions = complete(.input, .input.len())
             } else {
                 .suggestions = []
             }

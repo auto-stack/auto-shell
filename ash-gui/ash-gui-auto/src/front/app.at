@@ -106,7 +106,12 @@ widget App {
                     cwd: .store.cwd,
                     home: .store.home,
                     command_names: .store.command_names,
-                    history: .store.history,
+                    // Plan 057 (Bug 2):传原始字段而非 store computed(history =>
+                    // persisted_history)—— VM 的 .store.X 展平只读裸字段,computed
+                    // 名解析 FieldNotFound → history prop 恒 unresolved → 动态字段
+                    // 缺失 → handler 读 .history 报 not-found 静默中止(ghost 死因)。
+                    // vue 端两值等价(computed 即其别名)。
+                    history: .store.persisted_history,
                     injected_command: .injected_command,
                     on_run: .RunCommand,
                     on_injected: .Clear,
