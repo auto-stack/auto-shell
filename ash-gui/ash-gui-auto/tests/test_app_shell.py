@@ -79,9 +79,13 @@ def test_app09_promptbar_wired(mcp):
 
 
 def test_app15_boot_sets_cwd(mcp):
-    """APP-15: boot sets cwd (mock value '.')."""
+    """APP-15: boot sets cwd.
+
+    Plan 057 后契约:cwd 取自 BootSnapshot —— HTTP 模式为真后端会话 cwd
+    (绝对路径),merged 模式 mock 为 "."。断言非空即可(两种模式都成立)。
+    """
     cwd = mcp.state("cwd")
-    assert "." in cwd, f"cwd not set by boot:\n{cwd[:200]}"
+    assert cwd.strip() and cwd.strip() != "None", f"cwd not set by boot:\n{cwd[:200]}"
 
 
 # ── APP-04,10..14: xfail (need renderer emit sim / populated data) ────────
