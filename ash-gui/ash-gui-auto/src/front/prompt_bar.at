@@ -134,6 +134,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     onkeydown.up: .HistoryOlder
                     onkeydown.down: .HistoryNewer
                     onkeydown.tab.prevent: .OnTab
+                    // Plan 057 续:ghost 显示时右箭头逐字接受(fish 语义,接受过的
+                    // 字符即变实色);ghost 为空时 VM 端不拦截(默认光标移动),
+                    // Vue 端默认移动本就无 ghost 可走。不加 .prevent —— Vue 需要
+                    // 默认行为兜底,VM 由 renderer 按 ghost 状态门控。
+                    onkeydown.right: .OnRight
                     rows: 1
                     style: "w-full bg-transparent outline-none border-0 px-0 text-sm font-mono-ash resize-none max-h-[168px] overflow-y-auto [field-sizing:content]"
                     placeholder: "type a command…"
@@ -522,27 +527,51 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
 
         // Tab:应用第一个补全候选
         .OnTab -> {
-            // Plan 053 后续:Tab 循环补全。首次 Tab 缓存当前 suggestions 进循环;
-            // 后续 Tab(用户未再输入)在缓存候选里循环下标。PickCompletion 每次替换
-            // 最后一个 token,故循环候选依次替换即可(show Ca → Cargo.lock → Cargo.toml
-            // → Cargo.lock …)。用户一旦输入字符,OnInput 会清 tab_active 结束循环。
-            if .tab_active && .tab_candidates.len() > 0 {
+            // Plan 057 续(Tab 补全修复):ghost 显示中 Tab 首选**接受整个 ghost**
+            // (fish 语义 —— 用户看到灰色建议按 Tab 自然预期是采纳它);ghost 为空
+            // 才走候选循环。此前 OnTab 只循环 suggestions(服务端 /api/complete
+            // 候选,输入 `ls` 时唯一候选就是 `ls` 本身),从不碰 ghost —— 表现为
+            // "Tab 没有补全灰色的 -al"。
+            if .ghost_text != "" {
+                .input = .input + .ghost_text
+                .ghost_text = ""
+                .suggestions = []
+                .tab_active = false
+                .DoTokenize()
+            } else if .tab_active && .tab_candidates.len() > 0 {
+                // Plan 053 后续:Tab 循环补全。首次 Tab 缓存当前 suggestions 进循环;
+                // 后续 Tab(用户未再输入)在缓存候选里循环下标。PickCompletion 每次替换
+                // 最后一个 token,故循环候选依次替换即可(show Ca → Cargo.lock → Cargo.toml
+                // → Cargo.lock …)。用户一旦输入字符,OnInput 会清 tab_active 结束循环。
                 .tab_index = .tab_index + 1
                 if .tab_index >= .tab_candidates.len() {
                     .tab_index = 0
                 }
+                .tab_just_completed = true
+                .PickCompletion(.tab_candidates[.tab_index])
             } else {
+                // 首次 Tab:播种候选并立即补全第一项。
                 if .suggestions.len() > 0 {
                     .tab_candidates = .suggestions
                     .tab_index = 0
                     .tab_active = true
+                    .tab_just_completed = true
+                    .PickCompletion(.tab_candidates[.tab_index])
                 } else {
                     .tab_active = false
                 }
             }
-            if .tab_active {
-                .tab_just_completed = true
-                .PickCompletion(.tab_candidates[.tab_index])
+        }
+
+        // Plan 057 续:右箭头逐字接受 ghost —— 接受一个字符进 input(变实色),
+        // ghost 缩短一字。VM 端仅在 ghost 非空时拦截该键(renderer 按 ghost
+        // 状态门控 keydown 表);ghost 为空时不拦截,保留默认光标右移。
+        .OnRight -> {
+            if .ghost_text != "" {
+                .input = .input + .ghost_text.substr(0, 1)
+                .ghost_text = .ghost_text.substr(1, .ghost_text.len())
+                .tab_active = false
+                .DoTokenize()
             }
         }
 
