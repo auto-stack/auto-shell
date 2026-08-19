@@ -493,10 +493,41 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         }
 
         .PickCompletion(item) -> {
-            // 替换最后一个 token
-            var parts []str = .input.split(" ")
-            parts[parts.len() - 1] = item.replacement
-            .input = parts.join(" ")
+            // 替换最后一个 token。VM 规避写法:不用 split/join/列表索引赋值 ——
+            // VM 引擎 str.split 返回「字符串表索引的 i32 列表」(非 ListData<String>),
+            // SET_ELEM 只支持 ListData<Value> 且按 i32 弹值,三件套在 handler 内
+            // 静默中止(Tab 补全失灵的根因)。改用 substr 逐位扫描最后一个空格
+            // (substr/len 单位一致性已由 ghost 逻辑在生产验证)。
+            var cut int = 0
+            var i int = 0
+            for i < .input.len() {
+                if .input.substr(i, i + 1) == " " {
+                    cut = i + 1
+                }
+                i = i + 1
+            }
+            .input = .input.substr(0, cut) + item.replacement
+            // 补全后输入已变:ghost 按新输入重算(复刻 OnInputComplete 的历史
+            // 前缀扫描 —— 不能直接调它,其 tab_active 复位逻辑会终止 Tab 循环),
+            // 高亮 spans 同步重算。
+            .ghost_text = ""
+            var ng str = .input
+            if ng != "" {
+                var best str = ""
+                var gi int = .history.len() - 1
+                for gi >= 0 {
+                    var gh str = .history[gi]
+                    if gh.starts_with(ng) && gh.len() > ng.len() {
+                        var gg str = gh.substr(ng.len(), gh.len())
+                        if gg.len() > best.len() {
+                            best = gg
+                        }
+                    }
+                    gi = gi - 1
+                }
+                .ghost_text = best
+            }
+            .DoTokenize()
         }
 
         .ToggleHistorySearch -> {
@@ -527,39 +558,32 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
 
         // Tab:应用第一个补全候选
         .OnTab -> {
-            // Plan 057 续(Tab 补全修复):ghost 显示中 Tab 首选**接受整个 ghost**
-            // (fish 语义 —— 用户看到灰色建议按 Tab 自然预期是采纳它);ghost 为空
-            // 才走候选循环。此前 OnTab 只循环 suggestions(服务端 /api/complete
-            // 候选,输入 `ls` 时唯一候选就是 `ls` 本身),从不碰 ghost —— 表现为
-            // "Tab 没有补全灰色的 -al"。
-            if .ghost_text != "" {
-                .input = .input + .ghost_text
-                .ghost_text = ""
-                .suggestions = []
-                .tab_active = false
-                .DoTokenize()
-            } else if .tab_active && .tab_candidates.len() > 0 {
-                // Plan 053 后续:Tab 循环补全。首次 Tab 缓存当前 suggestions 进循环;
-                // 后续 Tab(用户未再输入)在缓存候选里循环下标。PickCompletion 每次替换
-                // 最后一个 token,故循环候选依次替换即可(show Ca → Cargo.lock → Cargo.toml
-                // → Cargo.lock …)。用户一旦输入字符,OnInput 会清 tab_active 结束循环。
+            // Tab 只循环**上方候选行**(服务端 /api/complete 候选,如输入 l 时
+            // ls/ln),绝不接受 ghost —— 对齐 CLI 版语义:ghost(历史 hint)只由
+            // 右箭头(逐字)或 Ctrl+F(整段)激活。注意输入恰好等于候选本身时
+            // (如 `ls` 的唯一候选就是 `ls`)Tab 补全无可见变化,属正常。
+            // Plan 053 后续:首次 Tab 缓存当前 suggestions 进循环;后续 Tab
+            // (用户未再输入)在缓存候选里循环下标。PickCompletion 每次替换最后
+            // 一个 token,故循环候选依次替换即可(show Ca → Cargo.lock →
+            // Cargo.toml → Cargo.lock …)。用户一旦输入字符,OnInput 会清
+            // tab_active 结束循环。
+            if .tab_active && .tab_candidates.len() > 0 {
                 .tab_index = .tab_index + 1
                 if .tab_index >= .tab_candidates.len() {
                     .tab_index = 0
                 }
-                .tab_just_completed = true
-                .PickCompletion(.tab_candidates[.tab_index])
             } else {
-                // 首次 Tab:播种候选并立即补全第一项。
                 if .suggestions.len() > 0 {
                     .tab_candidates = .suggestions
                     .tab_index = 0
                     .tab_active = true
-                    .tab_just_completed = true
-                    .PickCompletion(.tab_candidates[.tab_index])
                 } else {
                     .tab_active = false
                 }
+            }
+            if .tab_active {
+                .tab_just_completed = true
+                .PickCompletion(.tab_candidates[.tab_index])
             }
         }
 
