@@ -123,8 +123,11 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     onkeyup: .OnInput
                     onenter: .OnEnter(.input)
                     onkeydown.ctrl.r: .ToggleHistorySearch
-                    // Plan 053 M2: Ctrl+F 接受全部 ghost text,Ctrl+→ 接受一个词。
-                    onkeydown.ctrl.f: .AcceptGhost
+                    // 行内编辑(bash Emacs 模式语义,2026-08-20 修正):
+                    // Ctrl+F = forward-char(与右箭头同义,ghost 显示时逐字接受);
+                    // Ctrl+E = end-of-line(ghost 显示时接受全部);Ctrl+→ 接受一个词。
+                    onkeydown.ctrl.f: .OnRight
+                    onkeydown.ctrl.e: .AcceptGhost
                     onkeydown.ctrl.right: .AcceptGhostWord
                     // PB-11:Ctrl+L 清屏(归档 blocks),非清输入。绑 OnCtrlL,
                     // renderer emit 模拟转发到 store.ClearScreen(vm 剥离 callback emit)。
