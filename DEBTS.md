@@ -582,3 +582,21 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 - B4/B5/B6 修复 → .at 侧可恢复惯用 sort/索引赋值/split 写法;
 - B7 修复 → renderer 特例(Sort/Filter/OpenPath/ToggleCollapse/OnCtrlL)收敛为
   标准 emit 链。
+
+### B8. 事件参数的前导点路径不解析(2026-08-21 追加,Plan 059 排序错对象根因)
+
+- 现象:事件参数写 `.block.id`(带前导点)时,渲染期烘焙失败 —— 实测点
+  下方 block 的表头,排序/折叠都作用到**上方 block**(id 恒解析为 0)。
+- 根因(烘焙侧 + 解码侧双因):
+  1. `event_to_message_with` → `resolve_binding_path(".block.id")` 按 `.`
+     切分得 `["", "block", "id"]`,首段为空 → `bindings.get("")` None →
+     落入**字面量分支**,参数变成垃圾字符串(aura_view_builder.rs);
+  2. renderer 侧 `args.first().map(|v| v.as_int())` 对 Str 返回 0 →
+     id 恒 0 → 永远命中第一个 block。
+  循环变量参数(`ci`、`s`)无前导点,**烘焙正常**。
+- 影响面:所有 `.X(.block.y)` 形态的 leaf-button 事件(ToggleCollapse/
+  Rerun/PickCompletion/Plan 059 Sort)在真实点击下同样错对象 —— 此前
+  "collapse 正常"的认知存疑(多为单 block 场景未暴露)。
+- 修复方向:① resolve_binding_path 剥前导点 + 把 widget 参数(block)
+  播种进 bindings;② renderer 解码对非 Int 参数显式报错而非静默 0。
+- 临时对策:参数只用循环变量/字面量;block 身份改经其它通道传递。
