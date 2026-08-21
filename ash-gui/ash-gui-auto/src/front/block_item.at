@@ -154,8 +154,9 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                             for ci, cname in .block.output.Table.columns {
                                 button {
                                     onclick: .Sort(.block.id, ci)
+                                    style: "bg-transparent px-0 py-1"
                                     text cname {
-                                        style: "px-3 py-2 text-left font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
+                                        style: "px-3 text-left font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
                                     }
                                     if .block.table_sort_col == ci {
                                         if .block.table_sort_dir > 0 {
