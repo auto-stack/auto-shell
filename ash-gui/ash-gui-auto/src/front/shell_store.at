@@ -329,6 +329,12 @@ store ShellStore {
         .RefreshContext -> {
             .git_info = prompt_context()
             .git_label = compute_git_label(.git_info)
+            // Plan 058:命令完成时刷新历史 —— persisted_history 原先只在 Init
+            // 拉一次,执行新命令后 ↑ 历史导航走的是启动快照(用户实测:刚跑完
+            // `ls | where type == file` 按 ↑ 显示的是旧命令)。command_result
+            // 时后端历史已含新命令,重拉保证 ↑ 从最新开始。Vue 版同理受益
+            // (codegen 将 history() 映射为 api fetch)。
+            .persisted_history = history()
         }
 
         // ── 侧栏 ──
