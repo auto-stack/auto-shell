@@ -498,3 +498,87 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
   duration 标签 / cwd 缩写 / copy 兜底 / HistorySearch 排序与大小写 / ToolSidebar 描述 /
   PromptBar debounce / SSE onerror / ghost text overlay——均非功能缺失,是体验打磨)。
 - 验证:H3 playwright ✅;H4 待 smart 命令注册;H6 生成代码正确(面板布局/keyup 为独立项)。
+
+## Vue 可做 / VM(iced) 不能做:能力差距记录(2026-08-21 实测,Plan 058/059)
+
+> 2026-08-21 表格增强与行内编辑两轮开发中实测撞到的 VM 端能力缺口。
+> 分两类:**A. 渲染层**(iced 布局引擎 vs 浏览器 CSS,多数是结构性差距);
+> **B. VM 语言/运行时**(参数传递/事件/原语缺陷,属可修引擎 bug 或未实现)。
+> 每条附根因与对策;推翻条件 = 引擎侧补齐后可解除对应 workaround。
+
+### A. 渲染层(浏览器 CSS 原生支持,iced 无对应机制)
+
+| 能力 | Vue(浏览器) | VM(iced 0.14) | 根因 |
+|---|---|---|---|
+| 列宽拖拽 | pointer 事件 + CSS grid px 值 | ❌ | iced grid 只有等宽 `FillPortion` 轨道,无逐列宽度、无拖拽事件(renderer.rs build_grid) |
+| 表头吸顶 | `position: sticky` 一行 CSS | ❌ | iced 无视口定位,Sticky 降级为普通流(iced_adapter.rs) |
+| 行 hover 高亮 | `:hover` 伪类 | ❌ | StyleClass 不解析 `hover:` 前缀,静默跳过(class.rs);mouse_area 仅用于调试 |
+| 文本溢出 ellipsis | 原生 | ✅(text-ellipsis 有) | — |
+
+**对策**:此类功能只在 Vue 端做(auto gen 产物 + codegen 注入脚本,计划经
+`ash-table-*` 标记类识别);VM 端接受降级(等宽/无 hover/无吸顶),.at 里的
+`hover:`/sticky 类对 VM 无害(被忽略)。
+
+### B. VM 语言/运行时(引擎缺陷或未实现,Plan 059 三重限制即源于此)
+
+1. **嵌套列表经 widget 参数传递解析为空**
+   - 现象:`widget T(output: TableOutput)` 内 `for row in output.rows`
+     (rows `[][]RenderedCell`)迭代 0 次;同结构 `output.columns`(`[]str`)正常。
+   - 根因:widget 参数绑定的物化只处理一层列表,嵌套 list-of-list 解析为空
+     (aura_view_builder 值物化路径)。view fn 的**文本替换**走状态路径
+     (`output.rows` → `.block.output.Table.rows`)则正常——两条通道语义不一致。
+   - 对策:表格渲染内联在持有数据的 widget view 里,或经 view fn 参数文本替换。
+
+2. **view fn 内不允许事件**
+   - 现象:view fn 体内 `onclick:`/`oninput:` 解析报
+     `unsupported event argument`(block_item.at 曾 20 连错)。
+   - 根因:view fn 是调用点内联的模板片段,事件必须解析到**宿主 widget** 的
+     msg;解析器直接拒绝。
+   - 对策:带事件的标记必须内联在 widget view 中(Plan 059 表格即如此)。
+
+3. **事件参数文法受限:不允许表达式**
+   - 允许:model ref(`.field`)、循环变量、字符串/数字字面量、map 字面量、`$event`。
+   - 不允许:拼接/方法调用(`.Sort(id.str() + ":" + ci.str())` 报错)。
+   - **多参数合法**:`.Sort(.block.id, ci)` 可解析且 payload 可解码
+     (decode_payload 返回参数向量)——Plan 059 排序桥接即用双参。
+   - 根因:事件参数在渲染期编码进事件名字符串,只支持可静态求值的简单形式。
+
+4. **`sort_by`/`sort_by_key` 比较器被静默忽略**
+   - 根因:native.rs shim_list_sort_by 与 engine.rs sort_by 臂弹出闭包后直接
+     丢弃,按默认比较排序(cookbook 003_sort_struct 的断言实际未过排序)。
+   - 对策:手写选择排序(push 构建新列表;勿用 `rows[i]=rows[j]`,见下条)。
+
+5. **`SET_ELEM` 列表索引赋值按 i32 弹值且仅支持 ListData<Value>**
+   - 根因:engine.rs SET_ELEM 只 downcast `ListData<Value>` 且 `pop_i32` 取值
+     —— 赋字符串/引用必然错坏(Tab 补全 PickCompletion 静默中止的根因)。
+   - 对策:重建列表(push)或 Rust 侧直改;字符串拼接用 substr 扫描替代
+     split/join(见下条)。
+
+6. **`str.split` 返回字符串表索引的 i32 列表**
+   - 根因:engine.rs split 臂把 part 压成 `strings` 池索引存入
+     `ListData<i32>`(非 `ListData<String>`),join 不解码 → 往返产出
+     `"-1151|-1152"` 之类数字。
+   - 对策:.at 内避免 split/join 往返;需切词用 substr 逐位扫描(生产验证)。
+
+7. **子→父 callback emit 被剥离(桥接负担)**
+   - 根因:VM handler codegen 剥离 callback prop 调用(Plan 370 D-GAP-4),
+     空体 handler 不会上行 —— 所有子 widget → store 的交互都要 renderer
+     特例直改状态(ToggleCollapse/Plan 059 Sort/Filter/OpenPath 均此模式)。
+   - 推翻条件:child callback emit 桥实现后,可批量删除 renderer 特例。
+
+### 排查经验(记录给未来)
+
+- **传递加载静默吞解析错误**:transitive 模块 parse 失败被 lib.rs 2470 静默
+  丢弃(且 `auto <file>` 路径不初始化 logger,warn 也看不到),widget 不注册
+  → 渲染为空。**诊断用 `auto ui inspect <file>`**(唯一能暴露这类错误的路径)。
+  widget 参数必须带冒号(`output: T`),view fn 参数不带 —— 混写即触发此坑。
+- **`auto <file>` 每次启动全量重扫 use 链**,新增 .at 文件只需父级 `use` 声明,
+  无需注册/缓存操作(.auto/ui-cache.json 只属 vue codegen,与 VM 运行时无关)。
+
+### 推翻条件
+
+- B1/B3 修复(widget 参数嵌套物化、事件参数表达式)→ Plan 059 的 renderer
+  桥接可退役为纯 .at 实现;
+- B4/B5/B6 修复 → .at 侧可恢复惯用 sort/索引赋值/split 写法;
+- B7 修复 → renderer 特例(Sort/Filter/OpenPath/ToggleCollapse/OnCtrlL)收敛为
+  标准 emit 链。
