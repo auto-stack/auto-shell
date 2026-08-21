@@ -137,18 +137,6 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     // 吸顶/列宽拖拽(VM 忽略,无害)。
                     col {
                         style: "max-h-[400px] overflow-y-auto ash-scroll w-full text-sm font-mono-ash border border-border rounded-md bg-card/50"
-                        row {
-                            style: "ash-table-filterbar items-center justify-end gap-2 px-3 py-1 border-b border-border/60"
-                            text "⌕" {
-                                style: "text-[10px] text-muted-foreground/70 select-none"
-                            }
-                            input {
-                                value: .block.table_filter_q
-                                oninput: .Filter(.block.id)
-                                style: "w-32 bg-transparent outline-none border-0 text-xs font-mono-ash text-foreground"
-                                placeholder: "过滤行…"
-                            }
-                        }
                         // Plan 059:表头。箭头同行右置恒留位(w-4,未排序列渲染空占位),
                         // 排序态切换不改变表头宽度/高度(此前箭头换行把表头拉高)。背景
                         // bg-white/10(暗色主题下比内容略浅)。block id 事件参数(.block.id)
