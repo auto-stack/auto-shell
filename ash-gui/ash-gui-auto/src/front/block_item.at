@@ -149,23 +149,34 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                                 placeholder: "过滤行…"
                             }
                         }
+                        // Plan 059:表头。箭头同行右置恒留位(w-4,未排序列渲染空占位),
+                        // 排序态切换不改变表头宽度/高度(此前箭头换行把表头拉高)。背景
+                        // bg-white/10(暗色主题下比内容略浅)。block id 事件参数(.block.id)
+                        // 经引擎侧回落解析器修复(DEBTS §B8)。
                         row {
-                            style: "ash-table-row ash-table-header items-center bg-muted/40 border-b border-border display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr))"
+                            style: "ash-table-row ash-table-header items-center bg-white/10 border-b border-border display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr))"
                             for ci, cname in .block.output.Table.columns {
                                 button {
                                     onclick: .Sort(.block.id, ci)
-                                    style: "bg-transparent px-0 py-1"
-                                    text cname {
-                                        style: "px-3 py-2 text-left font-semibold text-foreground whitespace-nowrap overflow-hidden text-ellipsis"
-                                    }
-                                    if .block.table_sort_col == ci {
-                                        if .block.table_sort_dir > 0 {
-                                            text "▲" {
-                                                style: "text-[9px] text-sky-400 select-none"
+                                    style: "bg-transparent px-2 py-1 w-full"
+                                    row {
+                                        style: "items-center gap-1 w-full"
+                                        text cname {
+                                            style: "flex-1 px-2 py-2 text-left font-semibold text-foreground whitespace-nowrap overflow-hidden text-ellipsis"
+                                        }
+                                        if .block.table_sort_col == ci {
+                                            if .block.table_sort_dir > 0 {
+                                                text "▲" {
+                                                    style: "w-4 text-right text-[9px] text-sky-400 select-none"
+                                                }
+                                            } else {
+                                                text "▼" {
+                                                    style: "w-4 text-right text-[9px] text-sky-400 select-none"
+                                                }
                                             }
                                         } else {
-                                            text "▼" {
-                                                style: "text-[9px] text-sky-400 select-none"
+                                            text "" {
+                                                style: "w-4"
                                             }
                                         }
                                     }
