@@ -50,9 +50,20 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
             // 所以把折叠切换挂到折叠指示符 + 命令文本上(点击它们即可折叠)。
             row {
                 style: "items-center gap-2 mb-1.5 group cursor-pointer"
-                text .collapse_glyph {
-                    style: "text-muted-foreground select-none text-xs w-4"
+                button {
                     onclick: .ToggleCollapse(.block.id)
+                    style: "h-6 w-6 bg-transparent rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                    if .block.collapsed {
+                        icon {
+                            name: "chevron-right"
+                            style: "w-4 h-4 text-muted-foreground"
+                        }
+                    } else {
+                        icon {
+                            name: "chevron-down"
+                            style: "w-4 h-4 text-muted-foreground"
+                        }
+                    }
                 }
                 text "❯" {
                     style: "text-muted-foreground select-none"
@@ -66,37 +77,76 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 row {
                     style: "ml-auto items-center gap-1.5 shrink-0"
                     if .block.status.kind == "Running" {
-                        button "■" {
+                        button {
                             onclick: .Stop
-                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                            icon {
+                                name: "square"
+                                style: "w-4 h-4 text-red-400"
+                            }
                         }
                     }
                     row {
                         style: "items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                        button "⧉" {
+                        button {
                             onclick: .CopyCommand(.block.id)
-                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-muted/60"
+                            icon {
+                                name: "copy"
+                                style: "w-4 h-4 text-muted-foreground hover:text-foreground"
+                            }
                         }
                         // Plan 054 M3: 复制输出文本(output.Text 变体)。
-                        button "≡" {
+                        button {
                             onclick: .CopyOutput(.block.id)
-                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-muted/60"
+                            icon {
+                                name: "table"
+                                style: "w-4 h-4 text-muted-foreground hover:text-foreground"
+                            }
                         }
-                        button "↻" {
+                        button {
                             onclick: .Rerun(.block.command)
-                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-muted/60"
+                            icon {
+                                name: "rotate-ccw"
+                                style: "w-4 h-4 text-muted-foreground hover:text-foreground"
+                            }
                         }
                         // Plan 054 M3: 删除此 block(回调父级 store.DeleteBlock)。
-                        button "✕" {
+                        button {
                             onclick: .DeleteBlock(.block.id)
-                            style: "h-5 bg-transparent px-1.5 py-0.5 text-[11px] rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-red-500/10"
+                            icon {
+                                name: "trash-2"
+                                style: "w-4 h-4 text-muted-foreground hover:text-red-400"
+                            }
                         }
                     }
-                    text .status_glyph {
-                        // Plan 053 后续:状态色三元内联进 style(→ Vue :class 三元)。
-                        // `class: .status_cls`(Dot 引用)在 text 节点上被 codegen
-                        // 丢弃(容器节点才支持 class: 绑定),Vue 端 ✓/✗ 一直没颜色。
-                        style: if .block.status.kind == "Success" { "text-xs font-mono-ash text-emerald-500" } else if .block.status.kind == "Failed" { "text-xs font-mono-ash text-red-500" } else { "text-xs font-mono-ash text-amber-500" }
+                    if .block.status.kind == "Success" {
+                        icon {
+                            name: "check"
+                            style: "w-4 h-4 text-emerald-500"
+                        }
+                    } else {
+                        if .block.status.kind == "Failed" {
+                            icon {
+                                name: "x"
+                                style: "w-4 h-4 text-red-500"
+                            }
+                        } else {
+                            if .block.status.kind == "Cancelled" {
+                                icon {
+                                    name: "x"
+                                    style: "w-4 h-4 text-muted-foreground"
+                                }
+                            } else {
+                                icon {
+                                    name: "loader"
+                                    style: "w-4 h-4 text-amber-500"
+                                }
+                            }
+                        }
                     }
                     // BL-08..10:duration badge(仅完成时 duration_ms > 0 显示)。
                     if .duration_label != "" {
@@ -120,7 +170,10 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 if .cwd_display != "" {
                     row {
                         style: "text-[11px] text-muted-foreground/70 font-mono-ash mb-2"
-                        text "📁 " { }
+                        icon {
+                            name: "folder"
+                            style: "w-3.5 h-3.5 text-muted-foreground/70"
+                        }
                         text .cwd_display { }
                     }
                 }
