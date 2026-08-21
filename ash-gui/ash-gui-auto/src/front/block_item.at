@@ -150,13 +150,13 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                             }
                         }
                         row {
-                            style: "ash-table-row ash-table-header items-center display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04)"
+                            style: "ash-table-row ash-table-header items-center bg-muted/40 border-b border-border display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr))"
                             for ci, cname in .block.output.Table.columns {
                                 button {
                                     onclick: .Sort(.block.id, ci)
                                     style: "bg-transparent px-0 py-1"
                                     text cname {
-                                        style: "px-3 text-left font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
+                                        style: "px-3 py-2 text-left font-semibold text-foreground whitespace-nowrap overflow-hidden text-ellipsis"
                                     }
                                     if .block.table_sort_col == ci {
                                         if .block.table_sort_dir > 0 {
@@ -175,9 +175,9 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                         for idx, row in .block.output.Table.rows {
                             row {
                                 style: if idx % 2 == 0 {
-                                    "ash-table-row hover:bg-white/[0.03] display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02)"
+                                    "ash-table-row hover:bg-white/[0.03] display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-b border-border/60 bg-white/5"
                                 } else {
-                                    "ash-table-row hover:bg-white/[0.03] display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.06)"
+                                    "ash-table-row hover:bg-white/[0.03] display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-b border-border/60"
                                 }
                                 for cell in row {
                                     if cell.Text != None {
