@@ -31,6 +31,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         var history_open bool = false
         var suggestions []CompletionItem = []
         var ghost_text str = ""
+        // Plan 057 续(行内编辑 keymap):编辑模式("emacs"|"vi-insert"|
+        // "vi-normal")。VM 端渲染层据此选行编辑键位表(快捷键与功能分离,
+        // 切换模式不改 handler);Vue 端忽略(浏览器原生 Emacs 基础键)。
+        var edit_mode str = "emacs"
+        // 光标字节偏移(渲染层在编辑器消息派发前写入;仅声明处存在时)。
+        // 补全按真实光标计算,而非总在行尾。
+        var cursor_pos int = 0
         var highlighted_spans []HighlightSpan = []
         // Plan 053 后续:Tab 循环补全状态。tab_active=正在 Tab 循环;tab_candidates=
         // 进入循环时缓存的候选(循环期间 input 已被补全、.suggestions 会变,故另存);
@@ -132,16 +139,21 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     // PB-11:Ctrl+L 清屏(归档 blocks),非清输入。绑 OnCtrlL,
                     // renderer emit 模拟转发到 store.ClearScreen(vm 剥离 callback emit)。
                     onkeydown.ctrl.l: .OnCtrlL
-                    onkeydown.ctrl.d: .OnCtrlD
                     onkeydown.ctrl.c: .OnCtrlC
+                    // ctrl.d 不在此声明 —— 模式表 DeleteCharOrExit:空输入时
+                    // 合成派发 .OnCtrlD(退出),否则前删一字符(readline 语义)。
                     onkeydown.up: .HistoryOlder
                     onkeydown.down: .HistoryNewer
+                    onkeydown.ctrl.p: .HistoryOlder
+                    onkeydown.ctrl.n: .HistoryNewer
                     onkeydown.tab.prevent: .OnTab
                     // Plan 057 续:ghost 显示时右箭头逐字接受(fish 语义,接受过的
                     // 字符即变实色);ghost 为空时 VM 端不拦截(默认光标移动),
                     // Vue 端默认移动本就无 ghost 可走。不加 .prevent —— Vue 需要
                     // 默认行为兜底,VM 由 renderer 按 ghost 状态门控。
                     onkeydown.right: .OnRight
+                    // 行内编辑模式:emacs / vi-insert / vi-normal(渲染层键位表)。
+                    keymap: .edit_mode
                     rows: 1
                     style: "w-full bg-transparent outline-none border-0 px-0 text-sm font-mono-ash resize-none max-h-[168px] overflow-y-auto [field-sizing:content]"
                     placeholder: "type a command…"
@@ -374,7 +386,9 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .DoContinuation()
             }
             if v.trim() != "" {
-                .suggestions = complete(.input, .input.len())
+                // Plan 057 续(行内编辑):光标感知补全 —— 渲染层在编辑器消息
+                // 派发前写入 .cursor_pos(字节偏移);旧值兜底行尾。
+                .suggestions = complete(.input, .cursor_pos)
             } else {
                 .suggestions = []
             }
@@ -560,6 +574,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         }
 
         // Tab:应用第一个补全候选
+        // Plan 057 续(行内编辑):模式切换(渲染层 keymap 表经合成消息派发,
+        // input_value = 目标模式)。vi-insert 按 Esc → vi-normal;normal 按
+        // i/a/I/A → vi-insert。
+        .SetEditMode(m str) -> {
+            .edit_mode = m
+        }
+
         .OnTab -> {
             // Tab 只循环**上方候选行**(服务端 /api/complete 候选,如输入 l 时
             // ls/ln),绝不接受 ghost —— 对齐 CLI 版语义:ghost(历史 hint)只由
