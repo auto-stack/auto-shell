@@ -8,7 +8,7 @@ use block_body: BlockBody
 use types: Block
 
 widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
-    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand, CopyOutput, DeleteBlock(int), ToggleCollapse(int) }
+    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand, CopyOutput, DeleteBlock(int), ToggleCollapse(int), Sort(str), Filter(str) }
 
     // Plan 055 D5: collapsed 移到 block 数据(per-block,避免 VM 单根 state
     // 合并致全折叠);model 不再持有折叠状态。
@@ -125,6 +125,93 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     }
                 }
 
+                // Plan 059:Table 输出走增强表格(排序/过滤/斑马/右对齐/点击
+                // 打开);其余变体仍走 BlockBody。排序/过滤状态存 block 字段
+                // (table_sort_col/dir/filter_q),VM 由 renderer 直改(同
+                // ToggleCollapse 模式),Vue 走 emit → store.SortTable。
+                if .block.output.Table != None {
+                    // Plan 059:增强表格(排序/过滤/斑马/右对齐/点击打开)。
+                    // 内联在 widget view —— view fn 不支持事件(onclick/
+                    // oninput 解析报"unsupported event"),事件须解析到
+                    // BlockItem 的 msg。ash-table-* 标记类供 vue.rs 注入
+                    // 吸顶/列宽拖拽(VM 忽略,无害)。
+                    col {
+                        style: "max-h-[400px] overflow-y-auto ash-scroll w-full text-sm font-mono-ash border border-border rounded-md bg-card/50"
+                        row {
+                            style: "ash-table-filterbar items-center justify-end gap-2 px-3 py-1 border-b border-border/60"
+                            text "⌕" {
+                                style: "text-[10px] text-muted-foreground/70 select-none"
+                            }
+                            input {
+                                value: .block.table_filter_q
+                                oninput: .Filter(.block.id)
+                                style: "w-32 bg-transparent outline-none border-0 text-xs font-mono-ash text-foreground"
+                                placeholder: "过滤行…"
+                            }
+                        }
+                        row {
+                            style: "ash-table-row ash-table-header items-center display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.04)"
+                            for ci, cname in .block.output.Table.columns {
+                                button {
+                                    onclick: .Sort(.block.id, ci)
+                                    text cname {
+                                        style: "px-3 py-2 text-left font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
+                                    }
+                                    if .block.table_sort_col == ci {
+                                        if .block.table_sort_dir > 0 {
+                                            text "▲" {
+                                                style: "text-[9px] text-sky-400 select-none"
+                                            }
+                                        } else {
+                                            text "▼" {
+                                                style: "text-[9px] text-sky-400 select-none"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        for idx, row in .block.output.Table.rows {
+                            row {
+                                style: if idx % 2 == 0 {
+                                    "ash-table-row hover:bg-white/[0.03] display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02)"
+                                } else {
+                                    "ash-table-row hover:bg-white/[0.03] display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr)); border-bottom: 1px solid rgba(255,255,255,0.06)"
+                                }
+                                for cell in row {
+                                    if cell.Text != None {
+                                        text cell.Text {
+                                            style: if cell.Text != "" && "0123456789".contains(cell.Text.substr(0, 1)) {
+                                                "px-3 py-1.5 text-right overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground tabular-nums"
+                                            } else {
+                                                "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground"
+                                            }
+                                        }
+                                    }
+                                    if cell.Tagged != None {
+                                        text cell.Tagged.text {
+                                            onclick: .OpenPath(cell.Tagged.text)
+                                            style: if cell.Tagged.kind == "Dir" {
+                                                "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap cursor-pointer hover:underline text-sky-400"
+                                            } else if cell.Tagged.kind == "CodeAtRs" {
+                                                "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap cursor-pointer hover:underline text-emerald-400"
+                                            } else if cell.Tagged.kind == "Executable" {
+                                                "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap cursor-pointer hover:underline text-cyan-300"
+                                            } else if cell.Tagged.kind == "Config" {
+                                                "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap cursor-pointer hover:underline text-amber-300"
+                                            } else if cell.Tagged.kind == "Permission" {
+                                                "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap cursor-pointer hover:underline text-muted-foreground"
+                                            } else {
+                                                "px-3 py-1.5 text-left overflow-hidden text-ellipsis whitespace-nowrap cursor-pointer hover:underline text-foreground"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 流式输出(运行中时显示)
                 if .block.status.kind == "Running" && .block.streamed_text != "" {
                     // Plan 053 后续:长输出限高 + 原生 overflow + .ash-scroll(AutoUI 风格
@@ -141,10 +228,13 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 // 输出主体—— Plan 053 后续:show/cat 等长结果限高 max-h-[400px],超出在
                 // block 内部滚动。用原生 overflow-y-auto + .ash-scroll(AutoUI 风格滚动条),
                 // 不用 reka-ui scroll(其 bar 与 max-h 不兼容)。
+                // Plan 059:Table 变体已在上文 RenderTable 直渲染,此处只走非 Table。
                 if .block.output != None {
-                    col {
-                        style: "max-h-[400px] overflow-y-auto ash-scroll"
-                        BlockBody(output: .block.output, on_open_path: .OpenPath)
+                    if .block.output.Table == None {
+                        col {
+                            style: "max-h-[400px] overflow-y-auto ash-scroll"
+                            BlockBody(output: .block.output, on_open_path: .OpenPath)
+                        }
                     }
                 }
             }
