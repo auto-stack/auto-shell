@@ -300,8 +300,12 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                         row { style: "h-px w-full bg-border" }
                         col {
                             style: "max-h-[400px] overflow-y-auto ash-scroll"
-                            text .block.output.Text {
-                                style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words py-1"
+                            // py-2:边界线与文本之间留白(同 Code 变体)。
+                            col {
+                                style: "py-2"
+                                text .block.output.Text {
+                                    style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words"
+                                }
                             }
                         }
                         row { style: "h-px w-full bg-border" }
@@ -327,8 +331,13 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                                 // w-full:横向占满面板(滚动条贴最右)——漏了它
                                 // 会收敛到内容宽,把 ResultBlock 挤窄。
                                 style: "max-h-[400px] overflow-y-auto ash-scroll w-full text-sm font-mono-ash"
-                                text .block.streamed_text {
-                                    style: "font-mono text-sm whitespace-pre"
+                                // py-2:边界线与代码之间留白(内层 col 的 padding
+                                // 随内容滚动;scrollable 自身不吃 padding 类)。
+                                col {
+                                    style: "py-2"
+                                    text .block.streamed_text {
+                                        style: "font-mono text-sm whitespace-pre"
+                                    }
                                 }
                             }
                             row { style: "h-px w-full bg-border" }
