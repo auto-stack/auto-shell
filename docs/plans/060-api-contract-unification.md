@@ -400,3 +400,25 @@ ash-core(命令逻辑)。参照 015-notes 双模式实现。
 注:注册表真实清单 81 条,首条即 `.`(DotCommand,POSIX source 惯例),
 字母序 —— "alias/bash 缺失"系视觉模型从"(alias for source)"描述
 文本脑补,数据从未缺失。
+
+### 第八轮:native catalog 注册秩序根因收官(2026-08-22)
+
+M3 引擎直调特例(native_id==2870/2871 走 shim 直调)的根因查明并修复:
+**catalog ID 撞号** —— host.call 复用了 Random 段(2870-2874)已占的号,
+bind_shims 后注册覆盖先注册,native_interface 表派发错位。修复:host.call/
+call_value → 2930/2931(空闲段),**直调特例删除**,恢复正常表派发。
+
+全面清点(catalog 完整性测试首次运行即抓获)另除三处同类地雷:
+- **ID 129 撞号**:hashmap.drop ↔ hashset.new,后者覆盖前者 ——
+  hashmap.drop 实际派发到 hashset_new(潜伏栈语义错乱);hashset.new
+  → 1293。
+- **三表错位**:str.len(catalog 170 ↔ bigvm/entries 1500)、str.upper
+  (175↔1511)、str.new(172↔177,177 实为 string.new)。此前靠
+  resolve_qualified 的 registry 优先序侥幸未爆,任何走 fallback 的
+  新解析路径都会错派发;现全部对齐 catalog 权威 ID。
+
+**防回归**:catalog_integrity_tests(catalog ID/名字唯一、bigvm 同名必
+同 ID、NATIVE_ID_ENTRIES 交叉一致)—— 撞号/漂移今后测试期即拦截。
+
+E2E:ash-runner 重编重启,host 桥走正常表派发 —— 81 侧栏钮/真 cwd/
+pwd 执行/像素零重叠全通过。auto-lang 1a31218e。
