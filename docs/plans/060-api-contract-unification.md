@@ -461,3 +461,26 @@ master 四种形态全不复现:脚本 fn 返回 struct / 模块 pub fn(use 接�
 
 E2E:ash-runner 重编重启,81 钮/真 cwd/无 fallback。auto-lang f6147362。
 剩余引擎债:add_string O(n²) 去重、abt-asm CALL_SPEC 形态、tag 关键字。
+
+### 第十一轮:三项引擎债清偿(2026-08-22)
+
+**①add_string O(n²) → HashMap**(codegen 池内容索引;不变量:池只追加,
+直推站点仅致无害重复)+ 链接器并池去重 O(n×m) position → HashMap。
+
+**②链接器 remap u32 化 + 共享跨度模型**:与 417-followup 会话同日撞车
+(对方独立修复了 walker 操作数宽度、表留 u16 登记为债;本侧为超集:
+remap 表/obj_remap 全 u32 + 共享 operand_span_with_pool_indices 双
+walker 单表,变长操作数 CLOSURE/CREATE_FUTURE/ACCUM 系统一建模),
+合并取超集并吸收对方 0xFFFF 哨兵守卫。
+
+**③abt-asm/disasm CALL_SPEC 与 engine 统一**(u32 method + u8 argc)。
+
+**④tag 软关键字上下文化**:语句位 `tag` 仅后随 Ident(枚举名)才走
+enum 别名;`tag: value`/`tag.field`/`tag(...)` 按标识符。连带修参数名
+(soft_ident)、struct 字面量 key()、双点访问解析器。计划 060§154
+(TaggedCell.tag 不可访问)与 405/401(tag 不可作参数名)三笔登记项
+一并销案。tests_tag 四项 + enum 别名守卫锁死。
+
+E2E:ash-runner 重编重启,81 钮/真 cwd/无 fallback。
+auto-lang 96add3f3 / merge db8a4600。剩余引擎债:无在册高危项;
+观察项:巨串池 GC(池只增不减,量级可控)。
