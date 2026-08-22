@@ -507,3 +507,26 @@ VM 解释器路径所有权为编译期词汇、运行时擦除(裸索引自由�
 成本高);②标记-清除 GC(复用 operand_span_with_pool_indices 重映射
 机器做压缩);③维持现状 + 长会话定期重建 VM 实例(ash-gui 重启即释
 放)。现状影响:仅内存单调增长,正确性风险已被 u32 化 + 去重消除。
+
+### 第十三轮调研:VM 三层生命周期设计现状核对(2026-08-22)
+
+Auto 的内存设计(用户口径):无 Rust 级生命周期标注,三层兜底 ——
+①周期内引用(~80%)作用域尾清理;②一级逃逸分析覆盖大部分逃逸;
+③歧义项升级 Shared 引用(Rc<Cell<T>> 式,自带引用计数自动清理)。
+
+**调研结论:VM 后端三层均未接线**(a2r 路径借 Rust 编译器意外全成立):
+
+- ①RET 尾缘仅截断栈,无清理钩子;DROP 空壳+零发射(第十二轮);
+  parser scope 栈仅符号表;无 defer。
+- ②全仓无逃逸分析。旁注:CLOSURE 捕获为拷贝语义,arena 下自洽。
+- ③Rc/RefCell/Cell/Mutex 仅活在 a2r 透传;VM 零 refcount;OnceCell
+  natives 走堆对象无计数。
+- 借用检查仅 check_unsafe_capture 一个窄点;.view/.mut/.move/.take
+  四操作符在 codegen 直通编译内层(注释明言 MVP TODO)。
+
+**设计已声明、未接线**:take/move/copy 参数模式与所有权操作符词汇
+齐全。补线要点:.at 值的逃逸出口仅三个(闭包捕获/函数返回复合值/
+存入容器)——②③层分析面即此三点;①层为工程主体(作用域尾发射
+DROP + 池/堆条目引用计数;heap 可直接 remove_heap_object,字符串池
+需压缩重映射 —— operand_span_with_pool_indices 机器已就绪)。
+立项待定;本轮仅登记调研结论。
