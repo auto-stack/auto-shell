@@ -52,7 +52,7 @@ widget HistorySearch(history: []str, open: bool, on_run: msg, on_close: msg) {
                             style: if idx == .selected {
                                 "w-full text-left px-3 py-1 text-sm font-mono-ash bg-accent text-accent-foreground"
                             } else {
-                                "w-full text-left px-3 py-1 text-sm font-mono-ash text-muted-foreground hover:bg-muted/50"
+                                "w-full text-left px-3 py-1 text-sm font-mono-ash text-muted-foreground hover:bg-white/10"
                             }
                         }
                     }
