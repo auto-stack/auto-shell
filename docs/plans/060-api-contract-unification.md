@@ -278,6 +278,39 @@ front 里唯一有色的 tmp 目录(sky)在清理时被删,观感上"全无色"�
 shim 自创的 `.bat`/`.cmd`/`.ps1`/`.lock` 规则一并删除(HTTP 模式本就
 不认)。验证:ls(front)→ CodeAtRs×9(.at 文件名绿)。
 
+### M3 实施进行中(2026-08-22,用户架构指令)
+
+用户指令:merged 不再单独做逻辑;所有后端逻辑在 ash-server(API)内调
+ash-core(命令逻辑)。参照 015-notes 双模式实现。
+
+**已落地(auto-lang,机制件,已合并主检出)**:
+- `vm/host_bridge.rs`:名字→函数注册表;native `auto.host.call`(2870,
+  JSON 串)/`auto.host.call_value`(2871,直推 VM 值);`host` 加入
+  codegen stdlib 模块名表;`ui::iced::renderer` 提 pub +
+  `inject_shell_event`(SHELL_EVENT_TX 全局)。
+- codegen host 分派:裸 `#[api]` 调用改写为 `auto.host.call(bare, args)`
+  + `json.to_value`(与 HTTP 改写同构;spike 证明 .at fn return 无法
+  携带复合值,故走调用点发射)。`ApiCallInfo` 增 `fn_name`;api_funcs
+  收集门从 `api_over_http` 扩为 `|| host_bridge::has_host_calls()`。
+- ash-runner(auto-shell 仓 ash-server 新 bin):进程内 worker + 10 端点
+  桥 + ShellEvent→inject_shell_event 事件泵 + auto-man run_vm_ui 起 GUI。
+  依赖修复:sysinfo 0.33→0.35(其 windows≤0.57 约束曾令 gpu-allocator
+  与 wgpu-hal 的 windows 0.58 类型错位);.cargo/config 补 32MB 栈。
+  跨仓 path 经 `.worktrees/auto-lang`/`auto-ai` junction。
+
+**当前阻塞(精确记录,续作入口)**:改写在编译期触发(31 处),但
+**运行时复合值落地失败**:
+- host 模式:Init 静默中止(store 回滚,commands=0)。
+- 对照实验:同一 spike(tests/spike-m3)走 **HTTP 模式同样坏** ——
+  `history()` 返回列表,`h.len().str()` 得 "438-2147483647"(垃圾);
+  即 **VM 前端调 #[api] 拿复合值这条路径在 ash-gui 从未真正验证过**
+  (HTTP 模式历史冒烟只看了事件流,没看 Init 数据落地)。
+- 下一步:修 VM 侧 HTTP/host 共享管线的复合值落地(json.to_value 的
+  堆对象 → var/字段赋值的槽位/类型编码;对比 015-notes notes_store
+  `.notes = list_notes()` 可行的差异点 —— 疑与带类型 var 声明或
+  store vs widget 模块的 handler codegen 路径有关)。诊断探针
+  (DBG-HOST/DBG-HOSTCALL/DBG-BRIDGE/DBG-PUMP)已留在代码中,修完删除。
+
 ### show 迁移补记(2026-08-22,后续提交)
 
 `show` 真实现属 **ash-core**(reader + Prism tomorrow 高亮)。merged 侧

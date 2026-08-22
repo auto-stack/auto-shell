@@ -133,7 +133,7 @@ store ShellStore {
             // Plan 057:cwd/home 取自 BootSnapshot —— HTTP 模式下来自真后端
             // (ash-server 的 Shell 会话 cwd/home);merged 模式 mock 返回 "."
             // (执行器在进程 cwd 执行,与原硬编码 "." 等价)。
-            var snap BootSnapshot = command_list()
+            var snap = command_list()
             .cwd = snap.cwd
             .home = snap.home
             // 调 command_list() 拉取侧栏命令表(Plan 044 M2:79 命令,对齐 vue 版)。
@@ -143,7 +143,7 @@ store ShellStore {
             var names List<str> = List<str>.new([])
             .command_names = names
             // 读真实历史文件(Plan 044 M4:对齐 vue 版 read_history)。
-            var hist []str = history()
+            var hist = history()
             .persisted_history = hist
             // APP-05/06:git_label。Init 时调 prompt_context() 获取真实 git 信息
             // (RunResult handler 不会被 renderer 调用 — update_block_in_state

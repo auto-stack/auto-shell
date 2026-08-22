@@ -15,7 +15,7 @@ indexmap = "2.0"
 
 # Platform support
 dirs = "5.0"
-sysinfo = "0.33"
+sysinfo = "0.35"
 
 # Utilities
 chrono = "0.4"

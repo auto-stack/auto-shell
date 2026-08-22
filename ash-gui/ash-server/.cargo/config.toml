@@ -1,0 +1,5 @@
+# Plan 060 M3(对齐 auto-lang/.cargo/config.toml):VM interpreter UI(iced)
+# 在主线程递归渲染复杂视图树,默认 8MB 栈不足 —— /STACK 设 PE 头栈保留。
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+rustflags = ["-C", "link-arg=/STACK:33554432"]  # 32 MB

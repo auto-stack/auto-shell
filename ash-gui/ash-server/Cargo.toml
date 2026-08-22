@@ -15,10 +15,30 @@ crate-type = ["rlib"]
 name = "ash-server"
 path = "src/bin/ash-server.rs"
 
+# Plan 060 M3:merged 模式宿主 runner —— 进程内起 worker + 宿主桥 +
+# auto-man 编排跑 .at GUI(auto-man 依赖 auto-lang;从本仓方向引用合法,
+# auto-lang 不可反向依赖本仓 —— cargo 环)。
+[[bin]]
+name = "ash-runner"
+path = "src/bin/ash-runner.rs"
+
 [dependencies]
 # Shell engine (same as ash-gui-vue)
 ash-core = { path = "../../ash-core" }
 auto-shell = { path = "../../ash/auto-shell", default-features = false }
+
+# Plan 060 M3:runner 侧 —— GUI 编排(auto-man)+ 宿主桥注入(auto-lang)。
+# 跨仓 path 依赖锚定 D:\autostack 兄弟布局:主检出直接成立;worktree
+# 检出需 .worktrees/auto-lang junction(见 plan 060 §M3)。
+auto-lang = { path = "../../../auto-lang/crates/auto-lang" }
+auto-man = { path = "../../../auto-lang/crates/auto-man" }
+
+# 特性统一对齐:auto-lang workspace 的图里 windows(default/std)经由
+# python/pyo3 等成员间接启用;本 workspace 缺它会令 wgpu-hal 的 dx12
+# 路径与 gpu-allocator 的 windows 类型不一致(编译期 mismatch)。直接
+# 依赖 default 特性把统一拉齐(版本对齐锁文件中的 0.58)。
+[target.'cfg(windows)'.dependencies]
+windows = "0.58"
 
 # Async runtime + channels
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }

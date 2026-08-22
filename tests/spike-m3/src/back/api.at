@@ -1,0 +1,5 @@
+// spike:复用 ash-runner 已注册的 history 桥(桥名 = 契约函数名)
+#[api(method = "GET", path = "/api/history")]
+pub fn history() []str {
+    return ["stub"]
+}

@@ -1,0 +1,21 @@
+use back.api: history
+
+widget App {
+    model {
+        var count str = "boot"
+    }
+    on {
+        .Init -> {
+            var h = history()
+            .count = "len=" + h.len().str()
+        }
+    }
+    view {
+        col {
+            style: "gap-2 p-4"
+            text .count {
+                style: "text-fg text-lg"
+            }
+        }
+    }
+}
