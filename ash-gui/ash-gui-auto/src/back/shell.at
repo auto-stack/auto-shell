@@ -837,13 +837,19 @@ fn ls_result_json(block_id int, cmd str, cwd str) str {
                             }
                             first_row = false
                             var kind str = "Plain"
+                            // 2026-08-22(对齐 ash-core file_name_kind):.at/.rs →
+                            // CodeAtRs(emerald)、.exe/.dll → Executable、
+                            // .toml/.json/.yaml/.yml → Config —— 严格镜像
+                            // ash-core/src/renderer.rs:306(此前 shim 漏了 .at,
+                            // 默认 cwd(src/front 全是 .at 文件)整列无色;
+                            // 多出的 .bat/.cmd/.ps1/.lock 规则一并删除对齐)。
                             if is_dir {
                                 kind = "Dir"
-                            } else if name.ends_with(".rs") {
+                            } else if name.ends_with(".at") || name.ends_with(".rs") {
                                 kind = "CodeAtRs"
-                            } else if name.ends_with(".exe") || name.ends_with(".bat") || name.ends_with(".cmd") || name.ends_with(".ps1") {
+                            } else if name.ends_with(".exe") || name.ends_with(".dll") {
                                 kind = "Executable"
-                            } else if name.ends_with(".toml") || name.ends_with(".json") || name.ends_with(".yaml") || name.ends_with(".yml") || name.ends_with(".lock") {
+                            } else if name.ends_with(".toml") || name.ends_with(".json") || name.ends_with(".yaml") || name.ends_with(".yml") {
                                 kind = "Config"
                             }
                             var tkind str = "Plain"

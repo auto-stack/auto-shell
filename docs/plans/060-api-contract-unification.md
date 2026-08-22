@@ -265,6 +265,19 @@ shell.at run_command(block_id, cmd, cwd):
   (修复前同场景 ~10s 死)。重建路径的底层内存根因未除(agent 活跃期
   间长会话仍可能触发),仍为引擎债;AUTOUI_MCP_DISABLE=1 留作诊断开关。
 
+### 第六轮:ls 表格无色(2026-08-22)
+
+用户报 ls 表格无彩色。排查:渲染层与 is_dir/ends_with 原语均正常
+(`ls ..` 的 back/front 正确拿 Dir/sky);根因是 **merged shim 的文件分类
+与 ash-core 不一致** —— ash-core `file_name_kind`(renderer.rs:306)把
+`.at`/`.rs` 都归 CodeAtRs(emerald),shim 只写了 `.rs`,漏了 `.at`;
+默认 cwd(src/front)全是 .at 文件 → 整列 Plain 无色。叠加因素:此前
+front 里唯一有色的 tmp 目录(sky)在清理时被删,观感上"全无色"。
+修复:shell.at 分类严格镜像 ash-core(`.at`/`.rs`→CodeAtRs、
+`.exe`/`.dll`→Executable、`.toml`/`.json`/`.yaml`/`.yml`→Config),
+shim 自创的 `.bat`/`.cmd`/`.ps1`/`.lock` 规则一并删除(HTTP 模式本就
+不认)。验证:ls(front)→ CodeAtRs×9(.at 文件名绿)。
+
 ### show 迁移补记(2026-08-22,后续提交)
 
 `show` 真实现属 **ash-core**(reader + Prism tomorrow 高亮)。merged 侧
