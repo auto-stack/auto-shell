@@ -439,6 +439,10 @@ pub fn run_command(block_id int, cmd str, cwd str) {
     // (执行线程不 spawn);外部命令经 auto.shell.exec_submit 走进程执行。
     // 传输层零语义;HTTP 模式不加载本模块,不受影响。
     var fw str = first_word(cmd)
+    if fw == "show" {
+        shell.emit_result(block_id, show_result_json(block_id, cmd, cwd))
+        return
+    }
     if fw == "ls" || fw == "dir" {
         shell.emit_result(block_id, ls_result_json(block_id, cmd, cwd))
         return
@@ -673,6 +677,78 @@ fn num_cmp(a str, b str, op str) bool {
         return av < bv
     }
     return av <= bv
+}
+
+// show 的 merged 语义:读文件 → Code 变体(每行一个白色 span,language =
+// 扩展名)。Plan 045 旧 renderer 拦截(handle_show_command)的 .at 移植,
+// Plan 060 M2 收尾(§5 遗留)。
+fn show_result_json(block_id int, cmd str, cwd str) str {
+    var words List<str> = split_words(cmd)
+    if words.len() < 2 {
+        return fail_result_json(block_id, cwd, "show: missing file path")
+    }
+    var filepath str = words[1]
+    var full_path str = filepath
+    if filepath.len() < 2 || filepath.substr(1, 1) != ":" {
+        if cwd != "" && cwd != "." {
+            full_path = cwd + "/" + filepath
+        }
+    }
+    if !fs.exists(full_path) {
+        return fail_result_json(block_id, cwd, "show: " + filepath + ": no such file")
+    }
+    var content str = File.read_text(full_path)
+    // 扩展名:最后一个 '.' 之后(无 '.' 则空)。
+    var dot int = -1
+    var di int = 0
+    var dn int = filepath.len()
+    for di < dn {
+        if filepath.substr(di, 1) == "." {
+            dot = di
+        }
+        di = di + 1
+    }
+    var lang str = ""
+    if dot >= 0 {
+        lang = filepath.substr(dot + 1, filepath.len() - dot - 1)
+    }
+    // 行扫描:按 '\n' 切、剥尾 '\r'(CRLF 文件);每行一个白色 span
+    // (MVP 纯色,对齐旧实现;VM 无语法高亮管线)。
+    var js str = "{\"block_id\":" + block_id.str() + ",\"cwd\":\"" + json_escape(cwd) + "\",\"status\":\"Success\",\"output\":{\"Code\":{\"lines\":["
+    var li int = 0
+    var ln int = content.len()
+    var line str = ""
+    var first bool = true
+    for li < ln {
+        var ch str = content.substr(li, 1)
+        if ch == "\n" {
+            var emit str = line
+            if emit.len() > 0 && emit.substr(emit.len() - 1, 1) == "\r" {
+                emit = emit.substr(0, emit.len() - 1)
+            }
+            if !first {
+                js = js + ","
+            }
+            first = false
+            js = js + "[{\"text\":\"" + json_escape(emit) + "\",\"r\":255,\"g\":255,\"b\":255,\"bold\":false,\"italic\":false}]"
+            line = ""
+        } else {
+            line = line + ch
+        }
+        li = li + 1
+    }
+    if line != "" {
+        var emit2 str = line
+        if emit2.len() > 0 && emit2.substr(emit2.len() - 1, 1) == "\r" {
+            emit2 = emit2.substr(0, emit2.len() - 1)
+        }
+        if !first {
+            js = js + ","
+        }
+        js = js + "[{\"text\":\"" + json_escape(emit2) + "\",\"r\":255,\"g\":255,\"b\":255,\"bold\":false,\"italic\":false}]"
+    }
+    js = js + "],\"language\":\"" + json_escape(lang) + "\"}},\"duration_ms\":0,\"exit_code\":0}"
+    return js
 }
 
 // ls/dir 的 merged 语义:fs 直读,直接产出 command_result payload JSON

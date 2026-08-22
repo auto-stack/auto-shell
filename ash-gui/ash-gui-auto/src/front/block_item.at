@@ -296,7 +296,27 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     }
                 }
                 if .block.output != None {
-                    if .block.output.Table == None && .block.output.Text == None {
+                    // 2026-08-22(show 修复):Code 变体内联渲染 —— BlockBody 是
+                    // 子 widget,其 output prop 字段在 iced VM 读成空(Text 内联
+                    // 的同族 bug,Code 走 BlockBody 时整体空白)。对齐 BlockBody
+                    // 的 RenderCode:逐行逐 span,颜色/粗斜体拼内联 style(Vue
+                    // 生效;VM 忽略 CSS 声明、回落默认色,可接受降级)。
+                    // int 拼 str 一律 .str()(直拼会出错,见 duration_label 注释)。
+                    if .block.output.Code != None {
+                        col {
+                            style: "max-h-[400px] overflow-y-auto ash-scroll text-sm font-mono-ash"
+                            for line in .block.output.Code.lines {
+                                row {
+                                    for span in line {
+                                        text span.text {
+                                            style: "color: rgb(" + span.r.str() + "," + span.g.str() + "," + span.b.str() + ");font-weight:" + (if span.bold { "bold" } else { "normal" }) + ";font-style:" + (if span.italic { "italic" } else { "normal" })
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if .block.output.Table == None && .block.output.Text == None && .block.output.Code == None {
                         col {
                             style: "max-h-[400px] overflow-y-auto ash-scroll"
                             BlockBody(output: .block.output, on_open_path: .OpenPath)
