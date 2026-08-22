@@ -304,7 +304,9 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     // int 拼 str 一律 .str()(直拼会出错,见 duration_label 注释)。
                     if .block.output.Code != None {
                         col {
-                            style: "max-h-[400px] overflow-y-auto ash-scroll text-sm font-mono-ash"
+                            // w-full:横向占满面板(滚动条贴最右)——漏了它
+                            // 会收敛到内容宽,把 ResultBlock 挤窄。
+                            style: "max-h-[400px] overflow-y-auto ash-scroll w-full text-sm font-mono-ash"
                             for line in .block.output.Code.lines {
                                 row {
                                     for span in line {

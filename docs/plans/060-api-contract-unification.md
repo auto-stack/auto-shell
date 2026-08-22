@@ -173,10 +173,33 @@ shell.at run_command(block_id, cmd, cwd):
 | ping -n 2 | 进程路径流式输出 ✓ |
 | 标题栏 cwd | cd 往返跟随(段栈归一后为正斜杠形态)✓ |
 
+### show 迁移补记(2026-08-22,后续提交)
+
+`show` 真实现属 **ash-core**(reader + Prism tomorrow 高亮)。merged 侧
+在 shell.at 做等义 shim(同 ls 的"直接产出 JSON"管线):
+
+- **提交侧分派**:`show` → `show_result_json`(读文件 → Code 变体)→
+  emit_result 直发,不 spawn。
+- **语法高亮 .at 移植**:旧版移植是白 span MVP,真实高亮在
+  auto-lang `highlight_code`(renderer.rs:1131)。本次在 shell.at 拼
+  `hl_is_ident/hl_is_num/hl_is_kw/hl_spans_json` 四函数,色板对齐
+  Prism tomorrow(注释灰 107,114,128 / 字符串绿 195,232,141 /
+  数字橙 247,140,108 / 关键词紫 199,146,234 / 标点青 137,221,255 /
+  标识符白 229,231,235)。关键词表 = highlight_code KW 列表,空格
+  整词 contains 匹配。
+- **Code 内联渲染**:BlockBody 子 widget prop 字段读取为空(B 系列
+  已知),Code 分支内联进 block_item.at;回退条件加 Code。
+- **ResultBlock w-full**:Code 渲染 col 漏 `w-full` 会收敛到内容宽、
+  把块挤窄、滚动条脱离面板最右 —— 补上后代码块横向占满面板。
+- 验证(MCP):`show types.at` 彩色 span 生效(state dump r:107 注释灰
+  等);截图确认注释灰/关键词紫/字符串绿、块占满面板宽;回归
+  echo/ls/`ls | where`/show 不存在文件(Failed + 消息)全绿。
+
 ### 遗留更新
 
-- `show` builtin 未迁移(cmd /C 直通会失败)—— M3 或后续补(读文件 +
-  Code 变体,同 ls 模式)。
+- ~~`show` builtin 未迁移~~:已迁移(见上),含 Prism tomorrow 高亮;
+  但属 merged shim,HTTP 模式走 ash-server 侧 ash-core 真实现 ——
+  M3 a2r/runner 绑定 ash-core 时 merged 侧可退役 shim。
 - ~~Vue api.ts 本地桩~~:不再需要(api.at 无 plain 转发 fn,最终设计
   未引入)。
 - run_smart/jobs 仍为 mock(无真实需求)。

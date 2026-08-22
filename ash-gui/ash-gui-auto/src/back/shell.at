@@ -679,6 +679,180 @@ fn num_cmp(a str, b str, op str) bool {
     return av <= bv
 }
 
+// ── show 语法高亮(2026-08-22 续)──
+// 真实现属 ash-core(HTTP 模式直用);此处是 merged shim,色板与 tokenizer
+// 对齐 auto-lang renderer 的 highlight_code(Prism tomorrow:注释灰/字符串
+// 绿/数字橙/关键词紫/标点青,见 535b291d/23cd6046)。行内着色,跨行字符串
+// 不追踪(降级可接受)。VM 规避:无 continue(复合条件 + 显式推进 i),
+// int 拼 str 一律 .str(),方法调用不链式。
+
+fn hl_is_ident(c str) bool {
+    var idc str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    return idc.contains(c)
+}
+
+fn hl_is_num(c str) bool {
+    var nc str = "0123456789."
+    return nc.contains(c)
+}
+
+// 关键词表 = highlight_code 的 KW 列表(前后留空格,整词 contains 匹配)。
+fn hl_is_kw(word str) bool {
+    var kws str = " widget view model msg on def class style variant size text button row col column icon input textarea code_editor scroll grid link if else return true false fn let const npx npm yarn pnpm cd export import from badge codeblock table div span img image outline ghost primary secondary destructive default pub use for while match struct enum impl var break continue "
+    return kws.contains(" " + word + " ")
+}
+
+// 单行 → CodeSpan JSON 数组串。kind:id(白)/com(灰)/str(绿)/num(橙)/
+// kw(紫)/pun(青)。每分支自行推进 i(无尾部自增)。
+fn hl_spans_json(line str) str {
+    var texts List<str> = List<str>.new([])
+    var kinds List<str> = List<str>.new([])
+    var n int = line.len()
+    var i int = 0
+    for i < n {
+        var c str = line.substr(i, 1)
+        if (c == "/" && i + 1 < n && line.substr(i + 1, 1) == "/") || c == "#" {
+            var com str = line.substr(i, n - i)
+            texts.push(com)
+            kinds.push("com")
+            i = n
+        } else {
+            if c == "\"" || c == "'" {
+                var s str = c
+                var j int = i + 1
+                var prev_esc bool = false
+                var end int = n
+                var stop bool = false
+                for j < n && !stop {
+                    var cj str = line.substr(j, 1)
+                    s = s + cj
+                    if prev_esc {
+                        prev_esc = false
+                    } else {
+                        if cj == "\\" {
+                            prev_esc = true
+                        } else {
+                            if cj == c {
+                                end = j + 1
+                                stop = true
+                            }
+                        }
+                    }
+                    j = j + 1
+                }
+                texts.push(s)
+                kinds.push("str")
+                i = end
+            } else {
+                if hl_is_num(c) {
+                    var num str = ""
+                    var j2 int = i
+                    var stop2 bool = false
+                    for j2 < n && !stop2 {
+                        var cj2 str = line.substr(j2, 1)
+                        if hl_is_num(cj2) {
+                            num = num + cj2
+                        } else {
+                            stop2 = true
+                        }
+                        if !stop2 {
+                            j2 = j2 + 1
+                        }
+                    }
+                    texts.push(num)
+                    kinds.push("num")
+                    i = j2
+                } else {
+                    if hl_is_ident(c) {
+                        var word str = ""
+                        var j3 int = i
+                        var stop3 bool = false
+                        for j3 < n && !stop3 {
+                            var cj3 str = line.substr(j3, 1)
+                            if hl_is_ident(cj3) {
+                                word = word + cj3
+                            } else {
+                                stop3 = true
+                            }
+                            if !stop3 {
+                                j3 = j3 + 1
+                            }
+                        }
+                        var kind3 str = "id"
+                        if hl_is_kw(word) {
+                            kind3 = "kw"
+                        }
+                        texts.push(word)
+                        kinds.push(kind3)
+                        i = j3
+                    } else {
+                        if c == " " || c == "\t" {
+                            var w str = ""
+                            var j4 int = i
+                            var stop4 bool = false
+                            for j4 < n && !stop4 {
+                                var cj4 str = line.substr(j4, 1)
+                                if cj4 == " " || cj4 == "\t" {
+                                    w = w + cj4
+                                } else {
+                                    stop4 = true
+                                }
+                                if !stop4 {
+                                    j4 = j4 + 1
+                                }
+                            }
+                            texts.push(w)
+                            kinds.push("id")
+                            i = j4
+                        } else {
+                            texts.push(c)
+                            kinds.push("pun")
+                            i = i + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 渲染为 CodeSpan JSON(色板对齐 Prism tomorrow)。
+    var js str = "["
+    var k int = 0
+    for k < texts.len() {
+        if k > 0 {
+            js = js + ","
+        }
+        var kind str = kinds[k]
+        var r int = 229
+        var g int = 231
+        var b int = 235
+        if kind == "com" {
+            r = 107
+            g = 114
+            b = 128
+        } else if kind == "str" {
+            r = 195
+            g = 232
+            b = 141
+        } else if kind == "num" {
+            r = 247
+            g = 140
+            b = 108
+        } else if kind == "kw" {
+            r = 199
+            g = 146
+            b = 234
+        } else if kind == "pun" {
+            r = 137
+            g = 221
+            b = 255
+        }
+        js = js + "{\"text\":\"" + json_escape(texts[k]) + "\",\"r\":" + r.str() + ",\"g\":" + g.str() + ",\"b\":" + b.str() + ",\"bold\":false,\"italic\":false}"
+        k = k + 1
+    }
+    js = js + "]"
+    return js
+}
+
 // show 的 merged 语义:读文件 → Code 变体(每行一个白色 span,language =
 // 扩展名)。Plan 045 旧 renderer 拦截(handle_show_command)的 .at 移植,
 // Plan 060 M2 收尾(§5 遗留)。
@@ -730,7 +904,7 @@ fn show_result_json(block_id int, cmd str, cwd str) str {
                 js = js + ","
             }
             first = false
-            js = js + "[{\"text\":\"" + json_escape(emit) + "\",\"r\":255,\"g\":255,\"b\":255,\"bold\":false,\"italic\":false}]"
+            js = js + hl_spans_json(emit)
             line = ""
         } else {
             line = line + ch
@@ -745,7 +919,7 @@ fn show_result_json(block_id int, cmd str, cwd str) str {
         if !first {
             js = js + ","
         }
-        js = js + "[{\"text\":\"" + json_escape(emit2) + "\",\"r\":255,\"g\":255,\"b\":255,\"bold\":false,\"italic\":false}]"
+        js = js + hl_spans_json(emit2)
     }
     js = js + "],\"language\":\"" + json_escape(lang) + "\"}},\"duration_ms\":0,\"exit_code\":0}"
     return js
