@@ -369,3 +369,34 @@ ash-core(命令逻辑)。参照 015-notes 双模式实现。
 - ~~Vue api.ts 本地桩~~:不再需要(api.at 无 plain 转发 fn,最终设计
   未引入)。
 - run_smart/jobs 仍为 mock(无真实需求)。
+
+### 第七轮:侧栏 commands"乱"(2026-08-22,双根因)
+
+现象:用户侧栏条目文字叠压、内容漂移("前面也出现过一次")。像素行带
+分析(用户截图 vs 实况)定位两个独立问题:
+
+1. **字符串池 u16 回绕(auto-lang,真凶)**:运行期池索引在 natives
+   消费侧 40+ 处 `as u16` 截断,而字段读(`push_value` Value::Str 臂)
+   每次直推新池条目无去重 —— 侧栏 81 命令 × name/description 随每次
+   视图重建(每敲一键)膨胀,会话活跃数分钟即越过 65535,索引回绕
+   互串:文本错乱 → 换行数漂移 → 行高错位 → 叠压;且随重建漂移。
+   与"show 巨串堆损坏"(第一轮)同病根(池无界增长 + u16 上限),
+   该次只把 payload 构建下沉 Rust 绕开,未治本。
+   **修复(auto-lang e8672fdd)**:`get_string` u16→u32 + 清除全部
+   runtime 截断点;重新驻留热点(push_value/STR_CAT/json_to_vm_value/
+   btreemap/stream-chunk/convert 等)改走 `add_string` 内容去重;
+   `tests_string_pool` 锁死两条不变量(池 >65535 往返精确 / 重复内容
+   零增长)。codegen/template_codegen 为编译期自洽 u16 池,未动
+   (app 常量表规模 ~数千,远离上限;彻底 u32 化留引擎债)。
+2. **truncate 未实现(观感)**:Vue 版侧栏描述靠 `truncate`(单行
+   省略);VM 侧该类此前根本没进 StyleClass。长描述(如 ash 的
+   "Execute a .ash script in the current shell session (alias for
+   source)")换行 2-3 行,条目高低不平。
+   **修复(auto-lang cbfc1c76)**:StyleClass::Truncate + iced_adapter
+   `wrap_none` + renderer Text 臂 `Wrapping::None` + clip 容器。
+
+验证:MCP 实例像素行带严格 [名1行→描述1行] 交替零重叠;压力(5 条
+命令 + 多次快照)后数据层 81 钮(`.`/build/cat 序)与像素层均稳定。
+注:注册表真实清单 81 条,首条即 `.`(DotCommand,POSIX source 惯例),
+字母序 —— "alias/bash 缺失"系视觉模型从"(alias for source)"描述
+文本脑补,数据从未缺失。
