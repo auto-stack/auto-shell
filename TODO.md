@@ -18,6 +18,7 @@
 - [x] **`.at` 复刻**:ash-gui-auto 已完成 .at 复刻(VM 模式可跑)。VM 模式下命令执行闭环已打通(SSE 桥)、12 处 Vue→Auto 差异已对齐、56 测试用例 pass。详见 `designs/ash-gui-native-plan.md`。**a2r(可分发二进制)路径待 codegen 修复**(2026-08-08 二次实测 72 个编译错误,全前端 main.rs;`--server rust` merged mode 绕过后端。见归档文档 §4)。
 - [ ] **iced 版去留**:`ash-gui-bin`(iced 原型)保留为参考。当 Vue 版达到功能等价后,评估是否归档。ash-gui-auto 的 VM 模式已用 iced 原生渲染器,是 ash-gui-bin 的后继。
 - [ ] **跨后端一致性**:TUI / iced / Vue 三端的配色与状态语义应统一到单一来源(当前分散在各前端)。可能抽一个共享 token 定义。
+- [ ] **VM hover 通用化(方案 B,悬停状态 → 消息 → 视图重建)**:2026-08-21 已落地 hover:bg-* 与图标 hover:text-*(方案 A:iced button Status + svg 画时着色,零重建),但仅限这两类。浏览器级 :hover 语义(任意 hover 类生效、`group-hover:opacity-100` 操作区悬停显隐等)需要:mouse_area on_enter/on_exit(iced 0.14 已有)或全局光标订阅 + layout_collector 包围盒 → state 存 hovered vnode → 触发一次 view 重建,转换器把 hover 上下文向下传(参考 inherit_text_color 模式)。代价:每次悬停进出各一次重建(iced 本来每消息都重建,本应用规模无压力)。前置条件:若实现 opacity 类,VM 端 `opacity-0 group-hover:opacity-100` 的"常显"行为会被打破,此项即为依赖。改动应在 auto-shell worktree 的 auto-lang 里做。
 
 ## 与外部生态的协同
 
