@@ -173,27 +173,67 @@ shell.at run_command(block_id, cmd, cwd):
 | ping -n 2 | 进程路径流式输出 ✓ |
 | 标题栏 cwd | cd 往返跟随(段栈归一后为正斜杠形态)✓ |
 
+### show 卡死追查与修复(2026-08-22,第三轮)
+
+用户复报"`show types.at` 没有显示结果"。经复现与逐层排查,发现**三个叠加
+的根因**(前一轮的 .at 高亮移植 `hl_*` 四函数正是导火索,已整体回撤):
+
+1. **VM 字符串池 u16 截断(引擎缺陷,已规避)**:字符串池只增不减,
+   natives 侧索引 `as u16` 截断(上限 65535)。.at 侧 `line = line + ch`
+   式逐字符拼装 + `js = js + ...` 拼 payload,一次 show(types.at ~30KB、
+   block_item.at ~100KB)就往池里塞 1~2 万条;池溢出后索引回绕,既有字符
+   串互相串写 —— 实测铁证:会话 cwd 被写成单字符 `r`(state dump 可见),
+   payload 丢失 → 块永挂 Running,进程满转后静默 exit(1)。
+   - 修复 A(show 下沉 Rust):新增 native `auto.shell.emit_show`(2869),
+     读文件 + 逐行高亮 + payload JSON 全在 Rust 侧完成
+     (vm/shell_bridge.rs `highlight_rgb`/`show_result_json`;renderer 的
+     font-mono 自动高亮改为委托同一实现,消除双份色板)。shell.at 只做
+     路径归一,`hl_*`/旧 `show_result_json` 巨串管线整体删除。
+   - 修复 B(池去重):engine.rs `add_string` 按内容去重(重复内容复用
+     索引),`load_strings` 换池时同步重建去重表。运行时高重复 churn
+     (样式串/标签)不再撑池。
+   - 引擎债:索引 u32 化 / 池 GC 未做 —— 真去重后仍有唯一串增长路径
+     (如 ls 前缀拼接),超长会话仍可能触顶。
+2. **MCP 心跳强制重建风暴**:MCP UI 服务默认开启(:9247),心跳
+   200ms 一拍,每拍触发一次完整 update→view 重建。基线视图 ~80ms/次
+   (空闲 ~40% CPU);大 Code 块渲染 >200ms 时消息队列常态积压 → 事件
+   饿死(命令提交丢失、CPU 满转)。修复:心跳放宽到 2s(快照新鲜度对
+   工具足够;空闲 CPU 降至 ~7%)。
+3. **Code 渲染成本**:逐行逐 span 建 text widget(660 行 ≈ 3000 节点/
+   重建)过于昂贵。修复:apply 结果时由 Rust 把 Code 全文写入
+   `block.streamed_text`(复用 Block 已有 str 字段的 renderer↔.at VM-only
+   契约),block_item.at 用**单个 font-mono text** 渲染整块 —— Rust 侧
+   highlight_code 一次扫描,重建成本 O(1) 节点。
+
+验证(MCP):`show types.at` ×3 连续 Success,span 色板齐全(注释灰
+107,114,128 / 标点青 137,221,255 / 关键词紫 199,146,234 / 白
+229,231,235);echo/pwd/`show 不存在`(Failed+消息)全绿;截图确认
+彩色渲染与块宽正常;空闲 CPU ~7%。
+
+**遗留(新债,引擎侧专项)**:部分场景进程仍会**静默退出**(exit 1,
+无 panic 输出、无 WER、未达 run_dynamic_iced 出口;`show block_item.at`
+大文件后偶发)。疑点:MCP 状态同步线程与 VM 线程的数据竞争,或 VM 深层
+内存问题 —— 需 ASAN/线程sanitizer 级工具专项排查。另:快速连打
+(type 后 <80ms submit)时 oninput debounce 重放旧 input,renderer 桥判
+"input 非空"丢弃命令(不建块)—— 序列号守卫未覆盖 input 重放,记 UI 债。
+
 ### show 迁移补记(2026-08-22,后续提交)
 
 `show` 真实现属 **ash-core**(reader + Prism tomorrow 高亮)。merged 侧
 在 shell.at 做等义 shim(同 ls 的"直接产出 JSON"管线):
 
-- **提交侧分派**:`show` → `show_result_json`(读文件 → Code 变体)→
-  emit_result 直发,不 spawn。
-- **语法高亮 .at 移植**:旧版移植是白 span MVP,真实高亮在
-  auto-lang `highlight_code`(renderer.rs:1131)。本次在 shell.at 拼
-  `hl_is_ident/hl_is_num/hl_is_kw/hl_spans_json` 四函数,色板对齐
-  Prism tomorrow(注释灰 107,114,128 / 字符串绿 195,232,141 /
-  数字橙 247,140,108 / 关键词紫 199,146,234 / 标点青 137,221,255 /
-  标识符白 229,231,235)。关键词表 = highlight_code KW 列表,空格
-  整词 contains 匹配。
+- **提交侧分派**:`show` → 路径归一(.at)→ `auto.shell.emit_show`
+  native(Rust 侧读文件+高亮+payload)直发,不 spawn。
+- **语法高亮**:Rust 侧 `vm/shell_bridge.rs::highlight_rgb`(自 renderer
+  的 highlight_code 移植为中立实现,色板 Prism tomorrow:注释灰
+  107,114,128 / 字符串绿 195,232,141 / 数字橙 247,140,108 / 关键词紫
+  199,146,234 / 标点青 137,221,255 / 标识符白 229,231,235);renderer
+  font-mono 自动高亮与 emit_show payload 共用同一份。
 - **Code 内联渲染**:BlockBody 子 widget prop 字段读取为空(B 系列
-  已知),Code 分支内联进 block_item.at;回退条件加 Code。
+  已知),Code 分支内联进 block_item.at;回退条件加 Code。渲染用单个
+  font-mono text(streamed_text 全文契约,见上节根因 3)。
 - **ResultBlock w-full**:Code 渲染 col 漏 `w-full` 会收敛到内容宽、
   把块挤窄、滚动条脱离面板最右 —— 补上后代码块横向占满面板。
-- 验证(MCP):`show types.at` 彩色 span 生效(state dump r:107 注释灰
-  等);截图确认注释灰/关键词紫/字符串绿、块占满面板宽;回归
-  echo/ls/`ls | where`/show 不存在文件(Failed + 消息)全绿。
 
 ### 遗留更新
 
