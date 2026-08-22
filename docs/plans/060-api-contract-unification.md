@@ -530,3 +530,29 @@ Auto 的内存设计(用户口径):无 Rust 级生命周期标注,三层兜底 �
 DROP + 池/堆条目引用计数;heap 可直接 remove_heap_object,字符串池
 需压缩重映射 —— operand_span_with_pool_indices 机器已就绪)。
 立项待定;本轮仅登记调研结论。
+
+### 第十四轮:静默退出复测未复现 + 侧栏应用层绊网(2026-08-23)
+
+**静默退出债复测**:忠实复现原条件(大 Code 块在场:show src/front/
+block_item.at Success 渲染 + 截图渲染路径 + 状态同步线程路径连打 +
+15s 窗口 × 多轮)——**未复现**。与病因学吻合:该债登记时(第五轮)
+恰是字符串池损坏活跃期("大 Code 块 payload 巨串 → 池溢出 → 静默
+退出"),第七轮根治后症状应随之消失。按"偶发"债严谨口径:**记未
+复现/缓解待观察**,sanitizer 专项仅在再发时启动。
+
+**调试方法论教训(本日)**:
+- PowerShell `$args` 是自动变量,作函数参数名时绑定失效 → arguments
+  恒空 → MCP 调用"成功"但全部无参(历次"命令执行验证"实未验证到
+  输出块,本轮方暴露);
+- `autoui_keyboard Enter` 不路由 textarea 键处理,提交应用
+  `autoui_action(action=submit)`;
+- type 之后 vtree 重建会换 textarea id,提交前须重解析
+  (test_command_exec._submit_command 已沉淀,新测试直接复用)。
+
+**侧栏应用层绊网**:tests/test_sidebar_integrity.py 四项(SB-01..04)
+——81 条目/首条 `.`/字母序/churn 前后序列不变/描述配对;conftest 同
+步适配 ash-runner 启动(M3 后旧入口退役,既有套件 11 过 4 跳无损)。
+引擎层已有 tests_string_pool 锁,此为应用层第二道网。
+
+auto-shell 537498e。剩余在册:run_smart/jobs mock(无需求)、input
+重放 UI 债(待 419 完工后)、a2r use shell TODO(417 域)。
