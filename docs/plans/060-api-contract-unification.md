@@ -443,3 +443,21 @@ push.accum 9 字节流对齐)。遗留:add_string 线性去重 O(n²)(链接器
 
 E2E:ash-runner 重编重启,新字节码格式全链路 81 钮/真 cwd/无 fallback。
 auto-lang 8482021e / merge 2193834a。
+
+### 第十轮:方法链标量派发修复 + 复合值返回债务销案(2026-08-22)
+
+**修复:列表方法链 `l.len().str()` 静默 None** —— CALL_SPEC 把正数 i32
+接收者一律按堆对象 id 解析(heap 无 3 号对象 → `<unknown:3>.str` →
+派发失败静默推 None;ash-gui 侧栏计数曾因此串成垃圾串)。字符串接收者
+因 codegen 类型推断走 TYPE_TO_STR 幸免,列表/未知类型方法结果退化
+CALL_SPEC 即踩坑。修复:CALL_SPEC 入口加标量接收者(i32<4M/f32/f64/
+bool)的 str/to_string 兜底,格式化与 TYPE_TO_STR 同款;TYPE_TO_STR
+四处直推入池顺带改 add_string 去重。
+
+**销案:M3 登记的 ".at fn return 无法携带复合值(退化 0)"** —— 当前
+master 四种形态全不复现:脚本 fn 返回 struct / 模块 pub fn(use 接收)/
+原生调用桩体 return(json.to_value)/ 带注解 var 接收。tests_known_limits
+七项回归锁死(方法链三形态 + 复合值四形态),此项移出债务清单。
+
+E2E:ash-runner 重编重启,81 钮/真 cwd/无 fallback。auto-lang f6147362。
+剩余引擎债:add_string O(n²) 去重、abt-asm CALL_SPEC 形态、tag 关键字。
