@@ -162,10 +162,15 @@ store ShellStore {
             // Plan 054 M1:vue/HTTP 模式 store 自己 push Running block(无 renderer
             // 桥) + 发命令到后端。VM 模式 renderer 拦截 RunCommand 构造 block,
             // 此处的 push/run_command 由 VM mock 或 renderer 处理(兼容)。
-            var id int = .next_id
+            // VM 缺陷规避(实测 2026-08-21):handler 内 `var id int = .next_id`
+            // 的局部 int 会被装箱成 VmRef —— 写 __pending_command_id 后 renderer
+            // 读成 0、所有 block id 撞 0 导致结果只回写首个;run_command(id, cmd)
+            // 的 HTTP 改写也因 VmRef 参数 json.from_value 失败而静默不发 POST。
+            // 改字段→字段直读(.next_id 的读写本身正常),不经过局部 int。
+            .__pending_command_id = .next_id
             .next_id = .next_id + 1
             var block Block = Block{}
-            block.id = id
+            block.id = .__pending_command_id
             block.command = cmd
             block.cwd = .cwd
             var st BlockStatus = BlockStatus{}
@@ -179,10 +184,9 @@ store ShellStore {
             block.collapsed = false
             .blocks.push(block)
             // VM renderer 桥接信号(保留 — renderer 读此提交执行器线程)
-            .__pending_command_id = id
             .__pending_command_str = cmd
             // HTTP 模式:POST /api/run_command,结果经 /api/stream SSE 推回
-            run_command(id, cmd)
+            run_command(.__pending_command_id, cmd)
         }
 
         // ── 流式输出块(逐行追加到 Running block) ──

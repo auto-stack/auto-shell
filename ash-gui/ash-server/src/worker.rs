@@ -280,7 +280,6 @@ pub fn spawn() -> ShellHandle {
                                 }
                             } else {
                                 cancel_for_thread.store(false, Ordering::SeqCst);
-                                let cwd = shell.pwd().to_string_lossy().to_string();
                                 let started = Instant::now();
                                 // Plan 057: run_command 现在带上流式路径的子进程
                                 // 真实退出码(None = execute() 路径,沿用
@@ -316,6 +315,13 @@ pub fn spawn() -> ShellHandle {
                                             (CommandStatus::Failed(msg), RenderedOutput::Empty, -1)
                                         }
                                     };
+                                // Plan 057: 命令执行后重新读取 cwd。此前在 run_command
+                                // 前捕获 shell.pwd() 是旧值——cd 等内置命令改变工作
+                                // 目录后,标题栏 cwd 仍停在旧路径(VM 端 store cwd 从
+                                // command_result.cwd 回写)。execute() 路径同步改
+                                // shell 内部 pwd,故执行完重读即为新值;外部流式命令
+                                // 不改 cwd,重读无副作用。
+                                let cwd = shell.pwd().to_string_lossy().to_string();
                                 let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
                                     CommandResult {
                                         block_id,

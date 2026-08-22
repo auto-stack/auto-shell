@@ -16,8 +16,15 @@ use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEven
 // ── command_list:返回完整工具表(79 命令,对齐 ash-core registry)──
 pub fn command_list() BootSnapshot {
     var snap BootSnapshot = BootSnapshot{}
-    snap.cwd = "."
-    snap.home = "."
+    // 2026-08-21:cwd/home 返回真实值,取代旧 "."(旧值让标题栏恒显示 ~ ——
+    // cwd "." 恒被 home "." 前缀匹配)。cwd 取 VM 进程目录;home 取
+    // USERPROFILE/HOME(与 renderer 侧 cd ~ 拦截、标题 ~ 缩写同一语义)。
+    snap.cwd = process.current_dir()
+    var home str = Env.get("USERPROFILE")
+    if home == "" {
+        home = Env.get("HOME")
+    }
+    snap.home = home
     var cmds List<ToolEntry> = List<ToolEntry>.new([])
     var cmd1 ToolEntry = ToolEntry{}
     cmd1.name = "."
