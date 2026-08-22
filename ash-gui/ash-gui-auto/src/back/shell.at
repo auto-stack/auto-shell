@@ -11,7 +11,7 @@
 // - run_command:no-op(命令执行由 renderer 的 merged_exec_loop 拦截,见 M3)。
 // - prompt_context/complete/read_history:静态 mock,待 M4 接 ash-core。
 
-use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry, JobInfo
+use types: BootSnapshot, CompletionItem, GitStatusInfo, PromptContext, ShellEvent, ToolEntry, SmartCommandEntry, JobInfo, RenderedOutput
 
 // ── command_list:返回完整工具表(79 命令,对齐 ash-core registry)──
 pub fn command_list() BootSnapshot {
@@ -428,8 +428,90 @@ pub fn prompt_context() PromptContext {
 }
 
 // ── run_command:mock,只记历史(无真 shell) ──
-pub fn run_command(block_id int, cmd str) {
-    // no-op in mock; real streaming arrives in M1
+// Plan 060(M1-T2):run_command 实装 —— merged 模式的执行提交走
+// auto.shell.exec_submit native(请求进 vm::shell_bridge 队列,renderer 的
+// merged_exec_loop 取走执行并流式回流)。取代旧的 renderer
+// __pending_command 桥(绕过 api.at 契约,已退役)。cwd 由 store 传入
+// (HTTP 模式 ash-server 自管会话 cwd,不经此路径)。
+pub fn run_command(block_id int, cmd str, cwd str) {
+    // Plan 060(M2 提交侧分派):builtin(ls/dir/cd/pwd)的 ash 语义在 .at
+    // 算好,完整 command_result payload 经 auto.shell.emit_result 直发
+    // (执行线程不 spawn);外部命令经 auto.shell.exec_submit 走进程执行。
+    // 传输层零语义;HTTP 模式不加载本模块,不受影响。
+    var fw str = first_word(cmd)
+    if fw == "ls" || fw == "dir" {
+        shell.emit_result(block_id, ls_result_json(block_id, cmd, cwd))
+        return
+    }
+    if fw == "cd" {
+        var new_cwd str = resolve_cd(cmd, cwd, home_dir())
+        if new_cwd == "" {
+            var words List<str> = split_words(cmd)
+            var bad str = " "
+            if words.len() >= 2 {
+                bad = words[1]
+            }
+            shell.emit_result(block_id, fail_result_json(block_id, cwd, "cd: no such directory: " + bad))
+        } else {
+            var okout RenderedOutput = RenderedOutput{}
+            okout.Text = ""
+            shell.emit_result(block_id, result_json_with(block_id, new_cwd, "Success", okout, 0, 0))
+        }
+        return
+    }
+    if fw == "pwd" {
+        var pout RenderedOutput = RenderedOutput{}
+        pout.Text = cwd
+        shell.emit_result(block_id, result_json_with(block_id, cwd, "Success", pout, 0, 0))
+        return
+    }
+    shell.exec_submit(block_id, cmd, cwd)
+}
+
+// ── Plan 060(M2):command_result payload 拼装(执行线程/事件泵同形状)──
+
+// JSON 字符串转义(引号/反斜杠)。
+fn json_escape(s str) str {
+    var out str = ""
+    var i int = 0
+    var n int = s.len()
+    for i < n {
+        var c str = s.substr(i, 1)
+        if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\\" {
+            out = out + "\\\\"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// 家目录(USERPROFILE → HOME 回落;与 renderer 侧 cd ~ 拦截同源)。
+pub fn home_dir() str {
+    var home str = Env.get("USERPROFILE")
+    if home == "" {
+        home = Env.get("HOME")
+    }
+    return home
+}
+
+// 完整 command_result payload(Success/Cancelled 形态)。
+// Table 变体仅由 ls_result_json 内联产出(结构体管线在 VM 有静默中止坑,
+// 见其注释);本函数只服务 Text 型 builtin(cd/pwd)。
+fn result_json_with(block_id int, cwd str, status str, out RenderedOutput, dur int, exit int) str {
+    var oj str = "null"
+    if out.Text != None {
+        oj = "{\"Text\":\"" + json_escape(out.Text) + "\"}"
+    }
+    return "{\"block_id\":" + block_id.str() + ",\"cwd\":\"" + json_escape(cwd) + "\",\"status\":\"" + status + "\",\"output\":" + oj + ",\"duration_ms\":" + dur.str() + ",\"exit_code\":" + exit.str() + "}"
+}
+
+// Failed 形态({"Failed": msg},对齐 pump 的 externally-tagged 解析)。
+fn fail_result_json(block_id int, cwd str, msg str) str {
+    return "{\"block_id\":" + block_id.str() + ",\"cwd\":\"" + json_escape(cwd) + "\",\"status\":{\"Failed\":\"" + json_escape(msg) + "\"},\"output\":null,\"duration_ms\":0,\"exit_code\":1}"
 }
 
 // ── run_smart:同步返回 mock 文本 ──
@@ -454,6 +536,316 @@ pub fn jobs() []JobInfo {
 
 pub fn kill_job(job_id int) {
     // mock no-op
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Plan 060(M2-T4):merged 模式命令语义(.at 侧,幂等修复的支撑函数)
+//
+// store 的 .RunResult 在检测结果"缺语义"时调用这里(merged 传输只回原始
+// 进程结果;HTTP 模式 ash-core 已产语义成品,不会触达)。全部用 VM 安全
+// 惯例:substr 逐字符扫描(不用 split —— str.split 返回类型在 VM 的既知
+// 坑,见 PromptBar PickCompletion 注释)、方法调用不链式、局部变量全标注。
+// ════════════════════════════════════════════════════════════════════
+
+// 空白分词(空格/制表符)。
+pub fn split_words(s str) List<str> {
+    var words List<str> = List<str>.new([])
+    var cur str = ""
+    var i int = 0
+    var n int = s.len()
+    for i < n {
+        var c str = s.substr(i, 1)
+        if c == " " || c == "\t" {
+            if cur != "" {
+                words.push(cur)
+                cur = ""
+            }
+        } else {
+            cur = cur + c
+        }
+        i = i + 1
+    }
+    if cur != "" {
+        words.push(cur)
+    }
+    return words
+}
+
+// 取首词(命令名)。
+pub fn first_word(cmd str) str {
+    var words List<str> = split_words(cmd)
+    if words.len() > 0 {
+        return words[0]
+    }
+    return ""
+}
+
+// cd 目标解析:支持 ~/ ~/x 相对/绝对(盘符)路径与 ".."/"." 段归一。
+// 成功返回新 cwd,失败(不存在/非目录)返回 ""。
+// 注:.at 无 canonicalize native(白名单未登记 fs.canonical),段栈手工
+// 归一;File.is_dir 校验兜底。
+pub fn resolve_cd(cmd str, cwd str, home str) str {
+    var words List<str> = split_words(cmd)
+    if words.len() < 2 {
+        return home
+    }
+    var arg str = words[1]
+    var base str = cwd
+    var rest str = arg
+    if arg.len() > 0 && arg.substr(0, 1) == "~" {
+        base = home
+        if arg.len() > 1 {
+            rest = arg.substr(1, arg.len() - 1)
+        } else {
+            rest = ""
+        }
+    }
+    if rest == "" {
+        return base
+    }
+    // 绝对路径(windows 盘符 X: 前缀)直接作段源。
+    var combined str = base + "/" + rest
+    if rest.len() >= 2 && rest.substr(1, 1) == ":" {
+        combined = rest
+    }
+    // 段栈归一:跳过空段与 ".";".." 弹栈(栈只剩盘符段时忽略)。
+    var segs List<str> = List<str>.new([])
+    var i int = 0
+    var n int = combined.len()
+    var cur str = ""
+    for i < n {
+        var c str = combined.substr(i, 1)
+        if c == "/" || c == "\\" {
+            if cur == "." {
+                cur = ""
+            } else if cur == ".." {
+                if segs.len() > 1 {
+                    segs.pop()
+                }
+                cur = ""
+            } else if cur != "" {
+                segs.push(cur)
+                cur = ""
+            }
+        } else {
+            cur = cur + c
+        }
+        i = i + 1
+    }
+    if cur == "." {
+        cur = ""
+    } else if cur == ".." {
+        if segs.len() > 1 {
+            segs.pop()
+        }
+        cur = ""
+    } else if cur != "" {
+        segs.push(cur)
+    }
+    // 重组(段间 "/" 连接)。
+    var out str = ""
+    var j int = 0
+    for j < segs.len() {
+        if j > 0 {
+            out = out + "/"
+        }
+        out = out + segs[j]
+        j = j + 1
+    }
+    if out == "" || !File.is_dir(out) {
+        return ""
+    }
+    return out
+}
+
+// 数值比较(str → int,解析失败按 0;接收者方法调用规避 str. 前缀撞
+// 类型关键字的解析问题)。op 为 ">" / ">=" / "<" / "<="。
+fn num_cmp(a str, b str, op str) bool {
+    var av int = a.to_uint()
+    var bv int = b.to_uint()
+    if op == ">" {
+        return av > bv
+    }
+    if op == ">=" {
+        return av >= bv
+    }
+    if op == "<" {
+        return av < bv
+    }
+    return av <= bv
+}
+
+// ls/dir 的 merged 语义:fs 直读,直接产出 command_result payload JSON
+// (Plan 060 M2:模块函数返回 struct 会在 VM 静默中止 —— 实测二分定位;
+// 全程 str/List 标量管线 + 已验证的原语形状)。支持管道
+// `| where <col> <op> <value>`(== != contains 不区分大小写;> >= < <= 数值)。
+// 目录不存在 → Failed 形态。HTTP 模式不调用(ash-core 已产 Table)。
+fn ls_result_json(block_id int, cmd str, cwd str) str {
+    // 1. 拆管道段(手工扫描 '|')。
+    var ls_part str = cmd
+    var pipe_part str = ""
+    var bar int = -1
+    var si int = 0
+    var sn int = cmd.len()
+    for si < sn {
+        if cmd.substr(si, 1) == "|" {
+            bar = si
+            break
+        }
+        si = si + 1
+    }
+    if bar >= 0 {
+        ls_part = cmd.substr(0, bar)
+        pipe_part = cmd.substr(bar + 1, cmd.len() - bar - 1)
+    }
+    // 2. ls 段:flags + 目标路径。
+    var show_hidden bool = false
+    var target str = ""
+    var words List<str> = split_words(ls_part)
+    var wi int = 1
+    for wi < words.len() {
+        var w str = words[wi]
+        if w.len() > 0 && w.substr(0, 1) == "-" {
+            if w.contains("a") || w.contains("A") {
+                show_hidden = true
+            }
+        } else {
+            if target == "" {
+                target = w
+            }
+        }
+        wi = wi + 1
+    }
+    var base str = cwd
+    if target != "" {
+        if target.len() >= 2 && target.substr(1, 1) == ":" {
+            base = target
+        } else {
+            base = cwd + "/" + target
+        }
+    }
+    // 3. where 过滤解析。
+    var f_col str = ""
+    var f_op str = ""
+    var f_val str = ""
+    var pwords List<str> = split_words(pipe_part)
+    if pwords.len() >= 4 {
+        var head str = pwords[0]
+        if head == "where" || head == "filter" {
+            f_col = pwords[1]
+            f_op = pwords[2]
+            var vi int = 3
+            for vi < pwords.len() {
+                if f_val != "" {
+                    f_val = f_val + " "
+                }
+                f_val = f_val + pwords[vi]
+                vi = vi + 1
+            }
+            if f_val.len() >= 2 && f_val.substr(0, 1) == "\"" && f_val.substr(f_val.len() - 1, 1) == "\"" {
+                f_val = f_val.substr(1, f_val.len() - 2)
+            }
+        }
+    }
+    // 4. 目录守卫。
+    if base == "" || !File.is_dir(base) {
+        return "{\"block_id\":" + block_id.str() + ",\"cwd\":\"" + json_escape(cwd) + "\",\"status\":{\"Failed\":\"ls: no such directory\"},\"output\":null,\"duration_ms\":0,\"exit_code\":1}"
+    }
+    // 5. read_dir 引号对扫描 + 过滤 + JSON 行拼装。
+    var raw str = fs.read_dir(base)
+    var js str = "{\"block_id\":" + block_id.str() + ",\"cwd\":\"" + json_escape(cwd) + "\",\"status\":\"Success\",\"output\":{\"Table\":{\"columns\":[\"name\",\"type\",\"size\"],\"rows\":["
+    var ri int = 0
+    var rn int = raw.len()
+    var in_q bool = false
+    var name str = ""
+    var first_row bool = true
+    for ri < rn {
+        var pc str = raw.substr(ri, 1)
+        if pc == "\"" {
+            if in_q {
+                if name != "." && name != ".." {
+                    var hidden bool = name.len() > 0 && name.substr(0, 1) == "."
+                    if show_hidden || !hidden {
+                        var full str = base + "/" + name
+                        var is_dir bool = File.is_dir(full)
+                        var size_str str = ""
+                        if !is_dir {
+                            var sz int = fs.size(full)
+                            size_str = sz.str()
+                        }
+                        var keep bool = true
+                        if f_col != "" {
+                            var cell str = name
+                            var col_l str = f_col.lower()
+                            if col_l == "type" {
+                                if is_dir {
+                                    cell = "dir"
+                                } else {
+                                    cell = "file"
+                                }
+                            } else if col_l == "size" {
+                                cell = size_str
+                            }
+                            var op_l str = f_op
+                            var val_l str = f_val.lower()
+                            var cell_l str = cell.lower()
+                            if op_l == "==" {
+                                keep = cell_l == val_l
+                            } else if op_l == "!=" {
+                                keep = cell_l != val_l
+                            } else if op_l == "contains" {
+                                keep = cell_l.contains(val_l)
+                            } else if op_l == ">" {
+                                keep = num_cmp(cell, f_val, ">")
+                            } else if op_l == ">=" {
+                                keep = num_cmp(cell, f_val, ">=")
+                            } else if op_l == "<" {
+                                keep = num_cmp(cell, f_val, "<")
+                            } else if op_l == "<=" {
+                                keep = num_cmp(cell, f_val, "<=")
+                            }
+                        }
+                        if keep {
+                            if !first_row {
+                                js = js + ","
+                            }
+                            first_row = false
+                            var kind str = "Plain"
+                            if is_dir {
+                                kind = "Dir"
+                            } else if name.ends_with(".rs") {
+                                kind = "CodeAtRs"
+                            } else if name.ends_with(".exe") || name.ends_with(".bat") || name.ends_with(".cmd") || name.ends_with(".ps1") {
+                                kind = "Executable"
+                            } else if name.ends_with(".toml") || name.ends_with(".json") || name.ends_with(".yaml") || name.ends_with(".yml") || name.ends_with(".lock") {
+                                kind = "Config"
+                            }
+                            var tkind str = "Plain"
+                            if is_dir {
+                                tkind = "Dir"
+                            }
+                            var ttype str = "file"
+                            if is_dir {
+                                ttype = "dir"
+                            }
+                            js = js + "[{\"Tagged\":{\"text\":\"" + json_escape(name) + "\",\"kind\":\"" + kind + "\"}},{\"Tagged\":{\"text\":\"" + ttype + "\",\"kind\":\"" + tkind + "\"}},{\"Text\":\"" + size_str + "\"}]"
+                        }
+                    }
+                }
+                name = ""
+                in_q = false
+            } else {
+                in_q = true
+            }
+        } else {
+            if in_q {
+                name = name + pc
+            }
+        }
+        ri = ri + 1
+    }
+    js = js + "],\"atom_type\":\"FileList\"}},\"duration_ms\":0,\"exit_code\":0}"
+    return js
 }
 
 // ── subscribe:SSE 流(Plan 051 M1:解注,见 api.at 注释)

@@ -186,7 +186,9 @@ store ShellStore {
             // VM renderer 桥接信号(保留 — renderer 读此提交执行器线程)
             .__pending_command_str = cmd
             // HTTP 模式:POST /api/run_command,结果经 /api/stream SSE 推回
-            run_command(.__pending_command_id, cmd)
+            // Plan 060:附带会话 cwd —— merged 模式 shell.at 经 native 提交执行;
+            // HTTP 模式 body 携带但 ash-server 忽略(自管会话)。
+            run_command(.__pending_command_id, cmd, .cwd)
         }
 
         // ── 流式输出块(逐行追加到 Running block) ──

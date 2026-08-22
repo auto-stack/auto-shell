@@ -213,8 +213,10 @@ pub fn prompt_context() PromptContext {
 /// 执行命令(非阻塞——结果通过 /api/stream 的 SSE 推送)
 /// POST /api/run_command
 #[api(method = "POST", path = "/api/run_command")]
-pub fn run_command(block_id int, cmd str) {
-    shell.run_command(block_id, cmd)
+// Plan 060:增加 cwd 参数 —— merged 模式 shell.at 需要会话 cwd 执行;HTTP
+// 模式 ash-server 自管会话 cwd,body 里的该字段被忽略(serde 默认行为)。
+pub fn run_command(block_id int, cmd str, cwd str) {
+    shell.run_command(block_id, cmd, cwd)
 }
 
 /// 执行 SmartCommand(同步返回结果)
