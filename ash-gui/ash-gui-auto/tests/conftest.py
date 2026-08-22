@@ -27,8 +27,15 @@ from desktop_mcp import McpClient, wait_for_server  # noqa: E402
 
 # ── binary resolution ───────────────────────────────────────────────────
 
-# Default: auto-lang/target/debug/auto.exe (relative to this repo).
-# Override with AUTO_BIN env var.
+# Plan 060 M3: the default launch is ash-runner (merged direct-connection architecture; the old `auto run -r vm`
+# entry has been retired — shell.at is a host-bridge empty stub, merged is unavailable without the runner).
+_DEFAULT_RUNNER = (
+    Path(__file__).resolve().parents[2]
+    / "ash-server"
+    / "target"
+    / "debug"
+    / "ash-runner.exe"
+)
 _DEFAULT_AUTO = (
     Path(__file__).resolve().parents[4]
     / "auto-lang"
@@ -36,7 +43,12 @@ _DEFAULT_AUTO = (
     / "debug"
     / "auto.exe"
 )
-AUTO_BIN = os.environ.get("AUTO_BIN", str(_DEFAULT_AUTO))
+# Override with AUTO_BIN env var (can point back to the old auto.exe; the run -r vm arguments will be appended).
+AUTO_BIN = os.environ.get(
+    "AUTO_BIN", str(_DEFAULT_RUNNER if _DEFAULT_RUNNER.exists() else _DEFAULT_AUTO)
+)
+# ash-runner takes no CLI arguments; the old auto.exe needs `run -r vm`.
+_IS_RUNNER = "ash-runner" in AUTO_BIN
 
 # ash-gui-auto project root (pac.at lives here).
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -55,12 +67,12 @@ def vm_process():
     if not os.path.exists(AUTO_BIN):
         pytest.skip(f"auto binary not found at {AUTO_BIN}; set AUTO_BIN env var")
 
-    print(f"\n[startup] launching: {AUTO_BIN} run -r vm (cwd={PROJECT_ROOT})")
+    print("[startup] launching:", AUTO_BIN, "cwd=" + str(PROJECT_ROOT))
     # Plan 057: set ASH_TEST_VM_LOG=<path> to capture VM stdout/stderr for
     # crash triage (default: DEVNULL, as before).
     vm_log = os.environ.get("ASH_TEST_VM_LOG")
     proc = subprocess.Popen(
-        [AUTO_BIN, "run", "-r", "vm"],
+        [AUTO_BIN] + ([] if _IS_RUNNER else ["run", "-r", "vm"]),
         cwd=str(PROJECT_ROOT),
         stdout=open(vm_log, "w") if vm_log else subprocess.DEVNULL,
         stderr=subprocess.STDOUT if vm_log else subprocess.DEVNULL,
