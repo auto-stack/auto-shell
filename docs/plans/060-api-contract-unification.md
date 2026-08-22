@@ -422,3 +422,24 @@ call_value → 2930/2931(空闲段),**直调特例删除**,恢复正常表派发
 
 E2E:ash-runner 重编重启,host 桥走正常表派发 —— 81 侧栏钮/真 cwd/
 pwd 执行/像素零重叠全通过。auto-lang 1a31218e。
+
+### 第九轮:编译期字符串池 u32 化(2026-08-22,引擎债收口)
+
+与运行期池(第七轮)同病的编译侧:codegen `add_string` 返回 u16,应用
+常量超 65535 即编译期索引回绕、静默串写。所有承载池索引的字节码操作数
+统一 2B→4B:LOAD_STR / CREATE_NODE / PUSH_ACCUM / ACCUM_PAIR / CREATE_OBJ /
+GET_FIELD / CALL_SPEC / CLOSURE(名) / CAPTURE_* / LOAD|STORE_GLOBAL /
+CREATE_FUTURE(捕获名)。涉及 codegen(含 59 处 `as u16` 强转清零、
+PUSH_ACCUM 哨兵 0xFFFFu16→u32 —— 此哨兵曾致 config 测试组炸出)、engine
+16 处解码、disasm、abt-disasm/asm(镜像对齐)。
+
+教训:批量脚本中途断言失败会静默丢弃全部未落盘编辑(第一阶段 7 个操作
+码的引擎改动丢失,靠 config 测试反查出)。宽度错位在池 <65536 时因
+u32 高位补零被当成 0x00 操作码而"侥幸"通过 —— 更隐蔽。
+
+防回归:tests_string_pool 增编译侧宽度锁(LOAD_STR 5 字节编码、
+push.accum 9 字节流对齐)。遗留:add_string 线性去重 O(n²)(链接器
+并池语义理清后换 HashMap)、abt-asm CALL_SPEC 形态债。
+
+E2E:ash-runner 重编重启,新字节码格式全链路 81 钮/真 cwd/无 fallback。
+auto-lang 8482021e / merge 2193834a。
