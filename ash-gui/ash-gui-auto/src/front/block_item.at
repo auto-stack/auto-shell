@@ -8,7 +8,7 @@ use block_body: BlockBody
 use types: Block
 
 widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
-    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand(int), CopyOutput(int), DeleteBlock(int), ToggleCollapse(int), Sort(int, int), Filter(str) }
+    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand(int), CopyOutput(int), ExportCsv(int), DeleteBlock(int), ToggleCollapse(int), Sort(int, int), Filter(str) }
 
     // Plan 055 D5: collapsed 移到 block 数据(per-block,避免 VM 单根 state
     // 合并致全折叠);model 不再持有折叠状态。
@@ -52,7 +52,7 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 style: "items-center gap-2 mb-1.5 group cursor-pointer"
                 button {
                     onclick: .ToggleCollapse(.block.id)
-                    style: "h-6 w-6 bg-transparent rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                    style: "h-6 w-6 bg-transparent rounded flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white/10"
                     if .block.collapsed {
                         icon {
                             name: "chevron-right"
@@ -74,6 +74,10 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 }
 
                 // 右侧操作区:停止(运行中)+ 悬停显示的复制/重跑 + 状态图标
+                // 2026-08-21:hover 背景统一 bg-white/10 —— VM 的 muted 色映射为
+                // Surface(与卡片同色),hover:bg-muted/* 叠加后不可见;white/10
+                // 两端都可见,且与表头 bg-white/10 的设计语言一致。VM 端由 iced
+                // button 的 Status::Hovered 驱动(auto-lang hover: 类支持)。
                 row {
                     style: "ml-auto items-center gap-1.5 shrink-0"
                     if .block.status.kind == "Running" {
@@ -90,36 +94,35 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                         style: "items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
                         button {
                             onclick: .CopyCommand(.block.id)
-                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-muted/60"
+                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-white/10"
                             icon {
                                 name: "copy"
                                 style: "w-4 h-4 text-muted-foreground hover:text-foreground"
                             }
                         }
-                        // Plan 054 M3: 复制输出文本(output.Text 变体)。
-                        button {
-                            onclick: .CopyOutput(.block.id)
-                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-muted/60"
-                            icon {
-                                name: "table"
-                                style: "w-4 h-4 text-muted-foreground hover:text-foreground"
-                            }
-                        }
+                        // 2026-08-22:复制结果(CopyOutput)从标题栏挪到结果底栏 ——
+                        // 命令操作(复制命令/重跑/删除)与结果操作按位置分层,
+                        // 图标作用于它附着的东西(见结果底栏注释)。
                         button {
                             onclick: .Rerun(.block.command)
-                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-muted/60"
+                            style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-white/10"
                             icon {
                                 name: "rotate-ccw"
                                 style: "w-4 h-4 text-muted-foreground hover:text-foreground"
                             }
                         }
                         // Plan 054 M3: 删除此 block(回调父级 store.DeleteBlock)。
+                        // 2026-08-21:图标常显红色(危险操作用颜色区分)。VM 端
+                        // hover:text-* 经画时着色生效(auto-lang 方案 A:svg::Style
+                        // color + 图标自身 Hovered 状态);trash 的 base 与 hover
+                        // 只差 alpha(/80 → 全值),而 VM tint 忽略 alpha,悬停时
+                        // 图标色不变、按钮背景仍亮起 —— 视觉上够用。
                         button {
                             onclick: .DeleteBlock(.block.id)
                             style: "h-6 w-6 bg-transparent rounded flex items-center justify-center hover:bg-red-500/10"
                             icon {
                                 name: "trash-2"
-                                style: "w-4 h-4 text-muted-foreground hover:text-red-400"
+                                style: "w-4 h-4 text-red-400/80 hover:text-red-400"
                             }
                         }
                     }
@@ -282,11 +285,56 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 // block 内部滚动。用原生 overflow-y-auto + .ash-scroll(AutoUI 风格滚动条),
                 // 不用 reka-ui scroll(其 bar 与 max-h 不兼容)。
                 // Plan 059:Table 变体已在上文 RenderTable 直渲染,此处只走非 Table。
+                // VM 缺陷规避(2026-08-21):BlockBody 是子 widget,其 output prop 的
+                // .Text 字段在 iced VM 读成空(子 widget prop 字段访问 bug),导致
+                // pwd/echo 等 Text 输出整体空白。Text 在此内联渲染(同上方 Table
+                // 内联—— .block.output 字段访问在父 widget 正常),非 Text/Table
+                // 变体才落 BlockBody。Vue 端同理受益(BlockBody 对 Text 不再重复渲染)。
+                if .block.output.Text != None {
+                    text .block.output.Text {
+                        style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words"
+                    }
+                }
                 if .block.output != None {
-                    if .block.output.Table == None {
+                    if .block.output.Table == None && .block.output.Text == None {
                         col {
                             style: "max-h-[400px] overflow-y-auto ash-scroll"
                             BlockBody(output: .block.output, on_open_path: .OpenPath)
+                        }
+                    }
+                }
+
+                // 2026-08-22:结果底栏 —— 结果级操作贴着结果本身。复制结果与
+                // 复制命令按**位置**区分而非图标区分:标题栏 = 命令操作(复制
+                // 命令/重跑/删除),底栏 = 结果操作。接近性优于同形图标微调 ——
+                // 16px 灰阶下 copy/clipboard 系图标几乎不可辨,而位置语义零学习
+                // 成本(GitHub/VS Code 代码块 copy 按钮同款模式)。仅 Text/Table
+                // 有可复制内容时显示(CopyOutput/ExportCsv 目前只支持这两变体;
+                // Code/Error 落 BlockBody,接入后放开)。图标小一档
+                // (w-3.5 vs 标题栏 w-4)标记次级操作。
+                // 按钮语义:copy = 复制结果(Text 原文 / Table TSV,TSV 直贴
+                // Excel/Sheets 自动分列);table = 导出 CSV(引号转义,Excel 可
+                // 直接打开)—— 2026-08-22 续:table 图标从标题栏下沉至此。
+                if .block.output.Text != None || .block.output.Table != None {
+                    row {
+                        style: "justify-end items-center gap-1 mt-1"
+                        button {
+                            onclick: .CopyOutput(.block.id)
+                            style: "h-5 w-5 bg-transparent rounded flex items-center justify-center hover:bg-white/10"
+                            icon {
+                                name: "copy"
+                                style: "w-3.5 h-3.5 text-muted-foreground/80 hover:text-foreground"
+                            }
+                        }
+                        if .block.output.Table != None {
+                            button {
+                                onclick: .ExportCsv(.block.id)
+                                style: "h-5 w-5 bg-transparent rounded flex items-center justify-center hover:bg-white/10"
+                                icon {
+                                    name: "table"
+                                    style: "w-3.5 h-3.5 text-muted-foreground/80 hover:text-foreground"
+                                }
+                            }
                         }
                     }
                 }
@@ -308,26 +356,27 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 navigator.clipboard.writeText(.block.command)
             }
         }
-        // Plan 054 M3: 复制输出文本到剪贴板(目前支持 Text 变体;Table/Code
-        // 等结构化输出暂只复制其 Text 字段或空)。
-        // Plan 059:复制/导出。Text 变体复制原文;Table 变体导出 CSV
-        // (转义:引号加倍,含分隔符/换行加引号;Excel 可直接打开)。
+        // Plan 054 M3 → 2026-08-22 结果底栏版:CopyOutput = 复制结果 ——
+        // Text 变体复制原文;Table 变体复制 TSV(制表符分隔,直贴 Excel/
+        // Sheets 自动分列,不做引号转义)。CSV 导出拆到 ExportCsv(table
+        // 图标,语义:文件交换格式,引号转义 + Excel 可直接打开)。
         // Vue 端经 navigator.clipboard;VM 端 navigator 不存在(handler
-        // 在 guard 静默中止),由 renderer 桥 arboard 写系统剪贴板。
+        // 在 guard 静默中止),由 renderer 桥 arboard 写系统剪贴板
+        // (桥侧同语义:CopyOutput→Text/TSV,ExportCsv→CSV)。
         .CopyOutput(id int) -> {
             if navigator.clipboard != null {
                 if .block.output.Text != None {
                     navigator.clipboard.writeText(.block.output.Text)
                 } else {
                     if .block.output.Table != None {
-                        var csv str = ""
+                        var tsv str = ""
                         var t = .block.output.Table
                         var hi int = 0
                         for hi < t.columns.len() {
                             if hi > 0 {
-                                csv = csv + ","
+                                tsv = tsv + "\t"
                             }
-                            csv = csv + t.columns[hi]
+                            tsv = tsv + t.columns[hi]
                             hi = hi + 1
                         }
                         var ri int = 0
@@ -343,20 +392,61 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                                 } else {
                                     txt = cell.Tagged.text
                                 }
-                                if txt.contains(",") || txt.contains("\"") || txt.contains("\n") {
-                                    txt = "\"" + txt.replace("\"", "\"\"") + "\""
-                                }
                                 if ci > 0 {
-                                    line = line + ","
+                                    line = line + "\t"
                                 }
                                 line = line + txt
                                 ci = ci + 1
                             }
-                            csv = csv + "\n" + line
+                            tsv = tsv + "\n" + line
                             ri = ri + 1
                         }
-                        navigator.clipboard.writeText(csv)
+                        navigator.clipboard.writeText(tsv)
                     }
+                }
+            }
+        }
+        // 2026-08-22:CSV 导出(table 图标,Plan 059 的 CSV 逻辑从 CopyOutput
+        // 迁来:引号加倍,含分隔符/换行加引号)。
+        .ExportCsv(id int) -> {
+            if navigator.clipboard != null {
+                if .block.output.Table != None {
+                    var csv str = ""
+                    var t = .block.output.Table
+                    var hi int = 0
+                    for hi < t.columns.len() {
+                        if hi > 0 {
+                            csv = csv + ","
+                        }
+                        csv = csv + t.columns[hi]
+                        hi = hi + 1
+                    }
+                    var ri int = 0
+                    for ri < t.rows.len() {
+                        var row = t.rows[ri]
+                        var line str = ""
+                        var ci int = 0
+                        for ci < row.len() {
+                            var cell = row[ci]
+                            var txt str = ""
+                            if cell.Text != None {
+                                txt = cell.Text
+                            } else {
+                                txt = cell.Tagged.text
+                            }
+                            if txt.contains(",") || txt.contains("\"") || txt.contains("\n") {
+                                txt = "\"" + txt.replace("\"", "\"\"") + "\""
+                            }
+                            if ci > 0 {
+                                line = line + ","
+                            }
+                            line = line + txt
+                            ci = ci + 1
+                        }
+                        csv = csv + "\n" + line
+                        ri = ri + 1
+                    }
+                    navigator.clipboard.writeText(csv)
                 }
             }
         }
@@ -365,3 +455,5 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
         .OpenPath(path) -> { }
     }
 }
+
+
