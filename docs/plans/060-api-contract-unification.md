@@ -110,7 +110,7 @@ Merged:前端 → api.at fn → shell.at(进程内)
 
 ## 5. 遗留(预期)
 
-- M3:a2r/runner 绑定 ash-core(merged 模式完整真语义)。
+- ~~M3:a2r/runner 绑定 ash-core~~:已落地(ash-runner + host 桥,见 §M3 落地完成)。
 - `run_smart`/`jobs`/`kill_job` 仍为 mock(无真实需求,契约保留)。
 - `show` 命令:迁移后为外部命令直通(`cmd /C show` 会失败)——按 ash 语义
   在 T4 一并 .at 化(读文件 + Code 变体)或显式记录降级。
@@ -278,7 +278,39 @@ front 里唯一有色的 tmp 目录(sky)在清理时被删,观感上"全无色"�
 shim 自创的 `.bat`/`.cmd`/`.ps1`/`.lock` 规则一并删除(HTTP 模式本就
 不认)。验证:ls(front)→ CodeAtRs×9(.at 文件名绿)。
 
-### M3 实施进行中(2026-08-22,用户架构指令)
+### M3 落地完成(2026-08-22 终)
+
+用户指令:merged 不再单独做逻辑;所有后端逻辑在 ash-server(API)内调
+ash-core(命令逻辑),参照 015-notes 双模式。**已全链路跑通并合并。**
+
+**架构(最终形态)**:
+- merged 模式入口 = `ash-runner`(ash-server 新 bin):进程内起 worker
+  (auto_shell::Shell → ash-core)+ 10 端点宿主桥 + ShellEvent→
+  inject_shell_event 事件泵 + auto-man run_vm_ui 起 GUI。
+- 调用形态:auto-lang codegen host 分派 —— 裸 `#[api]` 调用改写为
+  `auto.host.call(裸名, args_json)` + `json.to_value`(与 HTTP 改写
+  同构,值在调用点落栈,规避 .at fn return 无法携带复合值的 VM 边界)。
+- shell.at = 空桩(仅保签名供编译解析);`auto run -r vm` 旧入口退役
+  (无 runner 时 merged 不可用),run_vm.ps1/sh 改走 ash-runner。
+
+**调试过程中定位并修复的深层问题**:
+1. api_funcs 元数据收集被 `api_over_http` 门住 → 扩为 `|| has_host_calls()`。
+2. **宿主桥 native 表派发错位**:native_interface 表内 2870 绑的不是
+   shim_host_call(has_shim=true 但调用无效果;直调 shim 一切正常)。
+   修复:引擎 CALL_NAT 对 2870/2871 直调(仿 112/2300 特例先例);
+   根因(native 注册秩序)记引擎债,待统一后回收特例。
+3. 构建环境:sysinfo 0.33(其 windows≤0.57)曾令 gpu-allocator 与
+   wgpu-hal 的 windows 0.58 类型错位 → 升 0.35;32MB 栈链接参数补齐;
+   跨仓 path 经 .worktrees/{auto-lang,auto-ai} junction(worktree 构建)。
+4. 方法链 `x.len().str()` 为已知 VM 限制(拆两步写法即可),非本线问题。
+
+**验证(MCP + 像素)**:boot 真数据(79 命令侧栏、真 cwd=进程目录、
+真历史 438 条);pwd/ls/echo 流式;`ls | where type == file` 真管道
+(Tagged: CodeAtRs+Plain);cd 会话跟随;`show src/front/types.at`
+Success + Code 变体;渲染:代码高亮(紫/灰/青像素)、400px 块内滚动、
+ls 文件名 emerald。show 巨串/高亮管线随 shell.at 逻辑退役自然消失。
+
+
 
 用户指令:merged 不再单独做逻辑;所有后端逻辑在 ash-server(API)内调
 ash-core(命令逻辑)。参照 015-notes 双模式实现。

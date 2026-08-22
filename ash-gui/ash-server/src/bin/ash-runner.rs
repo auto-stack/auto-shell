@@ -49,8 +49,7 @@ fn main() {
                     Ok(ev) => {
                         if let Ok(json) = serde_json::to_string(&ev) {
                             let tag = json_get_event_tag(&json);
-                            let ok = auto_lang::ui::iced::renderer::inject_shell_event(&tag, &json);
-                            eprintln!("[DBG-PUMP] event={} inject_ok={} len={}", tag, ok, json.len());
+                            let _ok = auto_lang::ui::iced::renderer::inject_shell_event(&tag, &json);
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -90,7 +89,6 @@ fn register_bridges(shell: &ShellHandle, rt: std::sync::Arc<tokio::runtime::Runt
     let s = shell.clone();
     let rt1 = rt.clone();
     register_host_call("command_list", Arc::new(move |_args: &str| {
-        eprintln!("[DBG-BRIDGE] command_list called");
         let snap = rt1.block_on(s.command_list()).map_err(|e| e)?;
         serde_json::to_string(&snap).map_err(|e| e.to_string())
     }));
@@ -124,7 +122,6 @@ fn register_bridges(shell: &ShellHandle, rt: std::sync::Arc<tokio::runtime::Runt
     let s = shell.clone();
     let rt4 = rt.clone();
     register_host_call("run_command", Arc::new(move |args: &str| {
-        eprintln!("[DBG-BRIDGE] run_command args={}", args);
         let v: serde_json::Value = serde_json::from_str(args)
             .map_err(|e| format!("run_command: bad args: {}", e))?;
         let block_id = v.get("block_id").and_then(|x| x.as_u64()).unwrap_or(0) as usize;

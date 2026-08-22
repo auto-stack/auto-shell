@@ -7,7 +7,9 @@ widget App {
     on {
         .Init -> {
             var h = history()
-            .count = "len=" + h.len().str()
+            var n int = h.len()
+            .count = "len="
+            .count = .count + n.str()
         }
     }
     view {
