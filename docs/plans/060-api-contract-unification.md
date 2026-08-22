@@ -484,3 +484,26 @@ enum 别名;`tag: value`/`tag.field`/`tag(...)` 按标识符。连带修参数�
 E2E:ash-runner 重编重启,81 钮/真 cwd/无 fallback。
 auto-lang 96add3f3 / merge db8a4600。剩余引擎债:无在册高危项;
 观察项:巨串池 GC(池只增不减,量级可控)。
+
+### 第十二轮勘误:字符串池无 GC 定性修正 — 是实现缺口,非设计取舍
+
+第十一轮将"池只增不减"定性为设计取舍、未登记为债。经核对代码,定性
+错误,应为**设计意图存在、实现未落地**:
+
+- `DROP = 0x05` 操作码注释明言 "RAII cleanup: pops and frees owned
+  value" —— 原设计就是要 RAII;
+- 引擎实现为 `pop_i32()` 空壳(弹栈槽,不释放任何池/堆资源);
+- codegen 全文零发射 `OpCode::DROP`(作用域尾无任何清理指令);
+- `remove_heap_object` 唯一调用方是 hashmap/hashset/stringbuilder 的
+  显式 `.drop()` native —— 运行时实际走手动清理路线。
+
+背景:Auto 语言层模仿 Rust(var/let/mut/move/take + 编译期 borrow
+check),但双后端分叉 —— a2r 转译路径由真 Rust 的 Drop 兑现生命周期;
+VM 解释器路径所有权为编译期词汇、运行时擦除(裸索引自由拷贝,无唯一
+属主),确定性析构无从挂起。
+
+**登记为引擎债:VM 运行时确定性析构未实现**。可行路线(按侵入度):
+①codegen 作用域尾发射 DROP + 池条目/堆对象引用计数(真 RAII,插桩
+成本高);②标记-清除 GC(复用 operand_span_with_pool_indices 重映射
+机器做压缩);③维持现状 + 长会话定期重建 VM 实例(ash-gui 重启即释
+放)。现状影响:仅内存单调增长,正确性风险已被 u32 化 + 去重消除。
