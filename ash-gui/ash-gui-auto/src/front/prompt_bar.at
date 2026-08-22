@@ -8,6 +8,10 @@ use shell_store: ShellStore
 use history_search: HistorySearch
 use back.api: complete
 use types: CompletionItem, HighlightSpan
+// 2026-08-22:cd 目录补全裸调 fs.read_dir / json.parse / File.is_dir ——
+// widget 模块的 stdlib 调用走编译期 native 白名单(限定名自动规范化为
+// auto.*),不需要 use(use auto.* 在 VM 渲染路径下是 no-op)。fs.read_dir
+// 的白名单登记见 native_catalog.rs 2026-08-22 注释。
 
 widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {
     msg Msg { Run(str), Injected, Clear, Exit,
@@ -83,7 +87,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     for s in .suggestions {
                         button .s.display {
                             onclick: .PickCompletion(.s)
-                            style: "text-xs font-mono-ash px-2 py-0.5 rounded bg-muted/60 hover:bg-muted text-sky-300"
+                            style: "text-xs font-mono-ash px-2 py-0.5 rounded bg-muted/60 hover:bg-white/15 text-sky-300"
                             // PB-comp-07:显示 description(灰色小字)。
                             if .s.description != "" {
                                 text .s.description {
@@ -178,76 +182,76 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             var idc str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
             var builtins str = " cd ls l echo cat grep mkdir rm cp mv touch find glob stat du file tee ln head tail sort uniq wc cut tr split rev column diff select get where update insert each build run http_get http_post http_put http_delete pwd help clear exit quit q set export unset use alias unalias source history ps sys which version up u b less more color completions config bind abbr hook def pushd popd dirs env date sleep "
             for i < n {
-                var c str = line.substr(i, i + 1)
-                if c == "#" && (i == 0 || line.substr(i - 1, i) == " " || line.substr(i - 1, i) == "\t") {
-                    spans.push(HighlightSpan{text: line.substr(i, n), kind: "Comment"})
+                var c str = line.substr(i, 1)
+                if c == "#" && (i == 0 || line.substr(i - 1, 1) == " " || line.substr(i - 1, 1) == "\t") {
+                    spans.push(HighlightSpan{text: line.substr(i, n - i), kind: "Comment"})
                     break
                 } else if c == " " || c == "\t" {
                     var j int = i
                     for j < n {
-                        var cj str = line.substr(j, j + 1)
+                        var cj str = line.substr(j, 1)
                         if cj == " " || cj == "\t" { j = j + 1 } else { break }
                     }
-                    spans.push(HighlightSpan{text: line.substr(i, j), kind: "Whitespace"})
+                    spans.push(HighlightSpan{text: line.substr(i, j - i), kind: "Whitespace"})
                     i = j
                     first_word = false
                 } else if c == "\"" || c == "'" {
                     var quote str = c
                     var j int = i + 1
                     for j < n {
-                        if line.substr(j, j + 1) != quote {
-                            if quote == "\"" && line.substr(j, j + 1) == "\\" && j + 1 < n { j = j + 1 }
+                        if line.substr(j, 1) != quote {
+                            if quote == "\"" && line.substr(j, 1) == "\\" && j + 1 < n { j = j + 1 }
                             j = j + 1
                         } else { break }
                     }
                     var e int = j + 1
                     if e > n { e = n }
-                    spans.push(HighlightSpan{text: line.substr(i, e), kind: "String"})
+                    spans.push(HighlightSpan{text: line.substr(i, e - i), kind: "String"})
                     i = e
                     first_word = false
                 } else if c == "$" {
                     var j int = i + 1
-                    if j < n && line.substr(j, j + 1) == "{" {
+                    if j < n && line.substr(j, 1) == "{" {
                         for j < n {
-                            if line.substr(j, j + 1) != "}" { j = j + 1 } else { break }
+                            if line.substr(j, 1) != "}" { j = j + 1 } else { break }
                         }
                         var e int = j + 1
                         if e > n { e = n }
-                        spans.push(HighlightSpan{text: line.substr(i, e), kind: "Variable"})
+                        spans.push(HighlightSpan{text: line.substr(i, e - i), kind: "Variable"})
                         i = e
                     } else {
                         for j < n {
-                            if idc.contains(line.substr(j, j + 1)) { j = j + 1 } else { break }
+                            if idc.contains(line.substr(j, 1)) { j = j + 1 } else { break }
                         }
-                        spans.push(HighlightSpan{text: line.substr(i, j), kind: "Variable"})
+                        spans.push(HighlightSpan{text: line.substr(i, j - i), kind: "Variable"})
                         i = j
                     }
                     first_word = false
-                } else if c == "|" || c == ";" || (c == "&" && i + 1 < n && line.substr(i + 1, i + 2) == "&") {
+                } else if c == "|" || c == ";" || (c == "&" && i + 1 < n && line.substr(i + 1, 1) == "&") {
                     var ol int = 1
-                    if c == "|" && i + 1 < n && line.substr(i + 1, i + 2) == "|" { ol = 2 }
+                    if c == "|" && i + 1 < n && line.substr(i + 1, 1) == "|" { ol = 2 }
                     if c == "&" { ol = 2 }
                     var e int = i + ol
                     if e > n { e = n }
-                    spans.push(HighlightSpan{text: line.substr(i, e), kind: "Operator"})
+                    spans.push(HighlightSpan{text: line.substr(i, e - i), kind: "Operator"})
                     i = e
                     first_word = true
                 } else if c == ">" || c == "<" {
                     var rl int = 1
-                    if c == ">" && i + 1 < n && line.substr(i + 1, i + 2) == ">" { rl = 2 }
+                    if c == ">" && i + 1 < n && line.substr(i + 1, 1) == ">" { rl = 2 }
                     var e int = i + rl
                     if e > n { e = n }
-                    spans.push(HighlightSpan{text: line.substr(i, e), kind: "Redirect"})
+                    spans.push(HighlightSpan{text: line.substr(i, e - i), kind: "Redirect"})
                     i = e
                     first_word = false
                 } else {
                     var j int = i
                     for j < n {
-                        var cj str = line.substr(j, j + 1)
+                        var cj str = line.substr(j, 1)
                         if cj == " " || cj == "\t" || cj == "\"" || cj == "'" || cj == "$" || cj == "|" || cj == "&" || cj == ";" || cj == "#" || cj == ">" || cj == "<" { break }
                         j = j + 1
                     }
-                    var word str = line.substr(i, j)
+                    var word str = line.substr(i, j - i)
                     if first_word {
                         if builtins.contains(" " + word + " ") {
                             spans.push(HighlightSpan{text: word, kind: "Command"})
@@ -386,9 +390,98 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .DoContinuation()
             }
             if v.trim() != "" {
-                // Plan 057 续(行内编辑):光标感知补全 —— 渲染层在编辑器消息
-                // 派发前写入 .cursor_pos(字节偏移);旧值兜底行尾。
-                .suggestions = complete(.input, .cursor_pos)
+                // 2026-08-22:cd 目录补全 —— complete() mock 只按首词做命令名前缀
+                // 匹配(输入 cd → 返回 "cd" 自身,Tab 后变成 "cd cd"),且补全契约
+                // 不含会话 cwd。首词为 cd 时本地完成:候选 = 会话 cwd(cwd prop,
+                // 经 renderer 的 cd 拦截回写刷新)下的子目录,支持 "cd"、
+                // "cd <partial>"、"cd a/b<c>" 嵌套段;replacement 带尾 /(连续
+                // Tab 可继续下钻,PickCompletion 替换最后一个 token,前缀段保留)。
+                // VM 规避:全程 substr 扫描(不用 split),方法调用拆两步变量
+                // (PickCompletion 注释的 CALL_SPEC 链式调用问题)。
+                var fw_end int = -1
+                var ci int = 0
+                for ci < .input.len() {
+                    if .input.substr(ci, 1) == " " {
+                        fw_end = ci
+                        break
+                    }
+                    ci = ci + 1
+                }
+                if fw_end < 0 {
+                    fw_end = .input.len()
+                }
+                if .input.substr(0, fw_end) == "cd" {
+                    var cut int = 0
+                    var si int = 0
+                    for si < .input.len() {
+                        if .input.substr(si, 1) == " " {
+                            cut = si + 1
+                        }
+                        si = si + 1
+                    }
+                    var last_tok str = .input.substr(cut, .input.len())
+                    if last_tok == "cd" {
+                        last_tok = ""
+                    }
+                    var slash_at int = -1
+                    var si2 int = 0
+                    for si2 < last_tok.len() {
+                        if last_tok.substr(si2, 1) == "/" {
+                            slash_at = si2
+                        }
+                        si2 = si2 + 1
+                    }
+                    var dir_rel str = ""
+                    var frag str = last_tok
+                    if slash_at >= 0 {
+                        dir_rel = last_tok.substr(0, slash_at + 1)
+                        frag = last_tok.substr(slash_at + 1, last_tok.len())
+                    }
+                    var base_dir str = .cwd
+                    if dir_rel != "" {
+                        base_dir = .cwd + "/" + dir_rel
+                    }
+                    var dirs List<CompletionItem> = List<CompletionItem>.new([])
+                    // 2026-08-22 续:read_dir 返回 ["a","b"] 形式的 JSON 数组串,
+                    // 此处用 substr 手工扫引号对提取名字 —— JsonValue 的方法链
+                    // (.len/.get_at/.as_string)在 VM handler 内会静默中止丢弃整
+                    // 个 handler 的状态写入(实测二分定位;json.parse 本身无恙),
+                    // 手工扫描零依赖。Windows 文件名不含引号,无转义之虞。
+                    var raw str = fs.read_dir(base_dir)
+                    var rn int = raw.len()
+                    var pi int = 0
+                    var in_q bool = false
+                    var cur str = ""
+                    for pi < rn {
+                        var pc str = raw.substr(pi, 1)
+                        if pc == "\"" {
+                            if in_q {
+                                if cur != "." && cur != ".." && cur.starts_with(frag) {
+                                    if File.is_dir(base_dir + "/" + cur) {
+                                        var di CompletionItem = CompletionItem{}
+                                        di.display = cur
+                                        di.description = "dir"
+                                        di.replacement = dir_rel + cur + "/"
+                                        di.kind = "dir"
+                                        dirs.push(di)
+                                    }
+                                }
+                                cur = ""
+                                in_q = false
+                            } else {
+                                in_q = true
+                            }
+                        } else {
+                            if in_q {
+                                cur = cur + pc
+                            }
+                        }
+                        pi = pi + 1
+                    }
+                    .suggestions = dirs
+                } else {
+                    .suggestions = complete(.input, .cursor_pos)
+                }
             } else {
                 .suggestions = []
             }
@@ -413,10 +506,10 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     var in_double bool = false
                     var i int = 0
                     for i < trimmed.len() {
-                        // 用 substr(i, i+1) 取单字符:char_at 在 VM 返回 int
+                        // 用 substr(i, 1) 取单字符:char_at 在 VM 返回 int(str-parity 后 .substr 为 (start,LEN) 语义,2026-08-22 全文件迁移)
                         // codepoint(Plan 368 W5),vue 返回 string,两 target
                         // 语义不一致;substr 两边都返回 string(M4 续行检测)。
-                        var c str = trimmed.substr(i, i + 1)
+                        var c str = trimmed.substr(i, 1)
                         // 双引号内的转义字符跳过(\\" 不结束字符串)
                         if in_double && c == "\\" && i + 1 < trimmed.len() {
                             i = i + 1
@@ -473,7 +566,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     var in_double bool = false
                     var i int = 0
                     for i < trimmed.len() {
-                        var c str = trimmed.substr(i, i + 1)
+                        var c str = trimmed.substr(i, 1)
                         if in_double && c == "\\" && i + 1 < trimmed.len() {
                             i = i + 1
                         } else if c == "'" {
@@ -518,7 +611,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             var cut int = 0
             var i int = 0
             for i < .input.len() {
-                if .input.substr(i, i + 1) == " " {
+                if .input.substr(i, 1) == " " {
                     cut = i + 1
                 }
                 i = i + 1
@@ -591,6 +684,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             // 一个 token,故循环候选依次替换即可(show Ca → Cargo.lock →
             // Cargo.toml → Cargo.lock …)。用户一旦输入字符,OnInput 会清
             // tab_active 结束循环。
+            // 2026-08-22:cd 目录补全的形态归一 —— bare "cd"(无空格)时补上
+            // 尾随空格,使 PickCompletion 的"替换最后一个 token"落在新加的空
+            // token 上(replacement 保持纯路径形态,循环补全稳定),避免整个
+            // 输入被替换成 "tmp/"(cd 丢失)。
+            if .input == "cd" {
+                .input = .input + " "
+            }
             if .tab_active && .tab_candidates.len() > 0 {
                 .tab_index = .tab_index + 1
                 if .tab_index >= .tab_candidates.len() {
@@ -684,12 +784,12 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 var take str = ""
                 var i int = 0
                 // 跳过前导空白
-                for i < .ghost_text.len() && .ghost_text.substr(i, i + 1) == " " {
+                for i < .ghost_text.len() && .ghost_text.substr(i, 1) == " " {
                     i = i + 1
                 }
                 // 取到下一个空白
-                for i < .ghost_text.len() && .ghost_text.substr(i, i + 1) != " " {
-                    take = take + .ghost_text.substr(i, i + 1)
+                for i < .ghost_text.len() && .ghost_text.substr(i, 1) != " " {
+                    take = take + .ghost_text.substr(i, 1)
                     i = i + 1
                 }
                 if take != "" {
