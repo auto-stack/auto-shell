@@ -291,8 +291,20 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 // 内联—— .block.output 字段访问在父 widget 正常),非 Text/Table
                 // 变体才落 BlockBody。Vue 端同理受益(BlockBody 对 Text 不再重复渲染)。
                 if .block.output.Text != None {
-                    text .block.output.Text {
-                        style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words"
+                    // 2026-08-22(结果边界):cat/echo 等文本结果上下各一条横向
+                    // 边界(h-px bg-border 行,iced 无 border-t/b 单边类),下方
+                    // 右侧贴结果底栏 —— 上下边界 + 底栏构成"文本框"的视觉围合,
+                    // 不再裸贴在命令下面。长文本限高 400 块内滚动(对齐 show)。
+                    col {
+                        style: "w-full"
+                        row { style: "h-px w-full bg-border" }
+                        col {
+                            style: "max-h-[400px] overflow-y-auto ash-scroll"
+                            text .block.output.Text {
+                                style: "text-sm font-mono-ash text-foreground/90 whitespace-pre-wrap break-words py-1"
+                            }
+                        }
+                        row { style: "h-px w-full bg-border" }
                     }
                 }
                 if .block.output != None {
@@ -307,13 +319,19 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                         // 侧 highlight_code 一次扫描着色。此前逐行逐 span 拼接:
                         // 660 行代码一次 view 重建 >200ms,MCP 心跳(默认开启,
                         // 200ms 一拍)令消息积压 → 事件饿死(提交无响应、CPU 满转)。
+                        // 上下边界同 Text 变体(h-px bg-border 行)。
                         col {
-                            // w-full:横向占满面板(滚动条贴最右)——漏了它
-                            // 会收敛到内容宽,把 ResultBlock 挤窄。
-                            style: "max-h-[400px] overflow-y-auto ash-scroll w-full text-sm font-mono-ash"
-                            text .block.streamed_text {
-                                style: "font-mono text-sm whitespace-pre"
+                            style: "w-full"
+                            row { style: "h-px w-full bg-border" }
+                            col {
+                                // w-full:横向占满面板(滚动条贴最右)——漏了它
+                                // 会收敛到内容宽,把 ResultBlock 挤窄。
+                                style: "max-h-[400px] overflow-y-auto ash-scroll w-full text-sm font-mono-ash"
+                                text .block.streamed_text {
+                                    style: "font-mono text-sm whitespace-pre"
+                                }
                             }
+                            row { style: "h-px w-full bg-border" }
                         }
                     }
                     if .block.output.Table == None && .block.output.Text == None && .block.output.Code == None {
@@ -328,14 +346,12 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 // 复制命令按**位置**区分而非图标区分:标题栏 = 命令操作(复制
                 // 命令/重跑/删除),底栏 = 结果操作。接近性优于同形图标微调 ——
                 // 16px 灰阶下 copy/clipboard 系图标几乎不可辨,而位置语义零学习
-                // 成本(GitHub/VS Code 代码块 copy 按钮同款模式)。仅 Text/Table
-                // 有可复制内容时显示(CopyOutput/ExportCsv 目前只支持这两变体;
-                // Code/Error 落 BlockBody,接入后放开)。图标小一档
-                // (w-3.5 vs 标题栏 w-4)标记次级操作。
-                // 按钮语义:copy = 复制结果(Text 原文 / Table TSV,TSV 直贴
-                // Excel/Sheets 自动分列);table = 导出 CSV(引号转义,Excel 可
-                // 直接打开)—— 2026-08-22 续:table 图标从标题栏下沉至此。
-                if .block.output.Text != None || .block.output.Table != None {
+                // 成本(GitHub/VS Code 代码块 copy 按钮同款模式)。Text/Table/
+                // Code 三变体均有可复制内容(CopyOutput:Text 原文 / Table TSV /
+                // Code 全文 streamed_text;ExportCsv 仅 Table)。图标小一档
+                // (w-3.5 vs 标题栏 w-4)标记次级操作。位置在结果下边界右下
+                // (2026-08-22 续:Text/Code 加了上下边界行,底栏贴下边界)。
+                if .block.output.Text != None || .block.output.Table != None || .block.output.Code != None {
                     row {
                         style: "justify-end items-center gap-1 mt-1"
                         button {
@@ -377,18 +393,22 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
             }
         }
         // Plan 054 M3 → 2026-08-22 结果底栏版:CopyOutput = 复制结果 ——
-        // Text 变体复制原文;Table 变体复制 TSV(制表符分隔,直贴 Excel/
+        // Text 变体复制原文;Code 变体复制全文(streamed_text,renderer apply
+        // 时写入的 VM-only 契约);Table 变体复制 TSV(制表符分隔,直贴 Excel/
         // Sheets 自动分列,不做引号转义)。CSV 导出拆到 ExportCsv(table
         // 图标,语义:文件交换格式,引号转义 + Excel 可直接打开)。
         // Vue 端经 navigator.clipboard;VM 端 navigator 不存在(handler
         // 在 guard 静默中止),由 renderer 桥 arboard 写系统剪贴板
-        // (桥侧同语义:CopyOutput→Text/TSV,ExportCsv→CSV)。
+        // (桥侧同语义:CopyOutput→Text/Code 全文/TSV,ExportCsv→CSV)。
         .CopyOutput(id int) -> {
             if navigator.clipboard != null {
                 if .block.output.Text != None {
                     navigator.clipboard.writeText(.block.output.Text)
                 } else {
-                    if .block.output.Table != None {
+                    if .block.output.Code != None {
+                        navigator.clipboard.writeText(.block.streamed_text)
+                    } else {
+                        if .block.output.Table != None {
                         var tsv str = ""
                         var t = .block.output.Table
                         var hi int = 0
@@ -422,6 +442,7 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                             ri = ri + 1
                         }
                         navigator.clipboard.writeText(tsv)
+                        }
                     }
                 }
             }

@@ -242,6 +242,29 @@ shell.at run_command(block_id, cmd, cwd):
   失败(Undefined symbol: shell.emit_show)。已重编 master target。
   **auto-lang 合并后必须重编 master target,否则 run_vm.ps1 起旧件。**
 
+### 第五轮:结果底栏补全 + 文本边界 + 静默退出定位(2026-08-22)
+
+用户提两需求:show 块缺结果底栏(复制 icon);cat/show 结果裸贴无边界,
+建议上下横线围合 + 下边界右下放结果工具栏。
+
+- **底栏缺 Code 变体(根因)**:底栏条件与 CopyOutput(.at handler +
+  renderer arboard 桥)都只支持 Text/Table。补齐:条件加 Code;
+  CopyOutput 两侧都加 Code → 复制全文(streamed_text;桥侧空串防御)。
+  验证:点击 show 块 copy icon → 剪贴板 3593 字符 types.at 全文。
+- **结果边界**:Text 与 Code 变体上下各一条 `h-px w-full bg-border` 行
+  (iced 无 border-t/border-b 单边类,1px 背景行是可靠等价物),底栏
+  row(justify-end)贴下边界 —— 构成"文本框"视觉围合。Text 变体同时
+  补上 max-h-[400px] + 块内滚动(此前只有 Code 有,cat 长输出会无限撑高)。
+- **静默退出定位(重大进展)**:大 Code 块在场时进程 ~10s 内消失
+  (无 panic/无 WER/未达 run_dynamic_iced 出口)。对照实验:
+  AUTOUI_MCP_DISABLE=1 关心跳 → 30s+ 存活;开启 → ~10s 死。
+  **触发器 = MCP 心跳引发的周期性 view 重建循环**(默认开启,:9247,
+  普通运行也在跳)。修复:心跳改活联门控 —— SharedState 记最近 HTTP
+  请求(note_activity),仅 30s 内有 MCP 请求(agent 活跃)才心跳;
+  普通运行(无 agent)不再周期性重建。验证:show 后空闲 75s 存活
+  (修复前同场景 ~10s 死)。重建路径的底层内存根因未除(agent 活跃期
+  间长会话仍可能触发),仍为引擎债;AUTOUI_MCP_DISABLE=1 留作诊断开关。
+
 ### show 迁移补记(2026-08-22,后续提交)
 
 `show` 真实现属 **ash-core**(reader + Prism tomorrow 高亮)。merged 侧
