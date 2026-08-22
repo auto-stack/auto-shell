@@ -217,6 +217,31 @@ shell.at run_command(block_id, cmd, cwd):
 (type 后 <80ms submit)时 oninput debounce 重放旧 input,renderer 桥判
 "input 非空"丢弃命令(不建块)—— 序列号守卫未覆盖 input 重放,记 UI 债。
 
+### 第四轮:块内滚动丢失 + 高亮存疑(2026-08-22)
+
+用户复报:代码结果无高亮、块内无滚动(应 max-h + 内部滚动条)。
+
+- **滚动(真 bug,已修)**:代码块 scrollable 实测 3058px(内容高),
+  max-h-[400px] 完全未生效。根因在 iced 适配:`from_style` 对
+  `w-full + overflow-y` 推断 `height=Fill`(竖向填充意图),而 max-h
+  封顶逻辑(Plan 057 续)写在 `is.height=None` 分支 → 永不触发。
+  修复(auto-lang `build_scrollable`):cap 判定与 height 推断解耦 ——
+  有 cap 一律 Shrink + `Container::max_height` 封顶(CSS max-height
+  语义:短内容收缩、长内容滚动),显式 h-*/Fill 让位。验证:代码块
+  scrollable @rect 高 3058→400,内滚出现。
+- **高亮(未回滚,一直生效)**:VM 的代码着色走"font-mono Text →
+  renderer 自动高亮"(Plan 409 §10 续 20,即"之前的实现"),像素级
+  验证代码区确有 prism-tomorrow 色板(关键词紫 #cc99cd / 注释灰 #999 /
+  运算符青 #67cdcc / 标点 #ccc;字符串绿/数字橙在 types.at 可视区无
+  此类 token 故为 0)。与 Plan 411 增强分词器已合流为单一来源
+  (`vm::shell_bridge::highlight_rgb`),show payload 与 font-mono 渲染
+  同色板 —— vue/vm 一致由共享 .at + 共享高亮函数保证。
+- **用户侧二进制陈旧(操作注意)**:`run_vm.ps1` 用
+  `auto-lang\target\debug\auto.exe`(master target)。本轮排查发现该
+  二进制停在 14:15(早于当日全部修复),旧二进制 + 新 .at 直接启动
+  失败(Undefined symbol: shell.emit_show)。已重编 master target。
+  **auto-lang 合并后必须重编 master target,否则 run_vm.ps1 起旧件。**
+
 ### show 迁移补记(2026-08-22,后续提交)
 
 `show` 真实现属 **ash-core**(reader + Prism tomorrow 高亮)。merged 侧
@@ -225,10 +250,10 @@ shell.at run_command(block_id, cmd, cwd):
 - **提交侧分派**:`show` → 路径归一(.at)→ `auto.shell.emit_show`
   native(Rust 侧读文件+高亮+payload)直发,不 spawn。
 - **语法高亮**:Rust 侧 `vm/shell_bridge.rs::highlight_rgb`(自 renderer
-  的 highlight_code 移植为中立实现,色板 Prism tomorrow:注释灰
-  107,114,128 / 字符串绿 195,232,141 / 数字橙 247,140,108 / 关键词紫
-  199,146,234 / 标点青 137,221,255 / 标识符白 229,231,235);renderer
-  font-mono 自动高亮与 emit_show payload 共用同一份。
+  的 highlight_code 移植为中立实现,后与 Plan 411 增强版分词器合流;
+  色板 prism-tomorrow:关键词紫 #cc99cd / 字符串绿 #7ec699 / 注释灰
+  #999 / 数字·布尔·函数橙 #f08d49 / 运算符青 #67cdcc / 标点 #ccc);
+  renderer font-mono 自动高亮与 emit_show payload 共用同一份。
 - **Code 内联渲染**:BlockBody 子 widget prop 字段读取为空(B 系列
   已知),Code 分支内联进 block_item.at;回退条件加 Code。渲染用单个
   font-mono text(streamed_text 全文契约,见上节根因 3)。
