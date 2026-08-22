@@ -43,3 +43,12 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.auto/
+
+# 调试产物(会话性日志/截图/临时工程,不入库)
+/dbg-*.log
+/vm-out.log
+/ic2-*.log
+/ic2-hdr.png
+/hdr-*.png
+/snap-bounds.txt
+/icontest2/
