@@ -236,6 +236,129 @@ def test_cs01_ctrl_s_forward_history(mcp):
     assert _press_until("r", "history_open", "false"), "cleanup: panel left open"
 
 
+# ── T7: completion rich panel ──────────────────────────────────────────────
+
+def test_cp01_command_candidates_with_kind_and_description(mcp):
+    """Typing a command prefix → panel renders with the count line, kind dots
+    and descriptions (Plan 062 T7)."""
+    _ensure_prompt_active(mcp)
+    mcp.call("autoui_type", text="ec", clear_first=True)
+    ok = mcp.wait_until(lambda c: "候选" in c.snapshot(), timeout=10, interval=0.5)
+    snap = mcp.snapshot()
+    assert ok, f"completion panel count line did not appear:\n{snap[:300]}"
+    assert "●" in snap, "kind dots not rendered"
+    assert "echo" in snap, "echo candidate missing"
+
+
+def test_cp02_git_subcommand_candidates(mcp):
+    """`git ` → subcommand/flag candidates with descriptions from the shared
+    completion engine (git spec) — the CLI-parity information density."""
+    _ensure_prompt_active(mcp)
+    mcp.call("autoui_type", text="git ", clear_first=True)
+    ok = mcp.wait_until(
+        lambda c: "候选" in c.snapshot() and "commit" in c.snapshot(),
+        timeout=10, interval=0.5,
+    )
+    assert ok, (
+        f"git subcommand candidates (commit/…) with descriptions not shown:\n"
+        f"{mcp.snapshot()[:400]}"
+    )
+
+
+# ── T9: table filter (Plan 059 leftover, fixed by 062) ─────────────────────
+
+def test_tf01_table_filter_filters_rows(mcp):
+    """`ls` table → filter input row exists; typing shrinks the visible rows
+    (renderer Filter bridge — id parse aligned with Sort, query from the
+    input snapshot). Snapshot 不含 style 类,行存在性用单元格文本判定。"""
+    _submit_command(mcp, "echo warmup")
+    mcp.wait_until(_no_running, timeout=15)
+    _submit_command(mcp, "ls")
+    ok = mcp.wait_until(
+        lambda c: "pac.at" in c.snapshot(), timeout=20, interval=0.5
+    )
+    assert ok, "ls table rows did not render"
+    snap = mcp.snapshot()
+    assert "tests" in snap, "expected sibling row (tests) before filtering"
+    fid = None
+    for mm in re.finditer(r"input #([A-Za-z0-9_]+)", mcp.snapshot()):
+        info = mcp.call("autoui_inspect", element_id=mm.group(1))
+        if "Filter" in info:
+            fid = mm.group(1)
+            break
+    assert fid, "filter input (Filter handler) not found in the table"
+    mcp.call("autoui_type", element_id=fid, text="src", clear_first=True)
+    ok = mcp.wait_until(
+        lambda c: "pac.at" not in c.snapshot() and "tests" not in c.snapshot(),
+        timeout=10, interval=0.5,
+    )
+    assert ok, (
+        f"filter 'src' did not shrink rows (pac.at/tests still visible) — "
+        f"Plan 059 §4.3 / 062 T9"
+    )
+    assert "src" in mcp.snapshot(), "matching row (src) should survive the filter"
+
+
+def test_tf02_sort_indicator_renders(mcp):
+    """Click the name header → ▲ renders next to it (Plan 059 §4.4 leftover —
+    the constant-slot indicator layout, now verified)."""
+    _submit_command(mcp, "echo warmup")
+    mcp.wait_until(_no_running, timeout=15)
+    _submit_command(mcp, "ls")
+    mcp.wait_until(lambda c: "pac.at" in c.snapshot(), timeout=15)
+    sort_id = None
+    for mm in re.finditer(r"button #([A-Za-z0-9_]+)", mcp.snapshot()):
+        info = mcp.call("autoui_inspect", element_id=mm.group(1))
+        if "Sort" in info:
+            sort_id = mm.group(1)
+            break
+    assert sort_id, "sort header button not found"
+    mcp.click(sort_id)
+    ok = mcp.wait_until(lambda c: "▲" in c.snapshot(), timeout=8, interval=0.5)
+    assert ok, "▲ sort indicator did not render after header click (059 §4.4)"
+
+
+# ── T6: history expansion on the submit side ───────────────────────────────
+
+def test_he01_bang_bang_reruns_last(mcp):
+    """`!!` expands to the last history entry (shared ~/.auto-shell-history,
+    same source as the CLI REPL)."""
+    _submit_command(mcp, "echo t6-marker-alpha")
+    mcp.wait_until(_no_running, timeout=15)
+    _submit_command(mcp, "!!")
+    ok = mcp.wait_until(_no_running, timeout=15)
+    assert ok, "`!!` run never settled"
+    st = mcp.state("blocks")
+    assert "t6-marker-alpha" in st, (
+        f"`!!` did not re-run the previous command:\n{st[:600]}"
+    )
+
+
+def test_he02_prefix_search_expands(mcp):
+    """`!echot6` — no match → Failed expansion block (proves the expander is
+    wired and reports errors rather than executing the raw text)."""
+    _submit_command(mcp, "!nosuchprefix_t6")
+    ok = mcp.wait_until(
+        lambda c: 'kind: "Failed"' in c.state("blocks"), timeout=15, interval=0.5
+    )
+    st = mcp.state("blocks")
+    assert ok and "history expansion" in st, (
+        f"unresolvable `!prefix` should fail with an expansion error:\n{st[:600]}"
+    )
+
+
+def test_he03_out_of_range_fails(mcp):
+    """`!9999` (beyond history length) → Failed with the expansion error."""
+    _submit_command(mcp, "!9999")
+    ok = mcp.wait_until(
+        lambda c: 'kind: "Failed"' in c.state("blocks"), timeout=15, interval=0.5
+    )
+    st = mcp.state("blocks")
+    assert ok and "out of range" in st, (
+        f"`!9999` should report out-of-range:\n{st[:600]}"
+    )
+
+
 # ── T5: ghost fuzzy-subsequence fallback ───────────────────────────────────
 
 def test_gp01_ghost_fuzzy_subsequence(mcp):

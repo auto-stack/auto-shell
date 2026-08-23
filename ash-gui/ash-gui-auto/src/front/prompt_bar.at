@@ -16,10 +16,10 @@ use types: CompletionItem, HighlightSpan
 widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {
     msg Msg { Run(str), Injected, Clear, Exit,
               HistoryOlder, HistoryNewer,
-              PickCompletion(CompletionItem),
+              PickCompletion(CompletionItem), PickCompletionIdx(int),
               ToggleHistorySearch,
               AcceptGhost, AcceptGhostWord, OnCtrlL, DoTokenize,
-              OnEnter(str), DoContinuation }
+              OnEnter(str), DoContinuation, BuildSuggestionMeta }
 
     computed {
         // Plan 053 后续:pwd 仅在顶端标题栏(app.at)显示,输入框不再显示 cwd,
@@ -57,6 +57,13 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         var tab_index int = 0
         var tab_candidates []CompletionItem = []
         var tab_just_completed bool = false
+        // Plan 062 T7:suggestions 是 VM 原生列表(VmRef),视图侧读不到元素
+        // 字段(handler 侧可以,JobDone 遍历先例)——故 handler 在每次赋值后
+        // 预构建平行字符串数组供视图渲染;点击传索引回 handler 取真身。
+        var s_labels []str = []
+        var s_kinds []str = []
+        var s_descs []str = []
+        var s_colors []str = []
     }
 
     // 侧栏点击工具 → 填入输入框(原生 PromptBar 的 injectedCommand watch)
@@ -66,6 +73,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .input = .injected_command
                 .history_cursor = -1
                 .suggestions = []
+                .BuildSuggestionMeta()
                 .history_open = false
             }
         }
@@ -86,19 +94,34 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         col {
             style: "border-t border-border bg-background/80 px-3 py-2 gap-1"
 
-            // 补全建议行(Plan 041 M7)
-            if .suggestions.len() > 0 {
-                row {
-                    style: "flex-wrap gap-1.5"
-                    for s in .suggestions {
-                        button .s.display {
-                            onclick: .PickCompletion(.s)
-                            style: "text-xs font-mono-ash px-2 py-0.5 rounded bg-muted/60 hover:bg-white/15 text-sky-300"
-                            // PB-comp-07:显示 description(灰色小字)。
-                            if .s.description != "" {
-                                text .s.description {
-                                    style: "text-[10px] text-muted-foreground/70"
-                                }
+            // 补全候选面板(Plan 041 M7 → 062 T7 富面板:kind 色点 + 描述列
+            // + 限高内部滚动 + 计数行;对齐 CLI AshMenu 的信息密度)。
+            // 渲染数据用平行字符串数组(s_labels/s_kinds/s_descs)——suggestions
+            // 的 VmRef 元素在视图侧读不到字段;点击传索引回 handler 取真身。
+            if .s_labels.len() > 0 {
+                col {
+                    style: "max-h-40 overflow-y-auto rounded-md border border-border bg-card/60 py-1"
+                    // 计数行(len() 拼 str 与 jobs_label 同款,VM/JS 双端 coerce)
+                    text "候选 " + .s_labels.len() + " 项 · Tab 循环 · 点击选用" {
+                        style: "px-2 py-0.5 text-[10px] text-muted-foreground/60 select-none shrink-0"
+                    }
+                    for i, lb in .s_labels {
+                        row {
+                            style: "w-full flex items-center gap-2 px-2 py-0.5 hover:bg-white/10"
+                            // kind 色点:8 类映射 CLI AshMenu 配色(类串在
+                            // BuildSuggestionMeta 预计算 —— 视图条件文法不支持
+                            // 索引读,if-chain 只能留在 handler 侧)。
+                            text "●" {
+                                style: .s_colors[i]
+                            }
+                            button lb {
+                                onclick: .PickCompletionIdx(i)
+                                style: "text-xs font-mono-ash px-1 rounded text-foreground/90 hover:bg-white/15 text-left shrink-0"
+                            }
+                            // PB-comp-07:描述列(灰色小字,右对齐截断;空串
+                            // 文本节点被视觉空过滤,无需条件包裹)。
+                            text .s_descs[i] {
+                                style: "text-[10px] text-muted-foreground/70 truncate flex-1 min-w-0 text-right"
                             }
                         }
                     }
@@ -286,6 +309,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .input = ""
             .history_cursor = -1
             .suggestions = []
+            .BuildSuggestionMeta()
             .highlighted_spans = []
             .in_continuation = false
         }
@@ -305,6 +329,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .ghost_text = ""
                 .ghost_full = ""
                 .suggestions = .tab_candidates
+                .BuildSuggestionMeta()
                 // 重新 tokenize + 续行检测:Tab 补全改了 .input,必须更新 highlighted_spans
                 // —— 输入框可见文字靠 overlay 渲染 spans(textarea 文字透明),不重算
                 // spans 的话补全进去的字(如 Cargo.lock)在 overlay 里仍是旧 input,看不见。
@@ -459,11 +484,21 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         pi = pi + 1
                     }
                     .suggestions = dirs
+                    .BuildSuggestionMeta()
                 } else {
-                    .suggestions = complete(.input, .cursor_pos)
+                    // Plan 062 T7:cursor 钳制 —— MCP type 路径不写 cursor_pos
+                    // (恒 0),引擎在光标 0 处补全空前缀会返回全命令表;真键盘
+                    // 路径渲染层总会先写光标,钳 0→行尾只影响"行首 Tab"的边角。
+                    var cur int = .cursor_pos
+                    if cur <= 0 {
+                        cur = .input.len()
+                    }
+                    .suggestions = complete(.input, cur)
+                    .BuildSuggestionMeta()
                 }
             } else {
                 .suggestions = []
+                .BuildSuggestionMeta()
             }
         }
 
@@ -620,6 +655,51 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .DoTokenize()
         }
 
+        // Plan 062 T7:按索引选用候选(面板按钮 onclick 传循环下标;handler
+        // 侧数组读可行,规避视图侧 VmRef 元素字段读不到)。
+        .PickCompletionIdx(i int) -> {
+            if i < .suggestions.len() {
+                .PickCompletion(.suggestions[i])
+            }
+        }
+
+        // Plan 062 T7:suggestions(VmRef 列表)→ 平行字符串数组,供视图渲染
+        // (handler 侧元素字段读可行,JobDone 遍历 job_list 先例)。每次
+        // .suggestions 赋值后调用。
+        .BuildSuggestionMeta -> {
+            var labels []str = []
+            var kinds []str = []
+            var descs []str = []
+            var colors []str = []
+            for it in .suggestions {
+                labels.push(it.display)
+                kinds.push(it.kind)
+                descs.push(it.description)
+                // kind → 色类串(8 类映射 CLI AshMenu 配色)
+                if it.kind == "command" {
+                    colors.push("text-[8px] shrink-0 text-sky-400")
+                } else if it.kind == "external" {
+                    colors.push("text-[8px] shrink-0 text-emerald-400")
+                } else if it.kind == "directory" {
+                    colors.push("text-[8px] shrink-0 text-cyan-400")
+                } else if it.kind == "file" {
+                    colors.push("text-[8px] shrink-0 text-amber-400")
+                } else if it.kind == "variable" {
+                    colors.push("text-[8px] shrink-0 text-violet-400")
+                } else if it.kind == "flag" {
+                    colors.push("text-[8px] shrink-0 text-blue-400")
+                } else if it.kind == "subcommand" {
+                    colors.push("text-[8px] shrink-0 text-teal-400")
+                } else {
+                    colors.push("text-[8px] shrink-0 text-pink-400")
+                }
+            }
+            .s_labels = labels
+            .s_kinds = kinds
+            .s_descs = descs
+            .s_colors = colors
+        }
+
         .ToggleHistorySearch -> {
             .history_open = !.history_open
         }
@@ -699,6 +779,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .input = ""
                 .history_cursor = -1
                 .suggestions = []
+                .BuildSuggestionMeta()
                 .history_open = false
                 .in_continuation = false
                 .ghost_text = ""
@@ -812,6 +893,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .input = ""
             .history_cursor = -1
             .suggestions = []
+            .BuildSuggestionMeta()
             .history_open = false
             .in_continuation = false
             .ghost_text = ""
@@ -834,6 +916,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 .ghost_text = ""
                 .ghost_full = ""
                 .suggestions = []
+                .BuildSuggestionMeta()
                 .DoTokenize()
             }
         }
@@ -849,6 +932,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     .ghost_text = ""
                     .ghost_full = ""
                     .suggestions = []
+                    .BuildSuggestionMeta()
                     .DoTokenize()
                 } else {
                     var take str = ""
@@ -866,6 +950,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         .input = .input + take
                         .ghost_text = ""
                         .suggestions = []
+                        .BuildSuggestionMeta()
                         .DoTokenize()
                     }
                 }

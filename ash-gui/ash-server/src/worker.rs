@@ -247,6 +247,29 @@ pub fn spawn() -> ShellHandle {
                         // top of this loop (job_done events in real time).
                         CommandReq::Tick => {}
                         CommandReq::Run { block_id, cmd } => {
+                            // Plan 062 T6: 提交侧历史展开(!!/!n/!string)——与
+                            // CLI repl 同源同表(共享 ~/.auto-shell-history)。
+                            // 展开失败(如 !999 越界)→ Failed 块,不执行。
+                            // 注:块标题仍显示原始输入(展开结果对块不可见)。
+                            let cmd = match expand_history_refs(&cmd) {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    let cwd_err = shell.pwd().to_string_lossy().to_string();
+                                    let _ = event_tx_for_thread.send(
+                                        ShellEvent::CommandResult(CommandResult {
+                                            block_id,
+                                            cwd: cwd_err,
+                                            status: CommandStatus::Failed(format!(
+                                                "history expansion: {e}"
+                                            )),
+                                            output: RenderedOutput::Empty,
+                                            duration_ms: 0,
+                                            exit_code: -1,
+                                        }),
+                                    );
+                                    continue;
+                                }
+                            };
                             // Plan 055 Phase A: 后台 `cmd &` — spawn_external_background
                             // + 注册 job + 发 JobStarted(不阻塞主循环,reaper 下轮收)。
                             let trimmed = cmd.trim();
@@ -876,6 +899,25 @@ pub fn read_history() -> Vec<String> {
         None => return Vec::new(),
     };
     read_history_file(&path)
+}
+
+/// Plan 062 T6: history expansion (`!!` / `!n` / `!-n` / `!string` /
+/// `!?string`) on the submit side — same source as the CLI REPL
+/// (ash_core::parser::history::expand_history over the shared history file),
+/// so both transports expand identically.
+fn expand_history_refs(cmd: &str) -> Result<String, String> {
+    struct FileHistory {
+        strings: Vec<String>,
+    }
+    impl ash_core::parser::history::History for FileHistory {
+        fn search(&self, _query: Option<&str>) -> Vec<String> {
+            self.strings.clone()
+        }
+    }
+    let fh = FileHistory {
+        strings: read_history(),
+    };
+    ash_core::parser::history::expand_history(cmd, &fh).map_err(|e| format!("{e}"))
 }
 
 fn read_history_file(path: &std::path::Path) -> Vec<String> {

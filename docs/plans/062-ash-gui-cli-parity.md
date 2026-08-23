@@ -253,3 +253,33 @@ P1(T1-T5)→ P2(T6-T10)→ P3(T11-T15,独立)。P1 全部为 auto-shell 仓内�
 - 后台 `&` 命令的块永远停在 Running(background 分支不发 CommandResult)——
   预存 Plan 055 语义,P2 观察项。
 - 交互命令 Stop 仅杀包装进程(cmd.exe),进程树残留可能性同后台作业 kill 现状。
+
+## 8. Phase 2 实施记录(2026-08-23 深夜续,同 worktree)
+
+### 交付
+
+| 任务 | 落点 | 结果 |
+|---|---|---|
+| T6 历史展开 | worker.rs(expand_history_refs:ash_core::parser::history::expand_history + FileHistory 适配,与 CLI repl 同源同表;展开失败 → Failed 块不执行) | ✅ HE-01(`!!` 重跑上一条)/ HE-02(`!无匹配前缀` → expansion 错误块)/ HE-03(`!9999` → out of range) |
+| T7 补全富面板 | prompt_bar.at(候选行 → 限高滚动面板:计数行 + kind 色点 + 描述列;平行字符串数组 s_labels/s_kinds/s_descs/s_colors —— suggestions 的 VmRef 元素视图侧读不到字段,handler 侧预构建;点击 PickCompletionIdx(i) 传索引回 handler 取真身;cursor 钳制:cursor_pos≤0 → 行尾,MCP type 路径不写光标会补全空前缀返回全命令表) | ✅ CP-01(ec → echo + 色点 + 描述)/ CP-02(git 子命令带描述) |
+| T9 表格尾巴 | block_item.at(过滤框行:⌕ input + value 绑定 + oninput .Filter(.block.id))+ 引擎两修(见下) | ✅ TF-01(输入 src → 行收缩)/ TF-02(表头点击 → ▲ 指示渲染,059 §4.4 收口)。CSV/TSV 复制桥已有,剪贴板断言无 MCP 工具,留人工验证 |
+| T8 Ctrl+E | — | ⏸ 顺延(新 API + watcher + 回填,独立一件) |
+| T10 首命令/动作通道 | 排查未修 | 已确认症状族:MCP 动作通道偶发停摆 8-10s 后集中泄洪(重试风暴 → 重复后台作业/重复块);parity 全文件连跑时在 ~7 个测试后成片失败(单跑/小批量全过)。引擎专项,续 P2-T10 |
+
+### T9 连带的两笔引擎修复(ash-debug-062 分支 `1bf24c4e`)
+
+1. **Filter 桥 id 解析**:只走 `as_str().parse()`,int 参数恒 -1 → 对齐 Sort 的
+   int 优先 + str 回退(059 §4.3 "过滤不筛行"的真身之一)。
+2. **convert_input 事件参数烘焙**:单行 input 的 on_change/on_submit 用了无绑定
+   解析的 event_to_message → `.Filter(.block.id)` 烘不出来,渲染层收到光杆
+   "Filter"(无 payload)→ 桥 decode 出空 args → id=-1。改用
+   event_to_message_with(循环变量 + B8 前导点路径 + 字面量,button 同款);
+   无参事件两版等价,既有 input(oninput: .OnQuery)不受影响。
+
+### 回归口径
+
+- 主套件(除新 parity 文件):**63 pass(62 + pb04 已知时序 flake 单跑过)+
+  44 skip / 0 真实回归** —— 与 Phase 1 后基线一致。
+- test_cli_parity.py 现 16 项:**单跑/小批量全绿;全文件连跑在 ~7 项后成片
+  失败** = T10 动作通道停摆竞态放大(重试风暴堆积),非功能缺陷;引擎专项后
+  应全绿。
