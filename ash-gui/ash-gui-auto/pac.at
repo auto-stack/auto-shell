@@ -3,3 +3,7 @@ version: "0.1.0"
 scene: "ui"
 render: "vue"
 api: "rust"
+// Plan 061:外部后端 —— 契约与实现归 ash-server 项目所有(其 api.at)。
+// merged(auto run -r vm)时宿主同步其 api.at 到本地 src/back/api.at(生成物)
+// 并装载其 cdylib(需先在 ash-server 目录 cargo build)。
+back: { project: "../ash-server" }

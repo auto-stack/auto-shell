@@ -30,6 +30,7 @@
 //! worker thread (`ShellWorker`) — same architecture as the original
 //! `shell_worker.rs`, now frontend-independent.
 
+pub mod backend;
 pub mod http;
 pub mod types;
 pub mod worker;

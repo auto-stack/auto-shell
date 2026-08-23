@@ -9,7 +9,9 @@ rust-version = "1.77.2"
 
 [lib]
 name = "ash_server"
-crate-type = ["rlib"]
+# Plan 061:cdylib 供 `auto run` merged 模式装载(backend_abi 插件 ABI);
+# rlib 供 ash-server/ash-runner bin 与 HTTP 形态直链。
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "ash-server"

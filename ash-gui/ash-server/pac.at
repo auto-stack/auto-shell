@@ -1,0 +1,14 @@
+// pac.at — ash-server(Auto 项目,纯后端,Plan 061)
+//
+// 对外接口 = 同目录 api.at(#[api] 契约,10 端点)。启动形式是部署参数:
+//   - HTTP:`cargo run --bin ash-server`(axum + SSE,:3000)
+//   - merged:`auto run -r vm`(宿主经 backend_abi 装载本项目的 cdylib
+//     —— target/{debug,release}/ash_server.dll,先 `cargo build`)
+//
+// 前端(ash-gui-auto)在其 pac.at 里 `back: { project: "../ash-server" }`
+// 引用本项目;其本地 src/back/api.at 由宿主从本项目同步(生成物)。
+//
+// name 即 cdylib 产物名(ash_server.dll / libash_server.so)。
+
+name: "ash-server"
+version: "0.1.0"
