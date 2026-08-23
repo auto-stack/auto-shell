@@ -311,6 +311,13 @@ pub fn spawn() -> ShellHandle {
                                                 (CommandStatus::Success, out, code)
                                             }
                                         }
+                                        // Plan 060 R16:取消(run_command 的
+                                        // Err("cancelled"),drain 检测到 cancel
+                                        // flag 后 kill)映射为 Cancelled 终态,
+                                        // 不再混入 Failed。
+                                        Err(ref msg) if msg == "cancelled" => {
+                                            (CommandStatus::Cancelled, RenderedOutput::Empty, -1)
+                                        }
                                         Err(msg) => {
                                             (CommandStatus::Failed(msg), RenderedOutput::Empty, -1)
                                         }

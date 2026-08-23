@@ -97,6 +97,10 @@ pub struct CommandResult {
 pub enum CommandStatus {
     Success,
     Failed(String),
+    /// Plan 060 R16:用户取消(worker drain 检测到 cancel flag 后 kill)。
+    /// 序列化为 "Cancelled",前端事件泵已有同名分支;此前映射为
+    /// Failed("cancelled"),取消语义与失败混淆。
+    Cancelled,
 }
 
 /// The output payload — mirrors `ash_core::renderer::RenderedOutput` serialized

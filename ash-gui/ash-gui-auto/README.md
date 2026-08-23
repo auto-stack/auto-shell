@@ -170,11 +170,13 @@ AUTO_BIN=... python -m pytest tests/test_smoke.py -v
 | test_prompt_input.py | PB-01..15 | 3 pass + 12 skip |
 | test_history_search.py | HS-01..13 | 3 xfail |
 
-**总计(2026-08-08 实测):56 pass + 43 skip**。skip 主要是难档(M2 未做的
+**总计(2026-08-23 实测,R16 桥修复后):63 pass + 44 skip,零失败**(59 既有 +
+4 项 test_block_interactions 新回归;skip 含 MCP 键盘每实例竞态项,真实键盘
+已验证正常 —— 见 plan 060 第十六轮)。skip 主要是难档(M2 未做的
 ghost/highlight/textarea/debounce)+ mock 数据空;a2r 修复后更多可转 pass。
 
-> 注:测试矩阵表按文件分项仍为历史数据(49/47/3 口径);以 `pytest -q` 实测
-> 总计 56 pass + 43 skip 为准。
+> 注:测试矩阵表按文件分项仍为历史数据;以 `pytest -q` 实测总计为准
+> (2026-08-23:63 pass + 44 skip,零失败;端口避让 `AUTOUI_MCP_PORT`)。
 
 ## 架构
 

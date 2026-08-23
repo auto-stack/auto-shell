@@ -576,3 +576,84 @@ auto-shell 537498e。剩余在册:run_smart/jobs mock(无需求)、input
 本会话不再深入;②再发时的取证包 = 完整日志 + 死亡时刻操作序列 +
 WER 查询结果,供 sanitizer 专项(线程 sanitizer 优先,MCP sync 线程
 与 iced 渲染线程为第一嫌疑);③新实例照常重启维持可用。
+
+### 第十六轮:child-callback 缺失桥补齐 —— Stop/DeleteBlock/Pick/Rerun 全通(2026-08-23)
+
+**任务**:全面验证 Auto/rust 版 ash-gui(ash-runner merged 模式)可运行性,
+发现问题逐项修复。结论:**可运行,核心闭环全绿**;发现并修复一类真实用户级
+缺陷(子 widget 回调按钮全灭),另登记两项引擎侧已知事项。
+
+#### 发现 ①:child-callback 按钮无任何效果(真实用户级,已修)
+
+现象(真实鼠标与 MCP click 同症):Stop 连点 7 次 `ping -n 30` 跑满;
+DeleteBlock 块数不变;ToolSidebar.Pick input 不填。对照:App 级按钮
+(☰ ToggleSidebar)点击正常 → 消息派发本身没坏。
+
+根因:**VM 剥离 child callback emit**(handler_codegen D-GAP-4),子 widget
+按钮事件只派发到自己的空体 `.at handler`,父级(App)handler 永不执行。
+引擎既有惯例是 renderer 手写桥(ToggleCollapse/Sort/Filter/OpenPath/Copy/
+RunCommand 后备),而 **Stop/DeleteBlock/Pick/Rerun 四个一直没人补**。
+
+修复(auto-lang `ash-bridge-060` worktree,基线 db8a4600 = 与 8-22 22:47
+ash-runner 同源):
+- renderer.rs "Plan 060 R16" 段四桥:Stop→ShellStore.Cancel + Running→
+  Cancelled 直改;DeleteBlock→Rust 过滤 blocks(store .at 实现读 .blocks
+  为 nil 不可用);Rerun→复用 RunCommand 主路径(置换尾块);Pick→写
+  root `injected_command`+`input` 并强制重建 textarea。
+- ash-server(worker.rs/types.rs):`CommandStatus::Cancelled` 变体,
+  `Err("cancelled")` 映射之(此前取消呈现为 Failed("cancelled"),语义混淆)。
+
+验证:MCP click 四桥全通(Stop→Cancelled+进程 kill+保留已流式输出;
+Delete 块数-1;Pick input="echo";Rerun 新块 Success);真实鼠标 Delete
+实证有效(点中运行中块的删除钮,块即消失);新增
+`tests/test_block_interactions.py` 四项回归(BI-01..04)全过。
+
+#### 发现 ②:MCP 键盘派发每实例偶发死(引擎债,已登记未修)
+
+`autoui_keyboard`(Ctrl+r/Enter)在约半数启动实例上完全无效(重试/
+预热/聚焦均不救),另一半实例正常 —— 同一二进制,启动期竞态,新旧
+runner 均复现(9361 失败/9362 通过/9371 通过/9374+9375 失败)。
+**真实键盘不受影响**(经 Windows 前台锁陷阱排查后在正确焦点下实测:
+Ctrl+R/打字/Enter 全通 —— 注意:SetForegroundWindow 会被前台锁静默
+拒绝,SendKeys 落到错误窗口,多实例叠窗时尤甚;需点标题栏激活验证)。
+处治:keyboard 依赖测试(history_search/pb09)改为实例级 skip(注明
+Plan 060 R16);根因(疑似 key_bindings 填充竞态)登记引擎债,归
+Plan 419 agent 域。
+
+#### 发现 ③:测试端口竞争(环境项)
+
+pytest 默认 9247 与并发会话(Plan 419 agent 实例/auto.exe 测试)撞车
+→ 全套 ConnectionError(10048 绑定失败,间歇)。复跑时以
+`AUTOUI_MCP_PORT=<独占端口>` 避让(本次 9361/9374 全套验证均如此)。
+
+#### 全套回归口径(新二进制,verify-bridge worktree 构建)
+
+旧基线 56 pass+43 skip(README 8-08 口径)→ **63 pass + 44 skip,零失败**
+(59 既有 + 4 项 BI-01..04 新回归;1 skip 为该实例 MCP 键盘死,守卫转 skip)。
+HTTP 模式未测(auto-lang master 同期被实时编辑,交叉验证顺延)。
+
+**测试套件两处缺陷顺带修复**(均为假阴性):
+- pb04/pb10 间歇失败根因 = history 测试把 Ctrl+R 面板开着没收,后续 prompt
+  测试的输入落到历史搜索框(劫持)→ `_ensure_prompt_active` 开头关面板;
+  与「面板是否开过」逐轮 1:1 对应(9374/9377/9379 复盘确认)。
+- hs13/panel_opens 在 helper 返回后重读 history_open,被重试循环迟到的
+  第二个 Ctrl+r 翻回 → 改信任 helper 返回值。
+
+#### 环境备注(并发会话资源竞争)
+
+两次全套 ConnectionError 雪崩(26F/42F)的根因都是**系统级 OOM**:并发
+auto-lang 测试进程(单进程 21.4GB 工作集,疑似与字符串池无 GC 债同族)+
+rust-analyzer 等把 commit 顶满 → pytest 实例 `memory allocation failed`
+死亡。资源空闲窗口内复跑即绿。跨会话并行验证时留意;auto-lang 测试内存
+治理归引擎债(第十二轮池 GC 缺口)。
+
+#### 过程要点
+
+- auto-lang master 由 Plan 419 agent 实时占用(未提交改动+持续 merge),
+  本轮修复走隔离 worktree(基线 db8a4600)+ `.worktrees/auto-lang`
+  junction 重指 + verify-bridge worktree 构建 —— 主检出零接触;
+  junction 用毕**未回指**(ash-bridge-060 合并 master 前保持指向,
+  见提交说明)。
+- auto.exe(8-23 03:24)新于 ash-runner(8-22 22:47)不构成陈旧:
+  本仓源码(ash-server+ash-gui-auto .at)最后改动 17:40,runner 新于
+  一切本仓输入;auto.exe 时刻只反映 auto-lang 侧活动。
