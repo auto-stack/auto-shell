@@ -166,3 +166,20 @@ auto-shell 侧(T1-T3/T7-T9)在 main 或专用分支直接实施,无并发冲突
   竞态守卫按设计转 skip;060 R16 口径 63/44 的差额同源)。
 - **计划完成**:目标全部达成 —— `auto run -r vm` 恢复 merged 一等入口,
   ash-gui 无本地 back/,契约/实现/桩归 ash-server 项目所有。
+
+
+### 补遗:gen/server 路径接入外部后端契约(2026-08-23 终+)
+
+盘点发现的唯一功能回归修复:前端 back/ 删除后,三处硬编码
+`src/back/api.at` 断链 —— api_gen(generate_api **静默跳过** api client
+生成)、ui_gen(SSE 接线返回空)、automan `--server=vm`(直接报错)。
+
+修复(auto-lang master,worktree plan-061b 合入):config.rs 新增
+`external_backend_dir` / `resolve_back_api`(本地 src/back → back →
+pac.at back.project 外部后端),三读取点统一接入 —— gen/server/SSE
+与 vm 运行时同一契约解析语义。
+
+验证:无本地 back/ 的临时副本 `auto gen` 生成完整 store(10 端点 +
+SSE 接线);`--server=vm` 通过契约检查进入启动流程。至此 061 无已知
+未完成项;剩余为已接受设计约束(Rust-ABI 同工具链、跨平台仅 Win
+实测)与低优先遗留(auto run --http、契约强校验、HTTP 形态复验)。
