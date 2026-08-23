@@ -41,6 +41,10 @@ widget HistorySearch(history: []str, open: bool, forward: bool, on_run: msg, on_
                         onkeydown.up: .Move(-1)
                         onkeydown.down: .Move(1)
                         onkeydown.backspace: .OnBackspace
+                        // Plan 062 T10 连锁修复:面板聚焦时按键只路由到本输入框
+                        // 的声明键 —— Ctrl+R 若只声明在 prompt textarea,面板开
+                        // 着(焦点在搜索框)就永远关不掉。
+                        onkeydown.ctrl.r: .Close
                         style: "flex-1 bg-transparent outline-none text-sm font-mono-ash"
                         placeholder: if .forward { "搜索历史(旧→新)…" } else { "搜索历史…" }
                     }

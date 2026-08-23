@@ -37,12 +37,6 @@ enum CommandReq {
         args: Vec<String>,
         reply: tokio::sync::oneshot::Sender<SmartResult>,
     },
-    /// Produce completions for `line` at `cursor`.
-    Complete {
-        line: String,
-        cursor: usize,
-        reply: tokio::sync::oneshot::Sender<Vec<CompletionItem>>,
-    },
     /// Get the prompt context (git branch/status) for the current cwd.
     PromptContext {
         reply: tokio::sync::oneshot::Sender<PromptContext>,
@@ -55,11 +49,34 @@ enum CommandReq {
     KillJob { job_id: u32 },
 }
 
+/// Plan 062 T10: completion requests travel on a DEDICATED channel/thread —
+/// the main worker is serialized behind the running command, and the UI
+/// thread's complete() host-call used to block for the whole command
+/// duration (measured 27.6s behind `ping -n 30`).
+struct CompleteReq {
+    line: String,
+    cursor: usize,
+    reply: tokio::sync::oneshot::Sender<Vec<CompletionItem>>,
+}
+
+/// Session snapshot shared with the completion thread (its own Shell can't
+/// see the main session's cd / last command). Completions never mutate the
+/// session, so a snapshot is equivalent.
+#[derive(Clone, Default)]
+struct SharedSession {
+    cwd: Arc<Mutex<String>>,
+    last_command: Arc<Mutex<String>>,
+    last_exit: Arc<std::sync::atomic::AtomicI32>,
+}
+
 /// Handle into the Shell worker. `Clone + Send` — stash in axum state or
 /// `tauri::State`.
 #[derive(Clone)]
 pub struct ShellHandle {
     tx: mpsc::UnboundedSender<CommandReq>,
+    /// Plan 062 T10: dedicated completion channel (own thread — never waits
+    /// behind a running command).
+    complete_tx: mpsc::UnboundedSender<CompleteReq>,
     /// Cancel flag — set directly (concurrent) so it lands even while the
     /// worker is blocked in `spawn_blocking`. See Plan 040 M5.
     cancel: Arc<AtomicBool>,
@@ -107,21 +124,21 @@ impl ShellHandle {
         reply_rx.await.map_err(|_| "worker dropped reply".to_string())
     }
 
-    /// Produce completions via the shared engine.
+    /// Produce completions for `line` at `cursor`.
     pub async fn complete(
         &self,
         line: String,
         cursor: usize,
     ) -> Result<Vec<CompletionItem>, String> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.tx
-            .send(CommandReq::Complete {
+        self.complete_tx
+            .send(CompleteReq {
                 line,
                 cursor,
                 reply: reply_tx,
             })
-            .map_err(|_| "worker channel closed".to_string())?;
-        reply_rx.await.map_err(|_| "worker dropped reply".to_string())
+            .map_err(|_| "completion channel closed".to_string())?;
+        reply_rx.await.map_err(|_| "completion worker dropped reply".to_string())
     }
 
     /// Get the prompt context (git branch/status).
@@ -168,13 +185,22 @@ impl ShellHandle {
 /// inside a runtime context — see Plan 041 bugfix).
 pub fn spawn() -> ShellHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<CommandReq>();
+    // Plan 062 T10: dedicated completion channel/thread.
+    let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteReq>();
     let cancel = Arc::new(AtomicBool::new(false));
     let (event_tx, _) = broadcast::channel::<ShellEvent>(256);
     let boot = Arc::new(tokio::sync::Mutex::new(None::<BootSnapshot>));
+    // Plan 062 T10: session snapshot shared with the completion thread.
+    let session = SharedSession::default();
+
+    spawn_completion_worker(complete_rx, session.clone());
 
     let cancel_for_thread = cancel.clone();
     let event_tx_for_thread = event_tx.clone();
     let boot_for_thread = boot.clone();
+    // Plan 062 T10: session snapshot updated by the main loop after each
+    // command; read by the completion thread.
+    let session_for_thread = session.clone();
     // Plan 057: worker-side sender clone for the job-reaper ticker.
     let tick_tx = tx.clone();
 
@@ -220,13 +246,6 @@ pub fn spawn() -> ShellHandle {
                         }
                     });
                 }
-
-                // M7: completion engine inputs.
-                let completion_sigs: Vec<auto_shell::completions::CompletionSignature> =
-                    shell.registry().params().into_iter().map(Into::into).collect();
-                let mut completion_provider = auto_shell::completions::CompletionProvider::new();
-                auto_shell::completions::definitions::register_all(&mut completion_provider);
-                load_tier_specs(&mut completion_provider);
 
                 // Boot snapshot.
                 let snapshot = harvest_boot(&shell);
@@ -396,11 +415,22 @@ pub fn spawn() -> ShellHandle {
                                 // command_result.cwd 回写)。execute() 路径同步改
                                 // shell 内部 pwd,故执行完重读即为新值;外部流式命令
                                 // 不改 cwd,重读无副作用。
-                                let cwd = shell.pwd().to_string_lossy().to_string();
-                                let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
-                                    CommandResult {
-                                        block_id,
-                                        cwd,
+                let cwd = shell.pwd().to_string_lossy().to_string();
+                // Plan 062 T10: refresh the shared session snapshot (completion
+                // thread's live view of cwd / last command / exit code).
+                if let Ok(mut c) = session_for_thread.cwd.lock() {
+                    *c = cwd.clone();
+                }
+                if let Ok(mut lc) = session_for_thread.last_command.lock() {
+                    *lc = cmd.clone();
+                }
+                session_for_thread
+                    .last_exit
+                    .store(exit_code, Ordering::SeqCst);
+                let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
+                    CommandResult {
+                        block_id,
+                        cwd,
                                         status,
                                         output,
                                         duration_ms: started.elapsed().as_millis() as u64,
@@ -451,19 +481,7 @@ pub fn spawn() -> ShellHandle {
                             }
                             let _ = reply.send(result);
                         }
-                        CommandReq::Complete { line, cursor, reply } => {
-                            let ctx = completion_ctx(&shell);
-                            let completions = auto_shell::completions::engine::complete(
-                                &line,
-                                cursor,
-                                &completion_sigs,
-                                &mut completion_provider,
-                                &ctx,
-                            );
-                            let items: Vec<CompletionItem> =
-                                completions.into_iter().map(completion_to_item).collect();
-                            let _ = reply.send(items);
-                        }
+                        // Plan 062 T10:Complete 已移驻独立补全线程(见 spawn_completion_worker)。
                         CommandReq::PromptContext { reply } => {
                             let cwd = shell.pwd().to_path_buf();
                             auto_shell::prompt::context::refresh_git_info_async(cwd);
@@ -498,9 +516,83 @@ pub fn spawn() -> ShellHandle {
 
     ShellHandle {
         tx,
+        complete_tx,
         cancel,
         event_rx: event_tx,
         boot,
+    }
+}
+
+/// Plan 062 T10: dedicated completion worker — own OS thread + own Shell +
+/// own runtime. Completions never mutate session state, so a second Shell
+/// (same init: registry/aliases/.ashrc) is equivalent; the live cwd / last
+/// command come from the shared snapshot. This keeps typing responsive while
+/// the main worker is serialized behind a running command.
+fn spawn_completion_worker(
+    rx: mpsc::UnboundedReceiver<CompleteReq>,
+    session: SharedSession,
+) {
+    std::thread::Builder::new()
+        .name("ash-server-complete".into())
+        .spawn(move || {
+            let mut shell = auto_shell::Shell::new();
+            init_shell(&mut shell);
+            // M7 (completion engine inputs) — same setup the main loop used.
+            let completion_sigs: Vec<auto_shell::completions::CompletionSignature> =
+                shell.registry().params().into_iter().map(Into::into).collect();
+            let mut completion_provider = auto_shell::completions::CompletionProvider::new();
+            auto_shell::completions::definitions::register_all(&mut completion_provider);
+            load_tier_specs(&mut completion_provider);
+
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build completion worker runtime");
+
+            runtime.block_on(async move {
+                let mut rx = rx;
+                while let Some(req) = rx.recv().await {
+                    let ctx = completion_ctx_shared(
+                        &shell,
+                        &session,
+                    );
+                    let completions = auto_shell::completions::engine::complete(
+                        &req.line,
+                        req.cursor,
+                        &completion_sigs,
+                        &mut completion_provider,
+                        &ctx,
+                    );
+                    let items: Vec<CompletionItem> =
+                        completions.into_iter().map(completion_to_item).collect();
+                    let _ = req.reply.send(items);
+                }
+            });
+        })
+        .expect("failed to spawn ash-server completion worker thread");
+}
+
+/// completion_ctx for the completion thread: live bits (cwd / last command /
+/// exit code) from the shared snapshot; aliases from its own Shell.
+fn completion_ctx_shared(
+    shell: &auto_shell::Shell,
+    session: &SharedSession,
+) -> auto_shell::completions::engine::CompletionCtx {
+    let history = history_file()
+        .map(|p| read_recent_history(&p, 50))
+        .unwrap_or_default();
+    auto_shell::completions::engine::CompletionCtx {
+        current_dir: std::path::PathBuf::from(
+            session.cwd.lock().map(|c| c.clone()).unwrap_or_default(),
+        ),
+        last_command: session
+            .last_command
+            .lock()
+            .ok()
+            .and_then(|c| if c.is_empty() { None } else { Some(c.clone()) }),
+        last_exit_code: Some(session.last_exit.load(Ordering::SeqCst)),
+        history,
+        aliases: shell.aliases().clone(),
     }
 }
 
@@ -574,19 +666,6 @@ fn load_tier_specs(provider: &mut auto_shell::completions::CompletionProvider) {
         for spec in auto_shell::completions::spec_tiers::load_dir(&dir) {
             provider.register(spec);
         }
-    }
-}
-
-fn completion_ctx(shell: &auto_shell::Shell) -> auto_shell::completions::engine::CompletionCtx {
-    let history = history_file()
-        .map(|p| read_recent_history(&p, 50))
-        .unwrap_or_default();
-    auto_shell::completions::engine::CompletionCtx {
-        current_dir: shell.pwd().to_path_buf(),
-        last_command: shell.last_command_line().map(String::from),
-        last_exit_code: Some(shell.last_exit_code()),
-        history,
-        aliases: shell.aliases().clone(),
     }
 }
 
