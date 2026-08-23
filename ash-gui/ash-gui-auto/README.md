@@ -68,7 +68,7 @@ VM+HTTP 模式。
 
 ### Vue/浏览器模式(连 ash-server 真后端)
 
-`pac.at: render: "vue"` 时,`auto gen` 把 Vue 前端生成到 `gen/front/vue/`。浏览器版与 [ash-gui-vue](../ash-gui-vue) 共用同一个后端 —— **[ash-server](../ash-server)**(独立 HTTP 服务,包装 ash-core,默认监听 `:3000`)。
+`pac.at: render: "vue"` 时,`auto gen` 把 Vue 前端生成到 `gen/front/vue/`。浏览器版与 merged 版共用同一个后端 —— **[ash-server](../ash-server)**(旧手写 ash-gui-vue 参考实现已退役)(独立 HTTP 服务,包装 ash-core,默认监听 `:3000`)。
 
 > ⚠️ **不要用 `auto run` 跑浏览器版真后端**:`auto run`(默认 vue)会自动构建并运行 codegen 生成的桩后端 `examples/rust-workspace/ash-gui-auto-back`(只返空默认值的脚手架,**不执行命令**),并把 vite 的 `/api` 代理到它(默认 `:8080`)。要跑真命令,必须手动起 ash-server,并让 vite 代理过去。
 
