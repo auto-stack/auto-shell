@@ -24,7 +24,7 @@
 
 ---
 
-## ash-gui-vue 后端(`ash-gui/ash-gui-vue/src-tauri/`)
+## ash-gui-vue 后端(`ash-gui/ash-gui-vue/src-tauri/`;**该目录 2026-08-23 已退役删除**,条目留档,见 git 历史)
 
 ### `shell.execute()` 内阻塞的命令无法取消
 
@@ -600,3 +600,20 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 - 修复方向:① resolve_binding_path 剥前导点 + 把 widget 参数(block)
   播种进 bindings;② renderer 解码对非 Int 参数显式报错而非静默 0。
 - 临时对策:参数只用循环变量/字面量;block 身份改经其它通道传递。
+
+
+## ash-gui 外部后端(Plan 061 延期项)
+
+### `auto run --http`:后端项目独立起服的 auto 入口未实现
+
+- **现状**:HTTP 形态需 `cd ash-gui/ash-server && cargo run --bin ash-server`(:3000 + SSE)。
+- **设计意图**(designs/ash-gui-external-backend.md §2):后端项目自带 api.at,
+  启动形式(merged cdylib / HTTP)应只是部署参数——merged 已由 `auto run -r vm`
+  兑现,HTTP 侧缺 auto 入口。
+- **接受理由**(用户裁定,2026-08-23):日常主路径是 merged;HTTP 使用频率低,
+  cargo run 足够;auto-man 侧需新增后端项目识别 + --http 编排,优先级不划算。
+- **参考**:merged 装载编排在 `auto-man/src/rust_ui.rs`(load_external_backend);
+  HTTP bin 入口 `ash-server/src/bin/ash-server.rs`。
+- **连带观察**:`AUTO_VM_MERGE=0` split 开关(Plan 340 既有机制)实测未生效
+  (仍走 merged 分支;2026-08-23 finish-plan 复审发现,非 061 回归)——实现
+  --http 时顺带排查。

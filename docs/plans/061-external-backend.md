@@ -1,7 +1,7 @@
 # 061 — 外部后端配置:ash-server Auto 化 + 启动形式自由(HTTP/merged)
 
 - 日期:2026-08-23
-- 状态:**待实施**(设计定稿见 `designs/ash-gui-external-backend.md`)
+- 状态:**complete**(2026-08-23 finish-plan 复审通过归档;M1+M2+M3+补遗全落地,1 项用户裁定延期 → DEBTS.md)
 - 上游:Plan 060(契约归一 + M3 手写宿主)、Plan 057(HTTP 一等模式)
 - 跨仓:auto-shell(主)+ **auto-lang(引擎侧,见 §3 实施约束)**
 
@@ -183,3 +183,27 @@ pac.at back.project 外部后端),三读取点统一接入 —— gen/server/SSE
 SSE 接线);`--server=vm` 通过契约检查进入启动流程。至此 061 无已知
 未完成项;剩余为已接受设计约束(Rust-ABI 同工具链、跨平台仅 Win
 实测)与低优先遗留(auto run --http、契约强校验、HTTP 形态复验)。
+
+
+### finish-plan 复审(2026-08-23 归档前)
+
+逐任务核验(代码为准):
+- T1/T2 ✓:ash-server/api.at + pac.at + cdylib(target/debug/ash_server.dll)+
+  backend.rs 导出(auto_backend_abi_version/auto_backend_register)在库;
+- T3-T5 ✓:config/自动生成三读取点 + rust_ui 装载编排(引擎 master 已合);
+- T6 ✓:registry 事件回流(块级 Success 终态验证);
+- T7 ✓:前端 back/ 已删,pac.at back.project 生效;
+- T8 部分→接受:run_vm.ps1/sh 已切 `auto run -r vm`(等价命令全验证;
+  脚本本体的自动构建分支未触发实测——dll 在场时不走该分支,属惰性路径);
+  ash-runner 退役标注,bin 保留;
+- T9 ✓(带口径说明):pytest 60 pass + 47 skip 零失败——相对 060 R16 的
+  63/44,差额 3 为 MCP 键盘每实例竞态守卫按设计转 skip,非功能缺失;
+- 补遗 ✓:gen/server 契约定位三处(临时副本 auto gen 实测)。
+
+**复审发现(非 061 回归,如实记录)**:HTTP 分离模式(AUTO_VM_MERGE=0 +
+AUTO_BACKEND)实测仍走 merged 分支(日志 "backend: vm, merged" + 外部
+后端装载)——split 开关(Plan 340 既有机制)未按预期生效;ash-server
+:3000 本身起服正常。该开关问题登记观察,不阻塞本计划(merged 为主路径)。
+
+**延期 → DEBTS.md**:`auto run --http`(后端项目独立起服的 auto 入口;
+现状 `cargo run --bin ash-server`,用户裁定低优先)。
