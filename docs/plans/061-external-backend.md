@@ -104,6 +104,47 @@ auto-shell 侧(T1-T3/T7-T9)在 main 或专用分支直接实施,无并发冲突
 - 后端 cdylib 的跨平台签名/符号裁剪:Windows 优先,Linux/macOS 随后;
 - pac.at `back` 语法进 AutoUI 官方 schema 文档(auto-lang 侧)。
 
-## 6. 执行记录
+## 6. 执行记录(2026-08-23,M1+M2 全量落地,E2E 全绿)
 
-(实施时追加)
+### 交付形态(与设计的偏差)
+
+| 设计 | 实施 | 理由 |
+|---|---|---|
+| C-ABI 插件入口(草案) | `extern "Rust"` + **Arc<dyn BackendRegistry>** 交割 | 同机同工具链构建(宿主与后端同 target 树),Arc 是刚需:后端事件泵线程须持宿主 registry 回流事件 —— `&dyn` 不可跨线程。**关键教训**:cdylib 场景进程内有两份 auto_lang(宿主 + cdylib 各一),后端若调本地 `inject_shell_event` 写的是休眠副本 → 事件全丢、块永挂 Running(实测);必须经宿主 registry 注入 |
+| 前端编译期"只读"外部契约 | **契约同步式引用**:run 时把后端 api.at 复制到本地 src/back/api.at | 编译器/loader 零改动,`use back.api` 路径不变;后端仍是契约唯一真源(本地副本是生成物) |
+| (未定)worker 初始化时机 | cdylib 注册入口内**boot 探活**(command_list) | ① fail-fast;② Shell 会话 cwd 惰性取首次调用时的进程 cwd,宿主随后 chdir 到 src/front —— 先发制人把 cwd 锁定在项目根(否则起始 cwd 漂移到 src/front,`cd <项目名>` 语义错位) |
+
+### 关键改动
+
+- **auto-lang(worktree `plan-061`,基线 dba0b9a4,commit 848a666b)**:
+  `vm/backend_abi.rs`(trait+装载器)、pac.rs `external_backend` 解析、
+  rust_ui.rs merged 分支装载编排(同步契约 + 定位 cdylib + 注册;库名取
+  后端 pac.at name,debug 优先,缺失明确报错)。
+- **auto-shell(worktree `plan-061`,commit e66cb4f)**:ash-server Auto 化
+  (api.at/pac.at 迁入项目根)、lib crate-type += cdylib、src/backend.rs
+  共享装配(10 端点注册 + registry 事件泵)、ash-runner 重构为薄过渡
+  (assemble_host_bridge)、前端 pac.at `back: {project: "../ash-server"}`。
+
+### 验证(2026-08-23)
+
+- **E2E(裸 `auto run -r vm` + ash-server cdylib)**:boot 81 命令 / echo /
+  ls 表格+着色 / `ls \| where` 管道 / cd 往返(含连字符目录)/ show 代码
+  块 / Stop 取消(Cancelled 终态)/ 会话起始 cwd=项目根 —— 全绿。
+- **pytest 全套**:**63 pass + 44 skip,零失败**(与 ash-runner 形态完全
+  同口径,AUTO_BIN=worktree auto.exe 走 `run -r vm` 参数路径)。
+
+### 过程事故与恢复
+
+并发会话执行了全局 worktree 清理,auto-lang `.worktrees/plan-061`
+(当时未提交)连带删除 —— 改动全量重放(内容在案)+ 恢复构建重新冒烟
+通过后立即提交。**教训:worktree 改动必须小时级提交,不能隔夜裸放。**
+
+### 遗留(下一步)
+
+- **M3 收尾**:主检出 auto.exe/master 合并 plan-061 分支后,run_vm.ps1/sh
+  切 `auto run -r vm`,ash-runner 退役(auto-shell 侧改动已就绪);
+- **合并窗口**:auto-lang master 活跃(RC 金丝雀崩溃仍未修,见 060 §十六
+  轮补记),plan-061 分支(基线 db8a4600+R16 桥)待窗口期合并;
+- HTTP 交叉验证(auto run --no-merge + ash-server :3000)顺延;
+- 契约签名校验(编译期比对前端调用与 api.at 签名)未做 —— 同步式引用
+  下前端编译即读真契约,弱校验已天然成立,强校验待需求。
