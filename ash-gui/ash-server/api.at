@@ -8,10 +8,11 @@
 //
 // 业务逻辑(Shell 执行、补全引擎等)在 auto-shell/ash-core 里,不在此文件。
 //
-// VM merged 模式:`use shell` 指向同目录 mock 后端 shell.at(纯 .at 模拟),
-// 让 UI 能在 vm 模式独立跑起来做测试。真 shell 走 a2r/HTTP(M1/M4)。
+// Plan 061:本文件是后端项目的契约本体,前端经 `back: { project }` 链接
+// 引用(解析映射 `back.api` → 本文件,零复制)。本文件自带全部契约类型
+// pub type 定义(原先 `use types` 指向前端 types.at 的跨界依赖已解除)。
+// shell.at(#[api] 调用桩,宿主桥空桩)与本文件同目录,由 `use shell` 解析。
 
-use types: BootSnapshot, CompletionItem, PromptContext, ShellEvent, SmartResult
 use shell
 
 // ═══════════════════════════════════════════════════════════
