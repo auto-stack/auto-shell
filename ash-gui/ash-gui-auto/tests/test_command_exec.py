@@ -73,10 +73,14 @@ def _submit_command(mcp, cmd_text):
     # Wait until type actually writes the input field before submitting.
     import time
     for _attempt in range(10):
-        mcp.call("autoui_type", text=cmd_text, clear_first=True)
+        # Plan 062 T10 连锁修复:显式定向 prompt 输入框 —— 表格过滤框(Plan
+        # 062 T9)出现后,vtree 里"第一个 input"不再是 prompt,不带
+        # element_id 的 type 会打进过滤框(实测 table_filter_q 被写成命令)。
+        mcp.call("autoui_type", text=cmd_text, element_id=vnode, clear_first=True)
         time.sleep(0.4)
         if mcp.state("input").strip().endswith(f'"{cmd_text}"'):
             break
+        vnode = _find_prompt_input_vnode(mcp) or vnode
     # Submit (Enter) until the command runs — the MCP action channel is drained
     # by a 16ms iced subscription and can occasionally drop a message under
     # load. After a successful run, PromptBar clears .input, so an empty input

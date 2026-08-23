@@ -284,3 +284,33 @@ main(`2c642ba`),worktree 与两分支已清理。合并后回归:main 全套件 
 - test_cli_parity.py 现 16 项:**单跑/小批量全绿;全文件连跑在 ~7 项后成片
   失败** = T10 动作通道停摆竞态放大(重试风暴堆积),非功能缺陷;引擎专项后
   应全绿。
+
+## 9. T10 收官(2026-08-24 凌晨,worktree `plan-062-tail`)
+
+### 根因(两个叠加,均已修)
+
+1. **补全 host_call 阻塞 UI 线程**(主根因,实测铁证:`ping -n 30` 运行中打字,
+   补全面板 **27.6 秒**后才出现 —— 恰为 ping 结束时刻)。worker 单线程串行,
+   执行中的命令把 Complete 请求堵在队列;backend 的 complete 桥在 UI 线程上
+   block_on 等 reply → 整个 UI 冻结到命令跑完。这也解释了全套件连跑成片失败
+   (JP/CC 用长 ping,后续测试全被堵)。
+   **修复**:Complete 移驻独立线程(`ash-server-complete`,自有 Shell + 自有
+   runtime,同款 init:registry/别名/.ashrc;cwd/last_command/exit 经
+   SharedSession 快照由主线程每条命令后刷新 —— 补全不修改会话,快照等价)。
+   验证:同场景补全 **0.3s** 返回(ping 仍在跑)。
+2. **面板聚焦态按键不路由**(连锁):历史面板打开后焦点在搜索框,声明在
+   prompt textarea 的 Ctrl+R 不再路由 → 面板关不掉 → 后续 autoui_type 打进
+   搜索框(表格过滤框同理成 vtree 首个 input)→ 成片失败的另一半。
+   **修复**:Ctrl+S 改切换语义(开→按=关,不依赖面板内路由);面板输入框
+   补声明 ctrl.r → .Close(引擎路由修复前的双保险);测试辅助
+   `_submit_command`/CP/GP 显式定向 prompt vnode。
+
+### 结果
+
+- test_cli_parity.py 全文件连跑 **15 pass + 1 skip**(CC-01 实例级键盘竞态),
+  此前该口径在第 8 项后成片失败。
+- 全套件(含 parity)**75 pass / 48 skip / 0 失败** —— 首次全绿。
+
+### 顺带清理
+
+- worker 主循环退役 completion_sigs/provider(M7 块随迁补全线程)。

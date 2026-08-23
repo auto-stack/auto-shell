@@ -587,6 +587,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "shim-metadata",
  "syn 2.0.119",
  "thiserror 2.0.20",
 ]
@@ -654,6 +655,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2 0.10.9",
+ "shim-metadata",
  "stacker",
  "strum",
  "strum_macros",
@@ -5928,6 +5930,14 @@ name = "shell-words"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
+
+[[package]]
+name = "shim-metadata"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "shlex"

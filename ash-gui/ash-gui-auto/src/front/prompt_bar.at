@@ -761,11 +761,16 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             }
         }
 
-        // Plan 062 T4:Ctrl+S 前向历史搜索 —— 开面板(与 Ctrl+R 共用)+
-        // 每次按下翻转方向(前向 = oldest-first)。
+        // Plan 062 T4:Ctrl+S 前向历史搜索。T10 连锁修正:切换语义 —— 面板
+        // 已开时 Ctrl+S 关闭(面板聚焦态 Ctrl+R 不路由,靠它关面板不可靠);
+        // 关闭态按下 = 开 + 翻转方向(前向 = oldest-first)。
         .OnCtrlS -> {
-            .history_forward = !.history_forward
-            .history_open = true
+            if .history_open {
+                .history_open = false
+            } else {
+                .history_forward = !.history_forward
+                .history_open = true
+            }
         }
 
         // Ctrl+C:有输入 → 清空(Plan 053 原行为);空输入 → 取消当前运行

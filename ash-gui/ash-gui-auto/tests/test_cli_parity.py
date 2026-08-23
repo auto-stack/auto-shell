@@ -34,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from test_command_exec import _submit_command  # noqa: E402
 from test_prompt_input import _ensure_prompt_active  # noqa: E402
+from test_command_exec import _find_prompt_input_vnode  # noqa: E402
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -229,11 +230,13 @@ def test_cs01_ctrl_s_forward_history(mcp):
         pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
     assert "true" in mcp.state("history_open"), "Ctrl+S did not open the panel"
     assert "旧→新" in mcp.snapshot(), "forward placeholder not rendered"
-    # 关面板(Ctrl+R toggle),方向保持 true
-    assert _press_until("r", "history_open", "false"), "Ctrl+R did not close the panel"
+    # 关面板:Ctrl+S 切换语义(T10 修正 —— 面板聚焦态 Ctrl+R 不路由,不可靠)
+    assert _press_until("s", "history_open", "false"), "Ctrl+S did not close the panel"
+    assert "true" in mcp.state("history_forward"), "direction should survive the close"
     # 再 Ctrl+S:方向翻回 false + 面板再开;再关,还原默认
-    assert _press_until("s", "history_forward", "false"), "second Ctrl+S did not flip back"
-    assert _press_until("r", "history_open", "false"), "cleanup: panel left open"
+    assert _press_until("s", "history_forward", "false"), "second open did not flip back"
+    assert _press_until("s", "history_open", "false"), "cleanup: panel left open"
+    assert "false" in mcp.state("history_forward"), "direction should be back to default"
 
 
 # ── T7: completion rich panel ──────────────────────────────────────────────
@@ -242,7 +245,7 @@ def test_cp01_command_candidates_with_kind_and_description(mcp):
     """Typing a command prefix → panel renders with the count line, kind dots
     and descriptions (Plan 062 T7)."""
     _ensure_prompt_active(mcp)
-    mcp.call("autoui_type", text="ec", clear_first=True)
+    mcp.call("autoui_type", text="ec", element_id=_find_prompt_input_vnode(mcp), clear_first=True)
     ok = mcp.wait_until(lambda c: "候选" in c.snapshot(), timeout=10, interval=0.5)
     snap = mcp.snapshot()
     assert ok, f"completion panel count line did not appear:\n{snap[:300]}"
@@ -254,7 +257,7 @@ def test_cp02_git_subcommand_candidates(mcp):
     """`git ` → subcommand/flag candidates with descriptions from the shared
     completion engine (git spec) — the CLI-parity information density."""
     _ensure_prompt_active(mcp)
-    mcp.call("autoui_type", text="git ", clear_first=True)
+    mcp.call("autoui_type", text="git ", element_id=_find_prompt_input_vnode(mcp), clear_first=True)
     ok = mcp.wait_until(
         lambda c: "候选" in c.snapshot() and "commit" in c.snapshot(),
         timeout=10, interval=0.5,
@@ -324,14 +327,17 @@ def test_he01_bang_bang_reruns_last(mcp):
     """`!!` expands to the last history entry (shared ~/.auto-shell-history,
     same source as the CLI REPL)."""
     _submit_command(mcp, "echo t6-marker-alpha")
-    mcp.wait_until(_no_running, timeout=15)
-    _submit_command(mcp, "!!")
-    ok = mcp.wait_until(_no_running, timeout=15)
-    assert ok, "`!!` run never settled"
-    st = mcp.state("blocks")
-    assert "t6-marker-alpha" in st, (
-        f"`!!` did not re-run the previous command:\n{st[:600]}"
+    mcp.wait_until(
+        lambda c: "t6-marker-alpha" in c.state("blocks"), timeout=15, interval=0.5
     )
+    _submit_command(mcp, "!!")
+    # `!!` 重跑上一条 → 输出再出现一次(计数 ≥2)。不用 no-Running 判定:
+    # 后台 `&` 块永远停在 Running(Plan 055 语义),jp01 之后恒不满足。
+    ok = mcp.wait_until(
+        lambda c: c.state("blocks").count("t6-marker-alpha") >= 2,
+        timeout=15, interval=0.5,
+    )
+    assert ok, f"`!!` did not re-run the previous command:\n{mcp.state('blocks')[:400]}"
 
 
 def test_he02_prefix_search_expands(mcp):
@@ -369,7 +375,8 @@ def test_gp01_ghost_fuzzy_subsequence(mcp):
     mcp.wait_until(_no_running, timeout=15)
     time.sleep(1.5)  # RefreshContext re-pulls history after RunResult
     _ensure_prompt_active(mcp)  # CS-01 若中途失败可能遗留面板,劫持输入框
-    mcp.call("autoui_type", text="ecm", clear_first=True)
+    # 显式定向 prompt(T9 过滤框在场时"第一个 input"不是 prompt)
+    mcp.call("autoui_type", text="ecm", element_id=_find_prompt_input_vnode(mcp), clear_first=True)
     time.sleep(0.8)
     ghost = mcp.state("ghost_text")
     assert 'ghost_text: ""' not in ghost, (
