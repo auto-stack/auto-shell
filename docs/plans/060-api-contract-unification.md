@@ -657,3 +657,23 @@ rust-analyzer 等把 commit 顶满 → pytest 实例 `memory allocation failed`
 - auto.exe(8-23 03:24)新于 ash-runner(8-22 22:47)不构成陈旧:
   本仓源码(ash-server+ash-gui-auto .at)最后改动 17:40,runner 新于
   一切本仓输入;auto.exe 时刻只反映 auto-lang 侧活动。
+
+#### 第十六轮补记:引擎 master RC 金丝雀确定性崩溃(ash-gui 侧阻断,已上报)
+
+合并桥分支(ash-bridge-060 → auto-lang master)后重编主检出 ash-runner:
+**首条命令提交即确定性 panic**(×2):
+`[RC canary] use-after-free: heap object 4000000 was freed 0.0s ago`
+(auto-lang `vm/rc.rs:378`)。归因:**Plan 419 P1/P2 的 RC 机制**(今晨
+03:00-03:07 落地,晚于 db8a4600)在 ash-gui 动态 VM 负载下触发;与
+桥合并无关(崩溃点在 submit 主路径,四桥消息均未发生过)。两种定性:
+①RC 计数过释放(误报);②真 UAF 一直存在 —— 若为②,即本计划第五/
+十五轮"静默退出债"的根因真身(此前堆损坏无检测,静默 exit 1)。
+已登记 auto-lang KNOWN-DEBT-AND-RISKS(290ba14c)供 Plan 419 排查。
+
+**引擎修复前的可用入口**:主检出 ash-server target 现构建自含 RC 的
+master,首命令即崩。稳定运行请用 worktree 构建产物(基线 db8a4600+
+四桥,全套 63/44/0 验证):
+`D:\autostack\auto-shell\.worktrees\verify-bridge\ash-gui\ash-server\target\debug\ash-runner.exe`
+(cwd 须为某 ash-gui-auto 检出;`.worktrees/auto-lang` junction 已重指
+bridge worktree,worktree 内重建保持稳定基线;引擎修复后主检出重编即恢复,
+junction 可指回 `D:\autostack\auto-lang`)。
