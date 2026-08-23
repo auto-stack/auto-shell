@@ -35,6 +35,12 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         var history_open bool = false
         var suggestions []CompletionItem = []
         var ghost_text str = ""
+        // Plan 062 T5:模糊子序列命中时的完整目标命令(空 = 前缀命中)。
+        // 接受动作(Ctrl+F/E/右箭头)对模糊命中整体替换输入,避免拼接碎字。
+        var ghost_full str = ""
+        // Plan 062 T4:历史面板检索方向(false= newest-first 同 Ctrl+R;
+        // true= oldest-first,Ctrl+S 前向)。
+        var history_forward bool = false
         // Plan 057 续(行内编辑 keymap):编辑模式("emacs"|"vi-insert"|
         // "vi-normal")。VM 端渲染层据此选行编辑键位表(快捷键与功能分离,
         // 切换模式不改 handler);Vue 端忽略(浏览器原生 Emacs 基础键)。
@@ -109,6 +115,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 HistorySearch(
                     history: .history,
                     open: .history_open,
+                    forward: .history_forward,
                     on_run: .Run,
                     on_close: .ToggleHistorySearch
                 )
@@ -134,6 +141,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     onkeyup: .OnInput
                     onenter: .OnEnter(.input)
                     onkeydown.ctrl.r: .ToggleHistorySearch
+                    // Plan 062 T4:Ctrl+S 前向历史搜索(开面板 + 翻转方向)。
+                    onkeydown.ctrl.s: .OnCtrlS
                     // 行内编辑(bash Emacs 模式语义,2026-08-20 修正):
                     // Ctrl+F = forward-char(与右箭头同义,ghost 显示时逐字接受);
                     // Ctrl+E = end-of-line(ghost 显示时接受全部);Ctrl+→ 接受一个词。
@@ -294,6 +303,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             if .tab_just_completed {
                 .tab_just_completed = false
                 .ghost_text = ""
+                .ghost_full = ""
                 .suggestions = .tab_candidates
                 // 重新 tokenize + 续行检测:Tab 补全改了 .input,必须更新 highlighted_spans
                 // —— 输入框可见文字靠 overlay 渲染 spans(textarea 文字透明),不重算
@@ -305,24 +315,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                     .tab_active = false
                     .tab_candidates = []
                 }
-                // Plan 053 M2: ghost text = 以当前输入为前缀的最长历史条目
-                // (去掉已输入前缀,只留建议续接)。对齐 vue 原版 PromptBar.vue:299-328。
-                .ghost_text = ""
-                if .input != "" {
-                    var best_ghost str = ""
-                    var i int = .history.len() - 1
-                    for i >= 0 {
-                        var h str = .history[i]
-                        if h.starts_with(.input) && h.len() > .input.len() {
-                            var g str = h.substr(.input.len(), h.len())
-                            if g.len() > best_ghost.len() {
-                                best_ghost = g
-                            }
-                        }
-                        i = i - 1
-                    }
-                    .ghost_text = best_ghost
-                }
+                // Plan 062 T5:ghost 计算下沉 ComputeGhost(前缀 + 模糊子序列)。
+                .ComputeGhost(.input)
                 // Plan 053 M3: 重新 tokenize 写 highlighted_spans。
                 .DoTokenize()
                 // Plan 053 M4: 续行标志(未闭合分隔符/引号/尾随 \)→ prompt 符号 + Enter 行为。
@@ -370,22 +364,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 // 转堆 ListData 存储,handler 内读取不再静默中止 —— ghost 从
                 // vue-only 恢复为双端。ghost 匹配用参数 v(派发时快照,与
                 // complete 的 .input 现读等价,均经契约测试验证)。
-                .ghost_text = ""
-                if v != "" {
-                    var best_ghost str = ""
-                    var gi int = .history.len() - 1
-                    for gi >= 0 {
-                        var gh str = .history[gi]
-                        if gh.starts_with(v) && gh.len() > v.len() {
-                            var gg str = gh.substr(v.len(), gh.len())
-                            if gg.len() > best_ghost.len() {
-                                best_ghost = gg
-                            }
-                        }
-                        gi = gi - 1
-                    }
-                    .ghost_text = best_ghost
-                }
+                // Plan 062 T5:计算下沉 ComputeGhost(前缀 + 模糊子序列)。
+                .ComputeGhost(v)
                 .DoTokenize()
                 .DoContinuation()
             }
@@ -648,15 +628,83 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // store.ClearScreen(vm 剥离 callback prop emit,见 renderer PromptBar.Run 模拟)。
         .OnCtrlL -> { }
 
-        // Ctrl+C:清空当前输入
-        .OnCtrlC -> {
-            .input = ""
-            .history_cursor = -1
-            .suggestions = []
-            .history_open = false
-            .in_continuation = false
+        // Plan 062 T5:ghost 计算(OnInput / OnInputComplete 共用)——
+        // ① 前缀:以输入为前缀的最长历史条目,ghost = 续接后缀(Plan 053 M2 原逻辑);
+        // ② 模糊回退:无前缀命中时,找首字符相同、其余字符按序出现(前缀子序列)
+        //   的最新历史条目(CLI AshHinter 同款,"gcm"→git commit -m),ghost =
+        //   最后一个匹配字符之后的后缀,ghost_full 记完整命令供接受时整体替换。
+        .ComputeGhost(v str) -> {
             .ghost_text = ""
-            .highlighted_spans = []
+            .ghost_full = ""
+            if v != "" {
+                var best_ghost str = ""
+                var i int = .history.len() - 1
+                for i >= 0 {
+                    var h str = .history[i]
+                    if h.starts_with(v) && h.len() > v.len() {
+                        var g str = h.substr(v.len(), h.len())
+                        if g.len() > best_ghost.len() {
+                            best_ghost = g
+                        }
+                    }
+                    i = i - 1
+                }
+                if best_ghost != "" {
+                    .ghost_text = best_ghost
+                } else {
+                    var fi int = .history.len() - 1
+                    for fi >= 0 {
+                        var fh str = .history[fi]
+                        if fh.len() > v.len() && fh.substr(0, 1) == v.substr(0, 1) {
+                            var vi int = 0
+                            var ci int = 0
+                            var last_end int = -1
+                            for ci < fh.len() {
+                                if vi < v.len() && fh.substr(ci, 1) == v.substr(vi, 1) {
+                                    vi = vi + 1
+                                    if vi == v.len() {
+                                        last_end = ci + 1
+                                        break
+                                    }
+                                }
+                                ci = ci + 1
+                            }
+                            if last_end >= 0 && last_end < fh.len() {
+                                .ghost_text = fh.substr(last_end, fh.len())
+                                .ghost_full = fh
+                                break
+                            }
+                        }
+                        fi = fi - 1
+                    }
+                }
+            }
+        }
+
+        // Plan 062 T4:Ctrl+S 前向历史搜索 —— 开面板(与 Ctrl+R 共用)+
+        // 每次按下翻转方向(前向 = oldest-first)。
+        .OnCtrlS -> {
+            .history_forward = !.history_forward
+            .history_open = true
+        }
+
+        // Ctrl+C:有输入 → 清空(Plan 053 原行为);空输入 → 取消当前运行
+        // 中的命令(readline 语义对齐 CLI:执行中 Ctrl+C 中断前台)。store
+        // 直调是 PromptBar 首例(App 之外),Cancel 无返回值,HTTP/merged
+        // 双模式同为 api cancel + 块标 Cancelled。
+        .OnCtrlC -> {
+            if .input == "" {
+                store.Cancel()
+            } else {
+                .input = ""
+                .history_cursor = -1
+                .suggestions = []
+                .history_open = false
+                .in_continuation = false
+                .ghost_text = ""
+                .ghost_full = ""
+                .highlighted_spans = []
+            }
         }
 
         // Ctrl+D:空输入时请求退出(像 bash);有输入时不动作
@@ -714,10 +762,17 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // Plan 057 续:右箭头逐字接受 ghost —— 接受一个字符进 input(变实色),
         // ghost 缩短一字。VM 端仅在 ghost 非空时拦截该键(renderer 按 ghost
         // 状态门控 keydown 表);ghost 为空时不拦截,保留默认光标右移。
+        // Plan 062 T5:模糊命中(ghost_full 非空)时整体替换为完整命令
+        // (逐字拼接模糊后缀会产出碎字)。
         .OnRight -> {
             if .ghost_text != "" {
-                .input = .input + .ghost_text.substr(0, 1)
-                .ghost_text = .ghost_text.substr(1, .ghost_text.len())
+                if .ghost_full != "" {
+                    .input = .ghost_full
+                } else {
+                    .input = .input + .ghost_text.substr(0, 1)
+                    .ghost_text = .ghost_text.substr(1, .ghost_text.len())
+                }
+                .ghost_full = ""
                 .tab_active = false
                 .DoTokenize()
             }
@@ -760,6 +815,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             .history_open = false
             .in_continuation = false
             .ghost_text = ""
+            .ghost_full = ""
             .highlighted_spans = []
         }
 
@@ -767,10 +823,16 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         .Exit -> { }
 
         // Plan 053 M2: Ctrl+F 接受全部 ghost text(对齐 vue acceptGhostFull)。
+        // Plan 062 T5:模糊命中时整体替换为完整命令。
         .AcceptGhost -> {
             if .ghost_text != "" {
-                .input = .input + .ghost_text
+                if .ghost_full != "" {
+                    .input = .ghost_full
+                } else {
+                    .input = .input + .ghost_text
+                }
                 .ghost_text = ""
+                .ghost_full = ""
                 .suggestions = []
                 .DoTokenize()
             }
@@ -779,24 +841,33 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // Plan 053 M2: Ctrl+→ 接受 ghost text 的下一个词(到下一个空白,
         // 对齐 vue acceptGhostWord)。用 substr 逐字符扫描(char_at 在 VM
         // 返回 int codepoint,与 vue 的 string 语义不一致,统一用 substr)。
+        // Plan 062 T5:模糊命中时整体替换为完整命令。
         .AcceptGhostWord -> {
             if .ghost_text != "" {
-                var take str = ""
-                var i int = 0
-                // 跳过前导空白
-                for i < .ghost_text.len() && .ghost_text.substr(i, 1) == " " {
-                    i = i + 1
-                }
-                // 取到下一个空白
-                for i < .ghost_text.len() && .ghost_text.substr(i, 1) != " " {
-                    take = take + .ghost_text.substr(i, 1)
-                    i = i + 1
-                }
-                if take != "" {
-                    .input = .input + take
+                if .ghost_full != "" {
+                    .input = .ghost_full
                     .ghost_text = ""
+                    .ghost_full = ""
                     .suggestions = []
                     .DoTokenize()
+                } else {
+                    var take str = ""
+                    var i int = 0
+                    // 跳过前导空白
+                    for i < .ghost_text.len() && .ghost_text.substr(i, 1) == " " {
+                        i = i + 1
+                    }
+                    // 取到下一个空白
+                    for i < .ghost_text.len() && .ghost_text.substr(i, 1) != " " {
+                        take = take + .ghost_text.substr(i, 1)
+                        i = i + 1
+                    }
+                    if take != "" {
+                        .input = .input + take
+                        .ghost_text = ""
+                        .suggestions = []
+                        .DoTokenize()
+                    }
                 }
             }
         }

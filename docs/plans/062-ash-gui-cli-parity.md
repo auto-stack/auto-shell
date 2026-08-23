@@ -1,7 +1,8 @@
 # 062 — ash-gui(Auto/vue·VM)与 CLI 版功能差距补全
 
 - 日期:2026-08-23
-- 状态:**调研完成,计划待实施(未开工)**
+- 状态:**Phase 1 完成并全量验证**(8 项新回归全过 + 全套件 71 pass/45 skip/0 fail,
+  2026-08-23 深夜);Phase 2/3 未开工。实施记录见 §7
 - 调研对象:
   - **CLI 版** = `ash` bin(`ash/ash/src/main.rs`)+ `ash-tui`(reedline REPL、菜单/高亮/hinter、less/color)+ `auto-shell`(引擎、命令注册表、补全编排)+ `ash-core`(parser/pipeline/interactive 名单)
   - **GUI 版** = `ash-gui/ash-gui-auto`(.at 前端,Vue/VM 双渲染)+ `ash-gui/ash-server`(ash-server HTTP bin / ash-runner merged bin,worker 进程内 auto_shell::Shell)
@@ -199,3 +200,56 @@
 
 P1(T1-T5)→ P2(T6-T10)→ P3(T11-T15,独立)。P1 全部为 auto-shell 仓内改动,
 无引擎(auto-lang)依赖,可立即开工;P3 待 AI 服务配置与 P1/P2 收口后立项。
+
+## 7. Phase 1 实施记录(2026-08-23,worktree `plan-062`)
+
+### 交付
+
+| 任务 | 落点 | 结果 |
+|---|---|---|
+| T1 交互命令移交 | worker.rs(console_handover_reason / spawn_console_command / wait_console_child;Windows `CREATE_NEW_CONSOLE`,Unix 终端探测降级) | ✅ IC-01(vim 不在机 → 新控制台起 cmd /C → 块收 Failed exit 1,不再挂死)/ IC-02(`python -c` REPL 带参数保持流式)。两处 CLI 语义收敛:分页器(less/more/bat)放行(Plan 055 既定);REPL 类带参数 = 脚本,保持流式 |
+| T2 jobs 面板 + Kill | app.at(⚙ button + 面板 + ToggleJobs/KillJob handler;App 级,避开 child-callback 债) | ✅ JP-01..03(⚙ 计数 → 面板行(#id/cmd/running/✕)→ 连杀 → ⚙ 消失) |
+| T3 did-you-mean | 引擎 shell.rs(建议折进错误文本,退役 eprintln;新增 `suggest_command_for` 公开 oracle)+ worker.rs 流式路径 command_resolvable 预检(PATH+PATHEXT+cmd 内建白名单) | ✅ DM-01(`lss` → Failed 块含 "did you mean: ls?");GUI 未知命令原本经 powershell 兜底变成静默 exit 1,预检前置拦截 |
+| T4 键位 | prompt_bar.at(ctrl.s → OnCtrlS;OnCtrlC 空输入 → store.Cancel() **PromptBar 直调 store 首例**,验证可行)+ history_search.at(forward prop + watch 重算 + oldest-first 遍历 + placeholder 切换) | ✅ CS-01(Ctrl+S 方向翻转 + 旧→新 placeholder)/ CC-01(空输入 Ctrl+C → Cancelled;实例级键盘竞态时 skip) |
+| T5 ghost 模糊 | prompt_bar.at(ComputeGhost 下沉:前缀最长命中 → 无前缀时前缀子序列回退,首字符必须同;ghost_full 记完整命令,三种接受动作对模糊命中整体替换) | ✅ GP-01(`ecm` → `echo git commit -m …` 模糊 ghost);接受语义与 CLI AshHinter 对齐 |
+
+新测试:`tests/test_cli_parity.py` 8 项(IC×2/JP×3/DM/CC/CS/GP,CC 键盘竞态实例级 skip)。
+
+### 实施中定位并修复的两个引擎 bug(auto-lang 分支 `ash-debug-062`,基于 master 5f3556c0)
+
+1. **订阅同 hash 去重**(`67924f74`):`shell_event_subscription` 与
+   `mcp_action_subscription` 都是 `time::every(16ms)`,iced 订阅表按 duration
+   hash 去重,后者消息**静默丢失**(merged 模式 job_started/job_done 从不到达
+   update——定位链:worker 发送 ✓ → 泵收到 ✓ → inject true ✓ → sub poll 到
+   Some(msg) ✓ → update 永不命中)。修复:16ms→17ms。
+2. **job_list VmRef 写回失效**(`c4157ea1`):store 声明 `List<JobInfo>` 是 VM
+   原生列表(VmRef),渲染层 `write_state_vec` 写不回 VM 堆对象(读回恒同一
+   VmRef,条目不可见)。修复:job 分支无条件写 renderer-owned `Value::Array`
+   (对齐 blocks 的所有权模型——blocks 能工作正因 renderer 从第一块起就以
+   Array 形态持有)。
+3. **连带**:app.at 的 ToggleJobs **不得**调 `store.RefreshJobs()`(其
+   `.job_list = jobs()` VM 赋值会把 renderer Array 换回 VmRef,实测点击 ⚙ 后
+   列表清空)——SSE 事件已实时维护,刷新冗余,已移除。
+
+**合并提醒**:两笔引擎修复在 auto-lang worktree `.worktrees/auto-lang-p062`
+(分支 `ash-debug-062`),**未合 master**(master 由 Plan 419/436 agent 实时占
+用);`.worktrees/auto-lang` junction 现指向该 worktree,合并 master 后应指回
+`D:\autostack\auto-lang` 并重编主检出 auto.exe(plan-060 R16 同款流程)。
+
+### 顺带修复
+
+- `ash/auto-shell/src/ai/ask.rs`:auto-ai `StreamEvent` 新增 `TurnStart/TurnEnd`
+  导致的跨仓编译漂移(任何新检出构建都会撞;补兜底臂)。
+- worker/backend 留 `ASH_DEBUG_JOBS=1` 门控诊断日志(JobStarted 发送/泵转发)。
+
+### 已知遗留(记录,不在 P1 范围)
+
+- **MCP 动作通道延迟竞态**(预存):`&` 类提交偶发延迟 8-10s 才派发,重试风暴
+  会堆出 N 个重复后台作业(JP 测试按"杀到 ⚙ 消失"口径免疫);与 Plan 059 §5.3
+  首命令丢失同族,P2-T10 专项。
+- **MCP autoui_state 读不到 renderer-owned job_list**(读的是 VM 原生 VmRef
+  态):视图/交互全正常,仅测试断言需走 snapshot 口径——引擎债候选(store 字段
+  双表示问题,与 DEBTS B 系同族)。
+- 后台 `&` 命令的块永远停在 Running(background 分支不发 CommandResult)——
+  预存 Plan 055 语义,P2 观察项。
+- 交互命令 Stop 仅杀包装进程(cmd.exe),进程树残留可能性同后台作业 kill 现状。

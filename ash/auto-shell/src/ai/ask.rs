@@ -128,6 +128,8 @@ pub fn run(args: &[String]) -> Result<()> {
         StreamEvent::Thinking { .. } => {}
         StreamEvent::Error { message } => println!("\n  [error] {message}"),
         StreamEvent::Cancelled { .. } => println!("\n  [cancelled]"),
+        // auto-ai 新增的回合边界事件(2026-08-23 漂移):CLI 内联展示无需呈现。
+        StreamEvent::TurnStart { .. } | StreamEvent::TurnEnd { .. } => {}
     });
 
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));

@@ -264,6 +264,9 @@ pub fn spawn() -> ShellHandle {
                                             block_id,
                                             cmd: cmd_part.to_string(),
                                         });
+                                        if std::env::var("ASH_DEBUG_JOBS").is_ok() {
+                                            eprintln!("[dbg062] worker sent JobStarted id={job_id} cmd={cmd_part}");
+                                        }
                                     }
                                     Err(e) => {
                                         let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
@@ -276,6 +279,48 @@ pub fn spawn() -> ShellHandle {
                                                 exit_code: -1,
                                             },
                                         ));
+                                    }
+                                }
+                            } else if let Some(note) = console_handover_reason(trimmed) {
+                                // Plan 062 T1: 交互式命令(vim/ssh/REPL…)需要真
+                                // 终端,GUI 的管道 stdio 会挂死 —— 移交独立系统
+                                // 终端窗口,等待线程在进程退出后回填块结果。
+                                cancel_for_thread.store(false, Ordering::SeqCst);
+                                let cwd_iv = shell.pwd().to_path_buf();
+                                match spawn_console_command(trimmed, &cwd_iv) {
+                                    Ok(child) => {
+                                        let cmd_iv = trimmed.to_string();
+                                        let cancel_iv = cancel_for_thread.clone();
+                                        let event_iv = event_tx_for_thread.clone();
+                                        let wait = std::thread::Builder::new()
+                                            .name(format!("console-handover-{block_id}"))
+                                            .spawn(move || {
+                                                wait_console_child(
+                                                    child,
+                                                    block_id,
+                                                    cmd_iv,
+                                                    cwd_iv,
+                                                    cancel_iv,
+                                                    event_iv,
+                                                );
+                                            });
+                                        if wait.is_ok() {
+                                            let _ = append_history(trimmed);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = event_tx_for_thread.send(
+                                            ShellEvent::CommandResult(CommandResult {
+                                                block_id,
+                                                cwd: cwd_iv.to_string_lossy().to_string(),
+                                                status: CommandStatus::Failed(format!(
+                                                    "无法启动系统终端:{e}"
+                                                )),
+                                                output: RenderedOutput::Text(note),
+                                                duration_ms: 0,
+                                                exit_code: -1,
+                                            }),
+                                        );
                                     }
                                 }
                             } else {
@@ -653,6 +698,23 @@ async fn run_streaming_external(
         return Ok(None);
     }
 
+    // Plan 062 T3: command-not-found pre-check. The spawn fallback chain
+    // (direct → powershell/sh) swallows unknown commands as a silent exit 1
+    // with the error text stranded on inherited stderr — annotate them up
+    // front instead. cmd.exe builtins that only resolve through the fallback
+    // are whitelisted so `dir`/`type`/… keep working.
+    for seg in &pipe_cmds {
+        if let Some(name) = ext::parse_command(seg).first() {
+            if !command_resolvable(name) {
+                let mut msg = format!("command not found: {name}");
+                if let Some(suggestion) = shell.suggest_command_for(name) {
+                    msg.push_str(&format!("\n  did you mean: {suggestion}?"));
+                }
+                return Err(msg);
+            }
+        }
+    }
+
     let cwd = shell.pwd();
     // OS pipe 链:首段 spawn_external_stream,后续 spawn_external_chained
     // (prev.stdout → next.stdin,kernel 级,同 CLI execute_pipeline_with_auto)。
@@ -848,6 +910,46 @@ fn is_shell_builtin(name: &str) -> bool {
     )
 }
 
+/// Plan 062 T3: can `name` resolve to something runnable? PATH + PATHEXT on
+/// Windows (plain lookup on Unix), explicit paths, and the cmd.exe builtins
+/// that survive only via the powershell/sh spawn fallback.
+fn command_resolvable(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    if name.contains('/') || name.contains('\\') {
+        return std::path::Path::new(name).exists();
+    }
+    const CMD_BUILTINS: &[&str] = &[
+        "dir", "del", "copy", "ren", "rename", "move", "rd", "rmdir", "type",
+        "cls", "ver", "vol", "title", "start", "mklink", "assoc", "ftype",
+        "prompt", "setlocal", "endlocal", "call", "choice", "color", "where",
+        "more", "sort", "tasklist", "taskkill", "timeout",
+    ];
+    if CMD_BUILTINS.contains(&name) {
+        return true;
+    }
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+            .split(';')
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    let path_var = std::env::var("PATH").unwrap_or_default();
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    for dir in path_var.split(sep).filter(|d| !d.is_empty()) {
+        for ext in &exts {
+            if std::path::Path::new(dir).join(format!("{name}{ext}")).exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn is_terminal_only_command(name: &str) -> bool {
     // Plan 055 Phase C: less/more 放行 —— 无 tty 时多数实现直接 cat 内容到
     // stdout,GUI 走流式路径(spawn_external_stream)+ block 已可滚动浏览。
@@ -862,5 +964,143 @@ fn terminal_only_message(name: &str) -> String {
              GUI 走 webview CSS 渲染,恒为 24-bit 真彩——无需检测。",
         ),
         _ => format!("{name} 是终端专属命令,GUI 不支持。"),
+    }
+}
+
+// ── Plan 062 T1: interactive-command console handover ───────────────────────
+
+/// REPL-style commands: bare invocation is an interactive REPL (needs a
+/// terminal), but with arguments they run scripts — those stay on the
+/// streaming path so output lands in the block. The CLI hands both to the
+/// inherited terminal; a GUI block makes the distinction worth it.
+const REPL_STYLE: &[&str] = &["python", "ipython", "node", "irb"];
+
+/// Interactive-list members the GUI deliberately does NOT hand over:
+/// pagers degrade gracefully without a tty (Plan 055 Phase C — they stream
+/// their contents and the block scrolls).
+const PAGER_COMMANDS: &[&str] = &["less", "more", "bat"];
+
+/// If `cmd` should run in a fresh OS terminal window, return the note shown
+/// in the block. Mirrors the CLI check (`repl.rs` → `interactive.rs`).
+fn console_handover_reason(cmd: &str) -> Option<String> {
+    let first = cmd.split_whitespace().next()?;
+    if !ash_core::cmd::interactive::is_interactive_command(first) {
+        return None;
+    }
+    let name = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(first)
+        .trim_end_matches(".exe");
+    if PAGER_COMMANDS.contains(&name) {
+        return None;
+    }
+    if REPL_STYLE.contains(&name) && cmd.split_whitespace().count() > 1 {
+        return None;
+    }
+    Some(format!(
+        "`{name}` 是交互式命令,已移交系统终端窗口运行;关闭其窗口或点 Stop 结束。"
+    ))
+}
+
+/// Spawn `cmd` in a brand-new console window (Windows) / terminal emulator
+/// (Unix best-effort). The returned Child is the console wrapper process.
+#[cfg(windows)]
+fn spawn_console_command(
+    cmd: &str,
+    cwd: &std::path::Path,
+) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x0010_0000;
+    // `cmd /C` 让命令在全新控制台里跑,控制台随命令退出关闭。
+    std::process::Command::new("cmd")
+        .raw_arg(format!("/C {cmd}"))
+        .current_dir(cwd)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+}
+
+#[cfg(unix)]
+fn spawn_console_command(
+    cmd: &str,
+    cwd: &std::path::Path,
+) -> std::io::Result<std::process::Child> {
+    // $TERMINAL 优先,其后常见模拟器;sh -c 包装保持命令串完整。
+    let mut terms: Vec<String> = Vec::new();
+    if let Ok(t) = std::env::var("TERMINAL") {
+        terms.push(t);
+    }
+    terms.extend(
+        ["gnome-terminal", "konsole", "xfce4-terminal", "xterm"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    for term in terms {
+        let flag = if term.contains("gnome-terminal") { "--" } else { "-e" };
+        let spawned = std::process::Command::new(&term)
+            .arg(flag)
+            .arg("sh")
+            .arg("-c")
+            .arg(cmd)
+            .current_dir(cwd)
+            .spawn();
+        if let Ok(child) = spawned {
+            return Ok(child);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "未找到可用的终端模拟器(可设 $TERMINAL)",
+    ))
+}
+
+/// Wait for a console-handover child, then emit the block's CommandResult.
+/// Polls the worker cancel flag so the block's Stop button terminates the
+/// handover. Plain `Child::kill` only hits the wrapper process — same
+/// semantics as the existing background-job kill.
+fn wait_console_child(
+    mut child: std::process::Child,
+    block_id: usize,
+    cmd: String,
+    cwd: std::path::PathBuf,
+    cancel: Arc<AtomicBool>,
+    event_tx: broadcast::Sender<ShellEvent>,
+) {
+    let started = Instant::now();
+    let mut killed = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let (status, exit_code) = if killed {
+                    (CommandStatus::Cancelled, -1)
+                } else {
+                    let code = status.code().unwrap_or(-1);
+                    if code != 0 {
+                        (CommandStatus::Failed(format!("exit code {code}")), code)
+                    } else {
+                        (CommandStatus::Success, code)
+                    }
+                };
+                let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
+                    block_id,
+                    cwd: cwd.to_string_lossy().to_string(),
+                    status,
+                    output: RenderedOutput::Text(format!(
+                        "交互式命令 `{cmd}` 已在系统终端窗口中结束。"
+                    )),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    exit_code,
+                }));
+                return;
+            }
+            Ok(None) => {
+                if !killed && cancel.load(Ordering::SeqCst) {
+                    killed = true;
+                    let _ = child.kill();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            Err(_) => return,
+        }
     }
 }

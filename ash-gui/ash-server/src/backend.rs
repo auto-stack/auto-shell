@@ -91,8 +91,13 @@ pub fn assemble(
                     Ok(ev) => {
                         if let Ok(json) = serde_json::to_string(&ev) {
                             let tag = json_get_event_tag(&json);
+                            if std::env::var("ASH_DEBUG_JOBS").is_ok() && tag.starts_with("job") {
+                                eprintln!("[dbg062] pump recv {tag}: {json}");
+                            }
                             if !reg_pump.inject_event(&tag, &json) {
                                 reg_pump.log(&format!("event inject dropped: {tag}"));
+                            } else if std::env::var("ASH_DEBUG_JOBS").is_ok() && tag.starts_with("job") {
+                                eprintln!("[dbg062] pump inject ok: {tag}");
                             }
                         }
                     }

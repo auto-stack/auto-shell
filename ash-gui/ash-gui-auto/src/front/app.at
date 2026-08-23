@@ -14,11 +14,14 @@ use back.api: command_list, history, complete, run_command, run_smart, prompt_co
 
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
-              ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int), ToggleCollapse(int), RefreshJobs }
+              ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int), ToggleCollapse(int), RefreshJobs,
+              ToggleJobs, KillJob(int) }
 
     model {
         var sidebar_open bool = true
         var injected_command str = ""
+        // Plan 062 T2: 后台作业面板开合(标题栏 ⚙ 切换)。
+        var jobs_open bool = false
         // Plan 054 M5: 主题(dark/light)。index.css 已定义 .dark 下的 CSS 变量
         // 覆盖,toggle 切 <html> 的 .dark class 即可生效。
         // 默认 true:浏览器脚手架 index.html 硬编码 <html class="dark">(深色),
@@ -76,10 +79,12 @@ widget App {
                             style: "text-xs font-mono-ash text-amber-400/80 shrink-0"
                         }
                     }
-                    // Plan 055 Phase A: 后台作业计数(点击刷新 jobs;ml-auto 推右)。
+                    // Plan 055 Phase A + 062 T2: 后台作业计数(点击开合作业
+                    // 面板;ml-auto 推右)。button 而非 text:VM 端 text onclick
+                    // 无点击先例,button 是已验证路径(☰ 同款)。
                     if .store.job_list.len() > 0 {
-                        text .jobs_label {
-                            onclick: .RefreshJobs
+                        button .jobs_label {
+                            onclick: .ToggleJobs
                             style: "text-xs px-1.5 py-0.5 rounded text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer select-none"
                         }
                     }
@@ -87,6 +92,40 @@ widget App {
                     text .theme_glyph {
                         onclick: .ToggleTheme
                         style: if .store.job_list.len() > 0 { "text-sm px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/10 cursor-pointer select-none" } else { "ml-auto text-sm px-1.5 py-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-white/10 cursor-pointer select-none" }
+                    }
+                }
+
+                // Plan 062 T2: 后台作业面板(⚙ 切换;列表由 SSE
+                // JobStarted/JobDone 实时维护,开面板时再拉一次兜底)。
+                if .jobs_open {
+                    if .store.job_list.len() > 0 {
+                        col {
+                            style: "border-b border-border bg-card/30 px-3 py-2 gap-1 shrink-0"
+                            for j in .store.job_list {
+                                row {
+                                    style: "items-center gap-2 text-xs font-mono-ash"
+                                    text "#" + j.id {
+                                        style: "text-muted-foreground w-8 shrink-0"
+                                    }
+                                    text j.command {
+                                        style: "text-foreground/80 truncate flex-1 min-w-0"
+                                    }
+                                    if j.state == "Running" {
+                                        text "running" {
+                                            style: "text-amber-400/80 shrink-0"
+                                        }
+                                    } else {
+                                        text "exit " + j.exit_code {
+                                            style: "text-muted-foreground shrink-0"
+                                        }
+                                    }
+                                    button "✕" {
+                                        onclick: .KillJob(j.id)
+                                        style: "px-1.5 py-0.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 cursor-pointer shrink-0"
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -181,6 +220,19 @@ widget App {
 
         .ToggleSidebar -> {
             .sidebar_open = !.sidebar_open
+        }
+
+        // Plan 062 T2: 开合后台作业面板。列表由 SSE JobStarted/JobDone 实时
+        // 维护(renderer-owned Array)—— 不再调 store.RefreshJobs():其
+        // `.job_list = jobs()` 是 VM 原生赋值,会把 renderer-owned Array 换回
+        // VmRef 列表,视图随即丢失 ⚙/面板(实测点击 ⚙ 后列表被清空)。
+        .ToggleJobs -> {
+            .jobs_open = !.jobs_open
+        }
+
+        // Plan 062 T2: 作业面板 kill 按钮 → store(其内部 kill_job + 刷新)。
+        .KillJob(job_id) -> {
+            store.KillJob(job_id)
         }
 
         // Plan 054 M5: 切主题。document.documentElement.classList.toggle("dark")
