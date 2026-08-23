@@ -19,7 +19,9 @@ import pytest
 def test_mcp_server_responds(mcp):
     """MCP server is up and responds to tools/list."""
     tools = mcp.tools_list()
-    assert len(tools) == 13, f"Expected 13 autoui tools, got {len(tools)}: {tools}"
+    # Plan 061 M3:工具数随引擎演进增长(master 423 增 action_config_reload
+    # 后为 14;060 时代为 13)—— 改按下限 + 核心工具在场断言,不再锁死总数。
+    assert len(tools) >= 13, f"Expected >= 13 autoui tools, got {len(tools)}: {tools}"
     # Spot-check a few critical tools
     for expected in ["autoui_snapshot", "autoui_action", "autoui_state", "autoui_find"]:
         assert expected in tools, f"Missing tool: {expected}"

@@ -43,10 +43,10 @@ _DEFAULT_AUTO = (
     / "debug"
     / "auto.exe"
 )
-# Override with AUTO_BIN env var (can point back to the old auto.exe; the run -r vm arguments will be appended).
-AUTO_BIN = os.environ.get(
-    "AUTO_BIN", str(_DEFAULT_RUNNER if _DEFAULT_RUNNER.exists() else _DEFAULT_AUTO)
-)
+# Override with AUTO_BIN env var.
+# Plan 061 M3:默认入口切回 auto.exe(外部后端 cdylib 装载形态);旧
+# ash-runner(过渡手写宿主)仍可用,显式 AUTO_BIN 指向它即可。
+AUTO_BIN = os.environ.get("AUTO_BIN", str(_DEFAULT_AUTO))
 # ash-runner takes no CLI arguments; the old auto.exe needs `run -r vm`.
 _IS_RUNNER = "ash-runner" in AUTO_BIN
 

@@ -148,3 +148,21 @@ auto-shell 侧(T1-T3/T7-T9)在 main 或专用分支直接实施,无并发冲突
 - HTTP 交叉验证(auto run --no-merge + ash-server :3000)顺延;
 - 契约签名校验(编译期比对前端调用与 api.at 签名)未做 —— 同步式引用
   下前端编译即读真契约,弱校验已天然成立,强校验待需求。
+
+
+### M3 收口(2026-08-23 终,引擎 419 §9 UAF 修复后)
+
+- **前置确认**:RC canary UAF 已修(auto-lang a76e9cbe,json_to_vm_value
+  外层 Array/Object 臂补「插入即 retain」;R16 runner 对最新 master 四
+  命令全绿验证)→ 合并窗口开启,plan-061 引擎分支合入 master(17ac09ca)。
+- **主检出 E2E**:`auto run -r vm`(主检出 auto.exe + 主检出 ash_server.dll)
+  全绿 —— pwd/echo/ls 表格着色/where 管道/show 代码块/cd 往返/Stop 取消
+  (Cancelled)/侧栏 81,`external backend linked + loaded` 日志双确认。
+- **M3 落地**:run_vm.ps1/sh 改为 `auto run -r vm`(自动构建缺失 cdylib,
+  校验 auto.exe);ash-runner 标注退役(bin 保留供参考);conftest 默认
+  AUTO_BIN 切回 auto.exe;test_smoke 工具数断言 ==13 → >=13 + 核心工具
+  在场(master 423 增 action_config_reload 后为 14,不再锁死总数)。
+- **全套回归**:60 pass + 47 skip,零失败(3 个增量为 MCP 键盘每实例
+  竞态守卫按设计转 skip;060 R16 口径 63/44 的差额同源)。
+- **计划完成**:目标全部达成 —— `auto run -r vm` 恢复 merged 一等入口,
+  ash-gui 无本地 back/,契约/实现/桩归 ash-server 项目所有。

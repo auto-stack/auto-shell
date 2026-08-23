@@ -9,11 +9,16 @@ Auto(.at)版本的 ash-gui。三种运行形态:
 
 ## 运行
 
-### VM+HTTP 模式(日常使用,推荐 —— Plan 057)
+### VM merged 模式(日常使用,推荐 —— Plan 061 外部后端)
 
-**一条命令**:检测/启动 ash-server(:3000)→ 设 `AUTO_BACKEND` → `auto run -r vm`。
+**一条命令**:`run_vm.ps1` / `run_vm.sh` → `auto run -r vm`。pac.at 的
+`back: { project: "../ash-server" }` 让宿主把 back.* 契约链接解析到外部
+后端项目并装载其 cdylib(api.at 10 端点直连 ash-core,进程内,无 HTTP)。
 命令执行、补全、历史、git 标签、jobs 全部走真 ash-core 会话,结构化输出
-(Table/kind 着色)由 ash-server 真实渲染:
+(Table/kind 着色)由 ash-server 真实渲染。前置:auto-lang 主检出与
+ash-server cdylib 已构建(脚本会自动构建后者)。
+
+### 旧:VM+HTTP 模式(Plan 057,仍在)
 
 ```powershell
 # Windows
