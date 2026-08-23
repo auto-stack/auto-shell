@@ -642,6 +642,7 @@ dependencies = [
  "mime_guess",
  "normalize-path",
  "notify",
+ "raw-window-handle",
  "regex",
  "reqwest",
  "rfd",

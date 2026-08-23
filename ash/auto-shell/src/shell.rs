@@ -506,6 +506,13 @@ impl Shell {
         &self.aliases
     }
 
+    /// Plan 062 T3: public "did you mean?" oracle — frontends that run
+    /// commands outside `execute()` (e.g. the GUI streaming path) use it to
+    /// annotate command-not-found failures the same way the REPL does.
+    pub fn suggest_command_for(&self, name: &str) -> Option<String> {
+        suggest_command(self, name)
+    }
+
     /// Plan 029 §7.2: the directory stack (pushd/popd, for AI context).
     pub fn dir_stack(&self) -> &[PathBuf] {
         &self.dir_stack
@@ -887,9 +894,11 @@ impl Shell {
         let result = external::execute_external(input, &self.current_dir, false);
         if let Err(ref e) = result {
             self.last_exit_code = extract_exit_code(&e.to_string());
-            // Plan 304: "did you mean?" suggestion on failure
+            // Plan 304 + 062 T3: fold the "did you mean?" suggestion into the
+            // error text — every frontend (CLI error report, GUI failed
+            // block) shows it; previously an eprintln only the terminal saw.
             if let Some(suggestion) = suggest_command(self, cmd_name) {
-                eprintln!("  did you mean: {}?", suggestion);
+                return Err(miette::miette!("{e}\n  did you mean: {suggestion}?"));
             }
         }
         result
