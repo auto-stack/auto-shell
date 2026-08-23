@@ -604,6 +604,14 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 
 ## ash-gui 外部后端(Plan 061 延期项)
 
+### 后端插件 ABI 为 `extern "Rust"`(同工具链约束)
+
+- **约束**:宿主(auto.exe)与后端 cdylib 必须同一 rustc/同机同 target 树构建;
+  跨工具链/跨机装载由 ABI 版本号拒载兜底(不会错装,但不可用)。
+- **接受理由**:本机开发工作流天然满足;C-ABI 全量 marshalling(富类型/闭包)
+  成本远超收益。设计定稿见 designs/ash-gui-external-backend.md §3。
+- **参考**:`auto-lang/crates/auto-lang/src/vm/backend_abi.rs`。
+
 ### `auto run --http`:后端项目独立起服的 auto 入口未实现
 
 - **现状**:HTTP 形态需 `cd ash-gui/ash-server && cargo run --bin ash-server`(:3000 + SSE)。
