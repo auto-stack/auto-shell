@@ -111,7 +111,7 @@ auto-shell 侧(T1-T3/T7-T9)在 main 或专用分支直接实施,无并发冲突
 | 设计 | 实施 | 理由 |
 |---|---|---|
 | C-ABI 插件入口(草案) | `extern "Rust"` + **Arc<dyn BackendRegistry>** 交割 | 同机同工具链构建(宿主与后端同 target 树),Arc 是刚需:后端事件泵线程须持宿主 registry 回流事件 —— `&dyn` 不可跨线程。**关键教训**:cdylib 场景进程内有两份 auto_lang(宿主 + cdylib 各一),后端若调本地 `inject_shell_event` 写的是休眠副本 → 事件全丢、块永挂 Running(实测);必须经宿主 registry 注入 |
-| 前端编译期"只读"外部契约 | **契约同步式引用**:run 时把后端 api.at 复制到本地 src/back/api.at | 编译器/loader 零改动,`use back.api` 路径不变;后端仍是契约唯一真源(本地副本是生成物) |
+| 前端编译期"只读"外部契约 | **链接式引用**(用户裁定,二次演进):resolve_module_path 增 EXTERNAL_BACK_ROOT 钩子,`back.*` 直接映射到后端项目根,零复制;前端 back/ 目录整体退役(含 shell.at 桩,随 api.at 迁入后端)。api.at 顺带解除对前端 types.at 的跨界 use 依赖 | 初版为编译器零改动走了 run 时复制;用户指出复制不必要 —— 链接式一步到位且消灭双源 |
 | (未定)worker 初始化时机 | cdylib 注册入口内**boot 探活**(command_list) | ① fail-fast;② Shell 会话 cwd 惰性取首次调用时的进程 cwd,宿主随后 chdir 到 src/front —— 先发制人把 cwd 锁定在项目根(否则起始 cwd 漂移到 src/front,`cd <项目名>` 语义错位) |
 
 ### 关键改动

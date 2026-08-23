@@ -88,8 +88,10 @@ back: { project: "../ash-server" }   # 相对路径,指向后端 Auto 项目
 ```
 
 规则:
-- `back.project` 指向后端项目根(含其 pac.at + api.at);
-- 前端编译期**只读**后端 api.at 做契约签名检查(不装载库、不执行);
+- `back.project` 指向后端项目根(含其 pac.at + api.at + shell.at 桩);
+- **链接式引用**(实施定稿):resolve_module_path 的 EXTERNAL_BACK_ROOT
+  钩子把 `back.*` 直接映射到后端根(零复制),前端无需本地 back/;
+- 后端 api.at 自带全部契约类型定义,不得依赖前端模块;
 - merged 运行期宿主按 `back.project` 定位 cdylib(后端项目 target 产物,
   缺失时给出"先构建后端"的明确报错);
 - 省略 `back` 时维持现状(本地 back/ 目录),兼容既有项目;
