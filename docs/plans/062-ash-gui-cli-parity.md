@@ -231,10 +231,11 @@ P1(T1-T5)→ P2(T6-T10)→ P3(T11-T15,独立)。P1 全部为 auto-shell 仓内�
    `.job_list = jobs()` VM 赋值会把 renderer Array 换回 VmRef,实测点击 ⚙ 后
    列表清空)——SSE 事件已实时维护,刷新冗余,已移除。
 
-**合并提醒**:两笔引擎修复在 auto-lang worktree `.worktrees/auto-lang-p062`
-(分支 `ash-debug-062`),**未合 master**(master 由 Plan 419/436 agent 实时占
-用);`.worktrees/auto-lang` junction 现指向该 worktree,合并 master 后应指回
-`D:\autostack\auto-lang` 并重编主检出 auto.exe(plan-060 R16 同款流程)。
+**合并记录(2026-08-24 00:50,已完成)**:四笔引擎修复经 `ash-debug-062` 分支
+合入 auto-lang master(merge `19096564`,先反向合 master 验证零冲突);junction
+已指回 `D:\autostack\auto-lang`,master auto.exe 重编;`plan-062` 亦合回本仓
+main(`2c642ba`),worktree 与两分支已清理。合并后回归:main 全套件 75 pass /
+44 skip / 0 真实失败(he01-03 + M1 冒烟在系统负载下偶发 T10 竞态,单跑全过)。
 
 ### 顺带修复
 
