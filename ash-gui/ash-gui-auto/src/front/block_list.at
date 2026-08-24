@@ -7,7 +7,7 @@
 use block_item: BlockItem
 use types: Block
 
-widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
+widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg, ai_steps_list: []str, ai_steps_styles: []str) {
     msg Msg { OpenPath(str), Rerun(str), Stop, DeleteBlock(int), ToggleCollapse(int) }
 
     computed {
@@ -51,7 +51,10 @@ widget BlockList(blocks: List<Block>, home: str, on_open_path: msg, on_rerun: ms
                     on_rerun: .Rerun,
                     on_stop: .Stop,
                     on_delete: .DeleteBlock,
-                    on_toggle_collapse: .ToggleCollapse
+                    on_toggle_collapse: .ToggleCollapse,
+                    // Plan 063 T2: AI 建议分步透传(Prop 链,history 同款)。
+                    ai_steps_list: .ai_steps_list,
+                    ai_steps_styles: .ai_steps_styles
                 )
             }
         }

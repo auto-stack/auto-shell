@@ -6,7 +6,7 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job, ai_pending
+use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job, ai_pending, ai_next, ai_steps
 use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput, JobInfo
 
 // format_git_label — APP-05/06:格式化 git 分支+状态标签。
@@ -116,6 +116,21 @@ store ShellStore {
         // 经 ai_pending 拉取;App 经 inject_src 传给 PromptBar 的
         // injected_command → 回填输入框 = 编辑入口,Pick 同语义)。
         var ai_pending_cmd str = ""
+        // Plan 063 T1: suggest-next 建议 chips(命令完成后后台拉取的
+        // 「接下来可能想」×3;RefreshContext 经 ai_next 拉取 JSON 数组串,
+        // 此处 substr 引号对扫描解析成平行 str 数组 —— cd 目录补全的
+        // fs.read_dir 解析同款(建议命令是简单命令,引号边角可忽略)。
+        var ai_next_cmds []str = []
+        // Plan 063 T2: AI 建议分步数据(块本地字段在 merged 模式由
+        // renderer 构造、不含新契约字段;handler 也遍历不了 renderer
+        // owned 的 .blocks(Cancel 注释同证)拿不到块 id —— 两处都是引擎
+        // 边界,Phase 1 零引擎不动 auto-lang,故放 store 级且不绑定块 id:
+        // 最新一次翻译的 steps 供 multi 建议卡渲染(单活跃翻译块假设,
+        // 连续两次 multi 翻译的旧块会显示新 steps —— 记计划的已知边角)。
+        // styles 平行存每步样式串(已执行步换灰;视图条件文法不支持
+        // 索引读,●色点同款预计算)。
+        var ai_steps_list []str = []
+        var ai_steps_styles []str = []
     }
 
     msg Msg { Init, RunCommand(str), RunResult, RunOutput,
@@ -123,7 +138,7 @@ store ShellStore {
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, RefreshContext, ClearScreen,
               OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int), JobStarted, JobDone,
-              ClearAiPending }
+              ClearAiPending, RunAiStep(int, int), RunAllSteps(int) }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -183,7 +198,8 @@ store ShellStore {
             var block Block = Block{ id: 0, command: "", cwd: "",
                 status: BlockStatus{ kind: "Running", message: "" }, output: RenderedOutput{},
                 streamed_text: "", duration_ms: 0, exit_code: 0, collapsed: false,
-                table_sort_col: -1, table_sort_dir: 1, table_filter_q: "" }
+                table_sort_col: -1, table_sort_dir: 1, table_filter_q: "",
+                steps: [], step_styles: [] }
             block.id = .__pending_command_id
             block.command = cmd
             block.cwd = .cwd
@@ -294,7 +310,8 @@ store ShellStore {
             var block Block = Block{ id: 0, command: "", cwd: "",
                 status: BlockStatus{ kind: "Running", message: "" }, output: RenderedOutput{},
                 streamed_text: "", duration_ms: 0, exit_code: 0, collapsed: false,
-                table_sort_col: -1, table_sort_dir: 1, table_filter_q: "" }
+                table_sort_col: -1, table_sort_dir: 1, table_filter_q: "",
+                steps: [], step_styles: [] }
             block.id = id
             block.command = display
             block.cwd = .cwd
@@ -344,6 +361,74 @@ store ShellStore {
             var pending_ai str = ai_pending()
             if pending_ai != "" {
                 .ai_pending_cmd = pending_ai
+            }
+            // Plan 063 T1: suggest-next chips(命令完成后后台拉取的建议 ×3,
+            // 取后即清 —— 拉空即清 chips)。JSON 数组串用 substr 引号对扫描
+            // 解析(cd 目录补全的 fs.read_dir 解析同款;建议命令是简单命令,
+            // 内嵌引号的转义边角忽略)。handler 侧写平行 str 数组,视图侧
+            // 循环渲染(s_labels 同款)。
+            var raw_next str = ai_next()
+            var nexts []str = []
+            var nn int = raw_next.len()
+            var npi int = 0
+            var n_in_q bool = false
+            var n_cur str = ""
+            for npi < nn {
+                var npc str = raw_next.substr(npi, 1)
+                if npc == "\"" {
+                    if n_in_q {
+                        if n_cur != "" {
+                            nexts.push(n_cur)
+                        }
+                        n_cur = ""
+                        n_in_q = false
+                    } else {
+                        n_in_q = true
+                    }
+                } else {
+                    if n_in_q {
+                        n_cur = n_cur + npc
+                    }
+                }
+                npi = npi + 1
+            }
+            .ai_next_cmds = nexts
+            // Plan 063 T2: 翻译完成时后端把拆步结果(steps,\n 连接)落在
+            // ai_steps 槽(与 ai_pending 同款「槽位先落再发事件」),此处
+            // 拉取后写入 store 级分步字段 + 定位翻译块(`?` 前缀,取最后
+            // 一个 = 最新)。不走 AiSuggestion 事件的 handler 深路径读
+            // (b.output.AiSuggestion.steps 三层读在 VM 静默中止),也不写
+            // 块本地 steps 字段(merged 模式 renderer 构造的块不含新契约
+            // 字段 —— 引擎边界)—— str 槽拉取 + substr 纯字符串拆分是
+            // cd 目录补全已验证的通道,store 字段写有 ai_pending_cmd 先例。
+            var raw_steps str = ai_steps()
+            if raw_steps != "" {
+                var s_sts []str = []
+                var s_sty []str = []
+                var s_n int = raw_steps.len()
+                var s_i int = 0
+                var s_cur str = ""
+                for s_i < s_n {
+                    var s_c str = raw_steps.substr(s_i, 1)
+                    if s_c == "\n" {
+                        if s_cur != "" {
+                            s_sts.push(s_cur)
+                            s_sty.push("text-xs font-mono-ash text-foreground/90 whitespace-pre-wrap break-words flex-1 min-w-0")
+                        }
+                        s_cur = ""
+                    } else {
+                        s_cur = s_cur + s_c
+                    }
+                    s_i = s_i + 1
+                }
+                if s_cur != "" {
+                    s_sts.push(s_cur)
+                    s_sty.push("text-xs font-mono-ash text-foreground/90 whitespace-pre-wrap break-words flex-1 min-w-0")
+                }
+                if s_sts.len() > 0 {
+                    .ai_steps_list = s_sts
+                    .ai_steps_styles = s_sty
+                }
             }
         }
 
@@ -398,6 +483,64 @@ store ShellStore {
         // Plan 062 T11: 关闭 AI 建议条(PromptBar ✕ / 执行后调用)。
         .ClearAiPending -> {
             .ai_pending_cmd = ""
+        }
+
+        // Plan 063 T2: AI 建议分步执行(单步,BlockItem 直调转发)。标记
+        // 已执行(store 级平行数组整体重建 —— VM 的 SET_ELEM 元素赋值不可
+        // 靠,PickCompletion 注释同因;已执行步 = "✓ " 前缀 + 灰样式),
+        // 循环外再提交执行(迭代中 push .blocks 有迭代器风险)。
+        .RunAiStep(id, idx) -> {
+            var chosen str = ""
+            if idx >= 0 && idx < .ai_steps_list.len() {
+                var upd []str = []
+                var usty []str = []
+                var ui int = 0
+                for st in .ai_steps_list {
+                    if ui == idx {
+                        chosen = st
+                        upd.push("✓ " + st)
+                        usty.push("text-xs font-mono-ash text-muted-foreground/50 whitespace-pre-wrap break-words flex-1 min-w-0")
+                    } else {
+                        upd.push(st)
+                        usty.push("text-xs font-mono-ash text-foreground/90 whitespace-pre-wrap break-words flex-1 min-w-0")
+                    }
+                    ui = ui + 1
+                }
+                .ai_steps_list = upd
+                .ai_steps_styles = usty
+            }
+            if chosen != "" {
+                // 重复点击已执行步:剥 ✓ 前缀取原始命令。
+                if chosen.starts_with("✓ ") {
+                    chosen = chosen.substr(2, chosen.len() - 2)
+                }
+                .RunCommand(chosen)
+            }
+        }
+
+        // Plan 063 T2: 全部执行(逐条派发;worker 主循环串行处理,天然
+        // 按序落块 —— [▶▶ 全部执行] 替代整条 && 执行,CLI F3 [s] 分步后
+        // 逐条 y 的 GUI 等价)。
+        .RunAllSteps(id) -> {
+            var origs []str = []
+            for st in .ai_steps_list {
+                if st.starts_with("✓ ") {
+                    origs.push(st.substr(2, st.len() - 2))
+                } else {
+                    origs.push(st)
+                }
+            }
+            var marked []str = []
+            var msty []str = []
+            for st2 in origs {
+                marked.push("✓ " + st2)
+                msty.push("text-xs font-mono-ash text-muted-foreground/50 whitespace-pre-wrap break-words flex-1 min-w-0")
+            }
+            .ai_steps_list = marked
+            .ai_steps_styles = msty
+            for st4 in origs {
+                .RunCommand(st4)
+            }
         }
 
         // Plan 055 Phase A.3: SSE JobStarted/JobDone 实时更新 jobs(无需轮询)。

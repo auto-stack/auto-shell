@@ -636,18 +636,12 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
   430/432 在途占用;块内形态已达成 CLI block_tui 对齐。
 - **参考**:`ash-server/src/worker.rs` spawn_chat_worker。
 
-### T13 suggest-next:环境依赖 Ollama(本机未装)
-
-- **现状**:命令完成后的「接下来」建议未做;CLI 侧同为 best-effort 后台线程。
-- **接受理由**:依赖本地 Ollama 服务,本机未安装;装好后可按 CLI ai/suggest.rs
-  的 PENDING 槽 + CommandResult 后拉取的 RefreshContext 链(与 ai_pending 同款)接入。
-
-### T14 smart NL 路由:与 T12 升级件同捆
-
-- **现状**:run_smart 名字失败 → NL 路由未接;`nlu::route` 已确认可复用
-  (client 注入,走 aaid local 池)。
-- **接受理由**:需离主线程路由(Agent 整轮秒级)+ GUI 入口设计(与 chat 面板
-  交互形态相关)+ local 池质量验证,三件与 T12 升级件重叠。
+<!-- Plan 063 销案(2026-08-25):T13/T14 已由 plan-063 Phase 1 收口后移除 ——
+     T13(suggest-next)按「worker 收尾钩子 + /api/ai_next 取后即清 + App 级
+     chips」落地(原「依赖本地 Ollama」口径有误:fetch_suggestions 走共享
+     AiClient,aaid daemon 即可服务);T14(smart NL 路由)按「命令行 smart
+     词法 + 专用路由线程 + 命中回主循环执行」落地。新债/已知边角见
+     docs/plans/063 与下方「Plan 063 新增已知限制」。 -->
 
 ### 引擎侧预存:auto-lang 430/432 在途致 `test_auto_expression_execution` 挂
 
@@ -667,6 +661,19 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
   handler 原生可用)。
 - prompt_bar `auto_hint`(# 符号)是引擎 is_auto_expression 静态强信号的
   启发式镜像,两端口径可漂移(仅视觉提示,执行路由以引擎为准)。
+
+### Plan 063 新增已知限制(2026-08-25,T1-T3 落地边角)
+
+- **分步数据是 store 级单份**:引擎边界 —— merged 模式 renderer 构造的块
+  不含新契约字段(steps 永远落不到块上),store handler 也遍历不了
+  renderer-owned 的 .blocks(Cancel 注释同证);故分步放
+  `store.ai_steps_list` 且不绑定块 id,连续两次 multi 翻译时旧块显示新
+  steps。引擎窗口(块字段清单/事件族)打开后可归位到块本地字段。
+- **smart NL 回退仅命令行路径**:`smart run <名>` 未命中转 nlu::route
+  (事件流收尾);侧栏 HTTP `/api/run_smart` 同步路径保持 not found 返回
+  (侧栏名字恒来自注册表,不命中只在手敲时发生)。
+- **分步的"已执行步打灰"用 ✓ 前缀 + 预计算样式数组近似**:视图条件文法
+  不支持索引读/contains,样式平行数组是 ●色点同款的既有模式。
 
 ## ash-gui 引擎侧在册债(Plan 058/060 复审入账,2026-08-24)
 

@@ -75,6 +75,10 @@ type Block {
     // Plan 055 D5: 折叠状态移到 block 数据(per-block,避免 VM 单根 state
     // 合并导致点一个全折叠;vue 模式每实例本就独立,此字段两者统一)。
     collapsed bool
+    // Plan 063 T2:AI 建议分步 + 每步样式(前端本地;api.at 的 Block 契约
+    // 是本体,这里同步供前端文档参考)。
+    steps []str
+    step_styles []str
 }
 
 /// Plan 055 Phase A: 后台作业信息(作业控制 `cmd &`)。

@@ -259,6 +259,19 @@ fn register_bridges(
         serde_json::to_string(&worker::read_ai_pending()).map_err(|e| e.to_string())
     }));
 
+    // Plan 063 T1: GET /api/ai_next → suggest-next 建议列表(取后即清)。
+    // read_ai_next 已产 JSON 数组串;call_value 解析 JSON 后 .at 需要拿到
+    // 原始文本(str),故再编码一层(nl2cmd 同款双层)。
+    host_call!("ai_next", Arc::new(move |_args: &str| {
+        serde_json::to_string(&worker::read_ai_next()).map_err(|e| e.to_string())
+    }));
+
+    // Plan 063 T2: GET /api/ai_steps → 最近翻译的拆步结果(\n 连接 str,
+    // 取后即清;ai_pending 同款序列化)。
+    host_call!("ai_steps", Arc::new(move |_args: &str| {
+        serde_json::to_string(&worker::read_ai_steps()).map_err(|e| e.to_string())
+    }));
+
     // GET /api/stream —— 事件已由事件泵注入,HTTP SSE 语义不适用。
     host_call!("stream", Arc::new(|_args: &str| Ok("{}".to_string())));
 }

@@ -85,7 +85,19 @@ def vm_process():
 
 
 def _kill(proc: subprocess.Popen):
-    """Kill the process and its children (auto spawns iced windows)."""
+    """Kill the process and its children (auto spawns iced windows).
+
+    Plan 063: plain proc.kill() leaves the spawned window child alive on
+    Windows — the orphan keeps holding the MCP port (9247), and the NEXT
+    session's VM then fails to bind and exits silently (the intermittent
+    "MCP connection refused" flake across consecutive pytest runs).
+    taskkill /T kills the whole tree.
+    """
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            capture_output=True,
+        )
     try:
         proc.kill()
     except (ProcessLookupError, OSError):

@@ -58,11 +58,15 @@ pub enum RenderedOutput {
     /// joined into one line, empty = clean) and whether it is a multi-step
     /// `&&` chain. Rendered by the GUI block card with run/edit/cancel
     /// actions; the CLI never produces this variant.
+    /// Plan 063 T2: `steps` carries the `ai::split_steps` breakdown of `cmd`
+    /// (single-element for non-`&&` commands) so the GUI card can render one
+    /// row per step with per-step run buttons (CLI F3 `[s]` equivalent).
     AiSuggestion {
         question: String,
         cmd: String,
         notice: String,
         multi: bool,
+        steps: Vec<String>,
     },
 }
 
