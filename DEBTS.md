@@ -718,6 +718,9 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 > **2026-08-24 晚复查**:auto-lang master 已合入 443(defineModel 降级收窄)
 > 与 435 P0/P1(schema 统一/drift 围栏),重编 auto.exe + 重生成后
 > **13 错构成不变** —— 下列 5 类均未被触及,仍待引擎侧立项。
+> **已上报**:auto-lang KNOWN-DEBT-AND-RISKS.md 🟡 表登记
+> `auto-shell-057` 条目(commit 41f4a7b7,含逐类定位与复现命令)——
+> 照 060 RC canary 先例(290ba14c → Plan 419 接手)的跨仓登记路径。
 
 1. **子组件回调命名不一致**(3 错):BlockList/BlockItem 的 props 类型生成
    `on_delete: () => void`(snake_case 且必填),而 App/BlockList 绑定发射
