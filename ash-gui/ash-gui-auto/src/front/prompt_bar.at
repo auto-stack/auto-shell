@@ -26,7 +26,9 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // Plan 053 后续:pwd 仅在顶端标题栏(app.at)显示,输入框不再显示 cwd,
         // 故本 widget 不再需要 cwd_display(home/cwd props 保留,签名不动)。
         // Plan 053 M4: prompt 符号 — 续行时 `·`,正常 `❯`(对齐 repl.rs:913)。
-        prompt_symbol => if .in_continuation { "·" } else { "❯" }
+        // Plan 062 尾项 C1:# = AutoScript 模式标识(镜像引擎 is_auto_expression
+        // 静态强信号,仅视觉提示;computed 不走字段方法调用,非空用 != "" 近似)。
+        prompt_symbol => if .in_continuation { "·" } else if .auto_hint && .input != "" { "#" } else { "❯" }
     }
 
     model {
@@ -49,6 +51,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // 光标字节偏移(渲染层在编辑器消息派发前写入;仅声明处存在时)。
         // 补全按真实光标计算,而非总在行尾。
         var cursor_pos int = 0
+        // Plan 062 尾项 C1:AutoScript 模式标识(OnInputComplete 按输入强信号置位)。
+        var auto_hint bool = false
         var highlighted_spans []HighlightSpan = []
         // Plan 053 后续:Tab 循环补全状态。tab_active=正在 Tab 循环;tab_candidates=
         // 进入循环时缓存的候选(循环期间 input 已被补全、.suggestions 会变,故另存);
@@ -287,10 +291,14 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                         i = j
                     }
                     first_word = false
-                } else if c == "|" || c == ";" || (c == "&" && i + 1 < n && line.substr(i + 1, 1) == "&") {
+                } else if c == "|" || c == ";" || c == "&" {
+                    // Plan 062 T15 回归修复:单个 & (后台运算符 `cmd &`)也走
+                    // Operator —— 此前仅 && 命中,单 & 落进兜底 else 时 j 在
+                    // 分隔符处立即 break、j == i,i 不前进 → 死循环(UI 线程
+                    // 饿死,输入冻结;budget WARN 刷屏即其痕迹)。
                     var ol int = 1
                     if c == "|" && i + 1 < n && line.substr(i + 1, 1) == "|" { ol = 2 }
-                    if c == "&" { ol = 2 }
+                    if c == "&" && i + 1 < n && line.substr(i + 1, 1) == "&" { ol = 2 }
                     var e int = i + ol
                     if e > n { e = n }
                     spans.push(HighlightSpan{text: line.substr(i, e - i), kind: "Operator"})
@@ -405,6 +413,10 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 // vue 端:OnInput(keyup)即时跑 ghost/tokenize,本 handler 80ms debounce
                 // 重复 tokenize —— 幂等。
         .OnInputComplete(v str) -> {
+            // Plan 062 尾项 C1:AutoScript 强信号检测(关键字前缀/字符串字面量;
+            // 函数调用/算术/数组/对象字面量需引擎状态,略 —— 视觉提示够用)。
+            var it str = v.trim()
+            .auto_hint = it.starts_with("fn ") || it.starts_with("let ") || it.starts_with("mut ") || it.starts_with("const ") || it.starts_with("use ") || it.starts_with("type ") || it.starts_with("enum ") || it.starts_with("\"")
             if .tab_just_completed {
                 .tab_just_completed = false
             } else {

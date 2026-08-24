@@ -22,7 +22,7 @@
 
 use std::sync::mpsc;
 
-use auto_ai_agent::tool::Tool;
+use auto_ai_agent::tool::{Tool, ToolOutput};
 use auto_ai_agent::ToolError;
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -152,7 +152,7 @@ impl Tool for AshCommandTool {
         &self.description
     }
 
-    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
+    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
         let cmd_str = json_args_to_cli(&self.name, args)?;
 
         // Refuse known-dangerous patterns before they reach the shell.
@@ -178,6 +178,7 @@ impl Tool for AshCommandTool {
             .map_err(|_| ToolError::Exec("shell thread has exited".into()))?;
         orx.await
             .map_err(|_| ToolError::Exec("shell thread dropped the response".into()))?
+            .map(ToolOutput::text)
     }
 }
 
@@ -288,7 +289,7 @@ impl Tool for EvalAutoTool {
         })
     }
 
-    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
+    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
         let code = args
             .get("code")
             .and_then(|c| c.as_str())
@@ -303,6 +304,7 @@ impl Tool for EvalAutoTool {
             .map_err(|_| ToolError::Exec("shell thread has exited".into()))?;
         orx.await
             .map_err(|_| ToolError::Exec("shell thread dropped the response".into()))?
+            .map(ToolOutput::text)
     }
 }
 
@@ -379,7 +381,7 @@ mod tests {
     async fn runs_command_through_shell() {
         let (_thread, tool) = tool("echo", "print text");
         let out = tool.execute(&json!({"args": ["hello-agent"]})).await.unwrap();
-        assert!(out.contains("hello-agent"), "got: {out}");
+        assert!(out.content.contains("hello-agent"), "got: {}", out.content);
     }
 
     /// The core reason for the dedicated-thread design: session state (cwd,
@@ -407,9 +409,9 @@ mod tests {
                 .to_string()
         };
         assert!(
-            norm(&pwd) == norm(&tmp_str),
+            norm(&pwd.content) == norm(&tmp_str),
             "pwd '{}' should reflect cd into '{}'",
-            pwd,
+            pwd.content,
             tmp_str
         );
     }
@@ -443,7 +445,7 @@ mod tests {
         let t: &dyn Tool = &tool;
         assert_eq!(t.name(), "pwd");
         let out = t.execute(&Value::Null).await.unwrap();
-        assert!(!out.trim().is_empty(), "pwd should return a path");
+        assert!(!out.content.trim().is_empty(), "pwd should return a path");
     }
 
     // ── EvalAutoTool (Plan 029 §6) ─────────────────────────────────────
@@ -454,7 +456,7 @@ mod tests {
         // Drive the async tool call on a one-shot runtime (Shell::new inside
         // the thread does AutoLang VM init that can't run in a tokio ctx, but
         // the thread itself is a plain std::thread so this is fine).
-        tool.execute(&json!({"code": code})).await
+        tool.execute(&json!({"code": code})).await.map(|o| o.content)
     }
 
     #[tokio::test]

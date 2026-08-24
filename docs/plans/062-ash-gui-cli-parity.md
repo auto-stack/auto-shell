@@ -393,3 +393,73 @@ auto-lang master 被 430/431/432 占用(当前 auto.exe 构建于 00:50,430 波�
 - 无 daemon 时翻译失败 → Failed 块带「(start the aaid daemon or set AAID_URL)」
   提示(对齐 CLI 口径);Vue 端建议条渲染同源,RefreshContext 拉取在 Vue 的触发
   依赖 SSE dispatch 链(未在本环境验证,块卡片按钮在 Vue 走 .at handler 原生可用)。
+
+## 11. Phase 3 续:T15 + B3 + 尾项 C1(2026-08-24 下午,同 session)
+
+### T15 / B2:AI 补全层 —— 结论「引擎已通,GUI 零接线」
+
+调研推翻了差距表的旧判定:AI 合并逻辑早在 Plan 037/041 间已**下沉 engine::complete
+本身**(触发 `trigger_ai_subcommand`/`trigger_nl_to_pipeline` + 合并 `merge_ai_pending`
++ 防泄漏键匹配全在引擎内,engine.rs:123-162),而 worker 补全线程(T10)调的就是
+`engine::complete` —— GUI 侧无需任何接线,`ai_completion_enabled` 默认 true。
+本轮交付 = 假后端钩子 + 端到端验证:
+
+- `ASH_FAKE_AI` 门控补进 ai_layer 两个 fetcher(与 nl2cmd worker 同款闸门;确定性
+  返回,测试不动真实 daemon)。
+- **AC-01**(GUI 端到端):命令名位置输入未知中文短语(`nlfake查文件`)→ 第一轮
+  complete 触发后台翻译 → 同行第二轮 complete 合并「echo fake-ai:…」候选进面板
+  (kind=ai,粉色点)。中文短语同时覆盖了多字节光标修复(见下)。
+
+### B3:上下文排序 —— 专项验证通过
+
+`context_rank`(历史频率 +0.5/条、git 仓库 +2.0、上一条命令连贯性 +1.0,stable
+sort)同样已在 engine::complete 命令名位置生效。**CR-01**:连跑 3 次 `glob …`(共享
+历史 +3 条 glob 词条)后输入 `g` 前缀,glob 候选越过 grep(grep/glob 历史基线计数
+均为 0,加分项确定主导)。注:git 不在候选表(非注册命令),仓库通道无从验证,
+用频率通道代验 —— 排序逻辑三者同函数,一通皆通。
+
+### 尾项 C1:AutoScript 模式标识
+
+prompt 符号三态:续行 `·` > AutoScript `#` > Shell `❯`。检测在 OnInputComplete
+handler 侧算 `auto_hint`(镜像引擎 is_auto_expression 的**静态强信号**:fn/let/
+mut/const/use/type/enum 关键字前缀 + 字符串字面量首字符;函数调用/算术/数组/对象
+字面量需引擎状态,略 —— 仅视觉提示,执行路由仍由引擎自动检测)。**C1-01** 验证
+`let x = 1` → `#`、`echo hi` → `❯`。A6(edit_mode 配置联动)仍不做(低优先)。
+
+### 三笔顺带修复
+
+1. **DoTokenize 单 `&` 死循环(GUI 全交互冻结的真凶)**:Operator 分支只认 `&&`,
+   单个 `&`(后台运算符 `cmd &`)落进兜底 else 时 j 在分隔符处立即 break、
+   j == i、`i = j` 不前进 → 死循环饿死 UI 线程(budget WARN 刷屏即其痕迹;症状
+   = 输入冻结、提交无响应,JP/DM/CC 全族连坐失败)。修复:单 `&` 也走 Operator
+   (ol=1)。**定位曲折记录**:症状首次出现在全套件回归,二分排除了 .at(C1)与
+   cdylib(engine/ai_layer)后仍复现,最终以 amp 变体探针矩阵 + VM 日志
+   (止步于 DoTokenize 的 budget WARN)锁定;HTTP complete 不复现是因为死循环在
+   .at tokenize handler,与补全线程无关。
+2. **engine::complete 多字节光标 panic**:光标字节偏移可落在多字节字符中间(中文
+   输入 + 字符计数光标,实测 `nlfake查文件` cursor=10)→ `&line[..pos]` panic →
+   **补全线程整线程死亡**(会话级补全全灭)。钳到最近字符边界(向后退);附
+   auto-shell 单测 `multibyte_cursor_mid_char_does_not_panic`。
+3. **auto-ai 跨仓漂移两处**(auto-ai main 今日 12:16-13:14 落 Plan-027/028):
+   `Tool::execute` 返回类型 String → `ToolOutput`(content/details 双通道)——
+   ash_command_tool.rs 两处实现 + 测试适配(`.map(ToolOutput::text)` / `.content`);
+   TurnStart/TurnEnd 兜底(T11 时已修)。另登记:**auto-shell 单测
+   `test_auto_expression_execution` 现挂**(Auto VM 数组显示成 `<obj#…>`,与
+   auto-lang master 430/432 在途改动相关,与本计划改动零交集,stash 对照因编译
+   漂移无法成立 —— 待引擎侧确认)。
+
+### T14:评估后顺延(与 T12 同捆)
+
+`nlu::route` 可复用(client 注入,走 aaid 的 local 池),但需要:① 离主线程路由
+(Agent 整轮秒级,主 worker 串行);② GUI 入口设计(参数二义 or 独立前缀,与
+T12 chat 面板的交互形态相关);③ local 池路由质量验证。三件都与 T12 的 AI 会话
+工作重叠,合并处理。
+
+### 回归口径
+
+- parity 文件最好一次 **20 pass + 1 skip**(22 项,仅 CC-01 实例级键盘竞态 skip);
+  单项单跑全过。全套件多轮:**75-79 pass / 46-48 skip**,失败集在
+  {cs01, he02, he03, pb04, pb10, nl03} 间轮换且均单跑即过 —— 全部为记录在案的
+  键盘竞态/时序 flake 族(本轮机器负载显著:套件耗时 12.5min vs T11 时的 9.5min,
+  同机 auto-ai/auto-lang 并行会话在跑)。新增 AC-01/CR-01/C1-01 三项在所有轮次
+  稳定通过;无真实回归。

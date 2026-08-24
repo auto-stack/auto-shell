@@ -18,6 +18,13 @@ Phase 3 (T11):
             Requires ASH_FAKE_AI=1 in the environment (conftest forwards the
             parent env to the VM process) — the fake backend never touches the
             real aaid daemon (plan 062 §5 fake-backend contract).
+- AC-01     AI completion layer merge (T15/B2): an unknown NL phrase at the
+            command-name position triggers a background fetch; the next
+            complete() at the same line merges the AI candidate (engine
+            merge_ai_pending + ai_layer cache, same source as the CLI).
+- CR-01     context-aware ranking (B3 verification): inside a git repo, the
+            git candidate outranks grep for prefix "g".
+- C1-01     AutoScript mode prompt symbol (#) on Auto-syntax input (尾部小项).
 
 Flake notes: the MCP action channel occasionally delays (not drops) submits —
 single submit + generous wait beats retry storms (a retry storm can queue
@@ -521,3 +528,93 @@ def test_nl03_execute_and_cancel_buttons(mcp):
         lambda c: c.snapshot().count(marker) == 2, timeout=10, interval=0.5
     )
     assert ok, "cancel did not remove the suggestion block (count != 2)"
+
+
+# ── T15/B2: AI completion layer merge (fake AI) ─────────────────────────────
+
+def test_ac01_ai_completion_merges_nl_candidate(mcp):
+    """命令名位置输入未知自然语言短语 → 引擎触发后台翻译线程(ASH_FAKE_AI
+    确定性返回);同一行下一次 complete 合并 AI 候选(engine merge_ai_pending,
+    与 CLI 同源)。候选面板出现「(自然语言翻译)」条目。"""
+    if not _fake_ai():
+        pytest.skip("set ASH_FAKE_AI=1 for T11/T15 fake-AI tests")
+    _ensure_prompt_active(mcp)
+    # 第一轮:触发后台 fake 线程(落 ai_layer 槽位,键 = 整行)
+    mcp.call(
+        "autoui_type", text="nlfake查文件", element_id=_find_prompt_input_vnode(mcp),
+        clear_first=True,
+    )
+    time.sleep(1.5)  # 后台线程落槽(in-flight 去重后即时完成)
+    # 第二轮:同一整行的 complete 合并槽位里的 AI 候选
+    mcp.call(
+        "autoui_type", text="nlfake查文件", element_id=_find_prompt_input_vnode(mcp),
+        clear_first=True,
+    )
+    ok = mcp.wait_until(
+        lambda c: "echo fake-ai:nlfake查文件" in c.snapshot(), timeout=10, interval=0.5
+    )
+    snap = mcp.snapshot()
+    assert ok, (
+        f"AI NL candidate did not merge into the panel "
+        f"(multibyte input + second-complete merge):\n{snap[:400]}"
+    )
+    # 面板计数行在(候选已进 s_labels;描述列文本节点在快照中偶有视觉过滤,
+    # 断言以候选按钮标签为准)
+    assert "候选" in snap
+
+
+# ── B3: context-aware ranking verification ──────────────────────────────────
+
+def test_cr01_history_frequency_ranks_candidate(mcp):
+    """B3 专项验证:命令名位置的 context_rank 历史频率加分 —— 连跑 3 次
+    `glob t15rank-marker`(历史 +3 条 glob 词条,+1.5 分)后,输入 g 前缀
+    时 glob 候选应越过 grep(基线序 grep/get/glob,共享历史中 grep/glob
+    词条计数为 0,加分项确定主导)。engine::complete → context_rank 与
+    CLI 同源;git 不在候选表(非注册命令),故用频率通道验证。"""
+    for _ in range(3):
+        _submit_command(mcp, "glob t15rank-marker")
+        mcp.wait_until(_no_running, timeout=15)
+    _ensure_prompt_active(mcp)
+    mcp.call(
+        "autoui_type", text="g", element_id=_find_prompt_input_vnode(mcp),
+        clear_first=True,
+    )
+    ok = mcp.wait_until(lambda c: "候选" in c.snapshot(), timeout=10, interval=0.5)
+    snap = mcp.snapshot()
+    assert ok, f"candidate panel did not appear for 'g':\n{snap[:300]}"
+    m_glob = re.search(r'button #[A-Za-z0-9_]+ "glob"', snap)
+    m_grep = re.search(r'button #[A-Za-z0-9_]+ "grep"', snap)
+    assert m_glob, f"glob candidate missing for prefix 'g':\n{snap[:400]}"
+    assert m_grep, f"grep candidate missing for prefix 'g':\n{snap[:400]}"
+    assert m_glob.start() < m_grep.start(), (
+        f"history frequency should rank glob above grep (context_rank):\n{snap[:400]}"
+    )
+
+
+# ── 尾部小项 C1: AutoScript 模式标识 ────────────────────────────────────────
+
+def test_c101_autoscript_prompt_symbol(mcp):
+    """Auto 语法输入(fn/let/… 关键字前缀)→ prompt 符号切 #;普通命令回 ❯
+    (镜像引擎 is_auto_expression 的静态强信号,仅视觉提示)。"""
+    _ensure_prompt_active(mcp)
+    mcp.call(
+        "autoui_type", text="let x = 1", element_id=_find_prompt_input_vnode(mcp),
+        clear_first=True,
+    )
+    ok = mcp.wait_until(
+        lambda c: re.search(r'text #[A-Za-z0-9_]+ "#"', c.snapshot()) is not None,
+        timeout=10, interval=0.5,
+    )
+    assert ok, f"'#' AutoScript symbol did not appear for 'let x = 1':\n{mcp.snapshot()[:300]}"
+    mcp.call(
+        "autoui_type", text="echo hi", element_id=_find_prompt_input_vnode(mcp),
+        clear_first=True,
+    )
+    time.sleep(1.0)
+    snap = mcp.snapshot()
+    assert re.search(r'text #[A-Za-z0-9_]+ "❯"', snap), (
+        f"shell input should show '❯':\n{snap[:300]}"
+    )
+    assert not re.search(r'text #[A-Za-z0-9_]+ "#"', snap), (
+        f"'#' should be gone for shell input:\n{snap[:300]}"
+    )

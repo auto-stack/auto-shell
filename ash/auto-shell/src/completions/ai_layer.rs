@@ -284,6 +284,15 @@ pub fn store(slot: AiSlot, key: String, completions: Vec<Completion>) {
 
 // ── Background-thread fetchers (each builds its own runtime) ────────────
 
+/// Plan 062 T15: ASH_FAKE_AI (non-empty) swaps the model for deterministic
+/// fakes so GUI/engine tests never touch the real daemon (plan 062 §5
+/// fake-backend contract — same gate as ash-server's nl2cmd worker).
+fn fake_ai_enabled() -> bool {
+    std::env::var("ASH_FAKE_AI")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+}
+
 /// Ask the local model for subcommand/flag candidates. Synchronous (runs on
 /// the background thread). Filters the response to the typed prefix.
 fn fetch_subcommands(
@@ -291,6 +300,16 @@ fn fetch_subcommands(
     prefix: &str,
     ctx: &CtxSnapshot,
 ) -> Result<Vec<Completion>, String> {
+    if fake_ai_enabled() {
+        let label = format!("fake-sub-{cmd}");
+        return Ok(vec![Completion {
+            display: label.clone(),
+            replacement: label,
+            description: Some("(AI 建议)".into()),
+            kind: CompletionKind::AiSuggested,
+            is_prefix_match: true,
+        }]);
+    }
     let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
     let system = format!(
         "You complete subcommands/flags for the shell command `{cmd}` in Ash.\n\
@@ -343,6 +362,16 @@ fn fetch_subcommands(
 /// Ask the local model to translate a natural-language phrase into an ash
 /// command/pipeline. Synchronous (background thread).
 fn fetch_nl_pipeline(input: &str, ctx: &CtxSnapshot) -> Result<Completion, String> {
+    if fake_ai_enabled() {
+        let cmd = format!("echo fake-ai:{input}");
+        return Ok(Completion {
+            display: cmd.clone(),
+            replacement: cmd,
+            description: Some("(自然语言翻译)".into()),
+            kind: CompletionKind::AiSuggested,
+            is_prefix_match: true,
+        });
+    }
     let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
     let system = format!(
         "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\

@@ -78,7 +78,13 @@ pub fn complete(
     provider: &mut CompletionProvider,
     ctx: &CompletionCtx,
 ) -> Vec<Completion> {
-    let pos = cursor.min(line.len());
+    // Plan 062 T15:光标是字节偏移,但可能落在多字节字符中间(中文输入 +
+    // 前端按字符计数的光标,实测 `nlfake查文件` cursor=10 → 曾经在此 panic,
+    // 整个补全线程死亡)。钳到最近的字符边界(向后退)。
+    let mut pos = cursor.min(line.len());
+    while pos > 0 && !line.is_char_boundary(pos) {
+        pos -= 1;
+    }
     let before_cursor = &line[..pos];
     let trimmed = before_cursor.trim_end();
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -317,5 +323,31 @@ fn execute_command(cmd: &str, cwd: &Path) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[cfg(test)]
+mod plan062_tests {
+    use super::*;
+
+    fn ctx() -> CompletionCtx {
+        CompletionCtx {
+            current_dir: std::path::PathBuf::from("."),
+            last_command: None,
+            last_exit_code: None,
+            history: vec![],
+            aliases: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Plan 062 T15:光标落在多字节字符中间(中文输入 + 字符计数光标)不得
+    /// panic —— 曾经 `&line[..pos]` 直接切片令补全线程整线程死亡。
+    #[test]
+    fn multibyte_cursor_mid_char_does_not_panic() {
+        let mut provider = CompletionProvider::new();
+        let sigs: Vec<CompletionSignature> = vec![];
+        // “nlfake查文件”: 查 = bytes 6..9, 文 = 9..12 — cursor 10 在「文」中间。
+        let items = complete("nlfake查文件", 10, &sigs, &mut provider, &ctx());
+        assert!(items.iter().all(|c| !c.replacement.is_empty()));
     }
 }
