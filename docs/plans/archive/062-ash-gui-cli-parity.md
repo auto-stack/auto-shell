@@ -1,8 +1,11 @@
 # 062 — ash-gui(Auto/vue·VM)与 CLI 版功能差距补全
 
 - 日期:2026-08-23
-- 状态:**Phase 1/2 完成;Phase 3 T11(NL→命令)完成**(2026-08-24,§10)。全套件
-  78 pass / 48 skip / 0 失败。T12-T15 未开工。实施记录见 §7/§8/§9/§10
+- 状态:**COMPLETE(P1+P2+P3 主干全落地,2026-08-24)**。零引擎约束下可做的
+  全部交付:T11 NL→命令(§10)、T15 AI 补全层 + B3 排序验证 + 尾项 C1(§11)、
+  T12 块内 AI chat(§12);全套件 83 pass / 44 skip 新水位。纯外部依赖尾项
+  (T12 升级件 AiChunk 事件族 / T13 Ollama / T14 smart NL 路由)登记 DEBTS。
+  实施记录见 §7-§12
 - 调研对象:
   - **CLI 版** = `ash` bin(`ash/ash/src/main.rs`)+ `ash-tui`(reedline REPL、菜单/高亮/hinter、less/color)+ `auto-shell`(引擎、命令注册表、补全编排)+ `ash-core`(parser/pipeline/interactive 名单)
   - **GUI 版** = `ash-gui/ash-gui-auto`(.at 前端,Vue/VM 双渲染)+ `ash-gui/ash-server`(ash-server HTTP bin / ash-runner merged bin,worker 进程内 auto_shell::Shell)

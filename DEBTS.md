@@ -625,3 +625,45 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 - **连带观察**:`AUTO_VM_MERGE=0` split 开关(Plan 340 既有机制)实测未生效
   (仍走 merged 分支;2026-08-23 finish-plan 复审发现,非 061 回归)——实现
   --http 时顺带排查。
+
+## ash-gui CLI 对齐(Plan 062 延期项/已知限制)
+
+### T12 升级件:AiChunk SSE 事件族 + 右侧抽屉 chat 面板(需引擎窗口)
+
+- **现状**:T12 已落零引擎「块内 chat」(`??` 前缀,流式经既有 CommandOutput
+  事件,§12);原规格的 AiChunk/AiToolCall/AiToolResult 事件族 + 抽屉面板未做。
+- **接受理由**:新 SSE 事件族需动 auto-lang master(renderer 白名单/vue 链),
+  430/432 在途占用;块内形态已达成 CLI block_tui 对齐。
+- **参考**:`ash-server/src/worker.rs` spawn_chat_worker。
+
+### T13 suggest-next:环境依赖 Ollama(本机未装)
+
+- **现状**:命令完成后的「接下来」建议未做;CLI 侧同为 best-effort 后台线程。
+- **接受理由**:依赖本地 Ollama 服务,本机未安装;装好后可按 CLI ai/suggest.rs
+  的 PENDING 槽 + CommandResult 后拉取的 RefreshContext 链(与 ai_pending 同款)接入。
+
+### T14 smart NL 路由:与 T12 升级件同捆
+
+- **现状**:run_smart 名字失败 → NL 路由未接;`nlu::route` 已确认可复用
+  (client 注入,走 aaid local 池)。
+- **接受理由**:需离主线程路由(Agent 整轮秒级)+ GUI 入口设计(与 chat 面板
+  交互形态相关)+ local 池质量验证,三件与 T12 升级件重叠。
+
+### 引擎侧预存:auto-lang 430/432 在途致 `test_auto_expression_execution` 挂
+
+- **现状**:auto-shell 单测中 Auto 数组显示成 `<obj#…>`(期望 `[1, 2, 3]`),
+  与本仓改动零交集(stash 对照因 auto-ai 编译漂移无法成立)。
+- **接受理由**:auto-lang master 被 430/432 占用,重建 auto.exe 即吸入在途
+  WIP;待引擎侧确认/修复后回归。
+
+### 已知限制(小项,视觉/边角)
+
+- AI 翻译/建议块在翻译中不可 Stop(全局 cancel flag 与其他命令生命周期有竞态,
+  误判会把建议错标 Cancelled;翻译秒级)—— `worker.rs` Run 分支。
+- `CommandResult.output = RenderedOutput::Empty` 序列化为裸字符串 `"Empty"`
+  (非 null),引擎 update_block_in_state 不走 streamed_text 回退且清空之 ——
+  长流式收尾必须自带 `Text(全文)`(chat 线程已如此,新调用方需注意)。
+- Vue 端 `ai_pending` 编辑回填链未在本环境验证(块卡片按钮在 Vue 走 .at
+  handler 原生可用)。
+- prompt_bar `auto_hint`(# 符号)是引擎 is_auto_expression 静态强信号的
+  启发式镜像,两端口径可漂移(仅视觉提示,执行路由以引擎为准)。
