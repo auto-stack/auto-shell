@@ -1,8 +1,8 @@
 # 057 — 提高 VM 版 ash-gui 可用性:真后端(HTTP) + 显示对齐
 
 - 日期:2026-08-16
-- 状态:**Phase 0/1/2 完成;Phase 3 被 plan-060 接棒超出;Phase 4 余两件**
-  (§4.4 skip 复核解锁、§4.5 vue 产物重生成;§4.6 被 plan-061 取代)—— 见 §5 复审
+- 状态:**COMPLETE(2026-08-25 收官)**——Phase 0/1/2 + Phase 5 全落地;vue 侧引擎
+  阻塞由 auto-lang Plan 444(auto-shell-057 条目)修复后 Vue 构建全绿,归档
 - 上游:plan-056(其 §2 阻塞 A 已修,本文接棒其 §3 剩余项)
 - 跨仓库提交:auto-lang `e0decbadf`/`5856ae069`/`8be979338`/`f085a2334`,
   auto-shell `f93a169`/`d9f4586`/`bf55654`/`27342f4`
@@ -198,5 +198,11 @@ vue-tsc 错误 78 → 13。
 
 **依赖复查(2026-08-24 晚)**:auto-lang master 已合入 Plan 443 完成(defineModel
 降级收窄)与 Plan 435 P0/P1;重编 auto.exe + 重生成 + 复测,**13 错构成不变**
-(5 类引擎阻塞均未被触及,435 P5 在途)。VM 侧新引擎冒烟 8/8 过。→ 本计划仍差
-引擎侧 vue codegen 5 类修复(DEBTS 在册)方可归档。
+(5 类引擎阻塞均未被触及,435 P5 在途)。VM 侧新引擎冒烟 8/8 过。
+
+**收官(2026-08-25)**:auto-lang **Plan 444**(merge `de76581ea`)修复全部五类
+(回调 props 走 emit 通道/变体字段非空断言/emit payload 门控/VM-only 原语降级
+抛错桩/str 动态点访问 any 通道)+ gen 模板缺口(@vueuse 检测/CodeEditor 清理)。
+主检出 auto.exe 重编 + `auto gen` 后:**vue-tsc 0 错、`pnpm run build` 全绿、
+三件手工补丁全部不再需要**;VM 全套件 94 pass / 34 skip / 3 失败(键盘竞态
+flake 族,单跑全过,与既往水位一致)。本计划完成,归档。

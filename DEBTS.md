@@ -712,6 +712,12 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 
 ## Vue 产物构建引擎侧阻塞(Plan 057 Phase 5 T-B,2026-08-24)
 
+> **✅ 已解决(2026-08-25,auto-lang Plan 444,merge `de76581ea`)**:五类 +
+> gen 模板缺口全部修复(回调 props 走 emit 通道/变体字段非空断言/emit payload
+> 门控/VM-only 原语降级抛错桩/str 动态点访问 any 通道;@vueuse 检测/CodeEditor
+> 清理)。主检出重编 + `auto gen` 后 vue-tsc 0 错、`pnpm run build` 全绿、
+> 三件手工补丁不再需要。本节留档供追溯。
+>
 > `auto gen` 重生成 + 仓内契约修复后,vue-tsc 余 13 错 / 5 类,均为 auto-lang
 > vue/ts codegen 域(master 时点被 Plan 443 会话占用,未动)。修复后 Vue 构建
 > 应能全绿;当前 Vue/浏览器模式**不可构建**,merged VM 模式不受影响。

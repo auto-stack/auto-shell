@@ -1,9 +1,8 @@
 # 059 — TableBlock 表格增强 V1:排序 / 过滤 / 斑马线 / 右对齐 / 点击打开 / CSV 导出
 
 - 日期:2026-08-21
-- 状态:**VM 侧 V1 闭环**(2026-08-24 复审:过滤链路/▲▼ 指示由 plan-062 T9
-  修复并当日复验通过;首命令 bug 不复现;CSV/TSV 导出在码待人工确认;
-  余 Vue 侧增强 + vue 产物验证,见 §7)
+- 状态:**COMPLETE(2026-08-25 收官)**——VM 侧 V1 + Phase 2 尾巴全部落地
+  (过滤/▲▼/CSV-TSV 剪贴板自动化/hover/sticky;列宽拖拽延期入账 DEBTS),归档
 - 上游:plan-058(行内编辑;其提交 45ef43ad 后出现的"首命令失败"回归影响
   本轮所有验证,见 §5.3)
 - 跨仓库提交:auto-lang worktree(auto-shell 分支)`534b1e36`,
@@ -128,3 +127,7 @@ V1 全量:点击表头排序(方向指示)、列宽调整(仅 Vue 拖拽,VM iced
 表头吸顶已加(`sticky top-0 z-10 backdrop-blur-sm`,block_item.at 表头行 ——
 Vue 生效,VM 忽略 sticky 无害,生成产物已验证);**列宽拖拽延期**(需 vue.rs
 JS 注入或生成物后处理,入 DEBTS)。
+
+**收官(2026-08-25)**:auto-lang Plan 444 修复 vue codegen 五类阻塞后,Vue 构建
+全绿(vue-tsc 0 错 + vite build 成功),本计划的 Vue 侧验证随之闭环
+(sticky/hover 在生成产物中生效)。唯一遗留 = 列宽拖拽(DEBTS 在册延期)。归档。
