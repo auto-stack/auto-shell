@@ -53,6 +53,17 @@ pub enum RenderedOutput {
         message: String,
         kind: RenderErrorKind,
     },
+    /// Plan 062 T11: AI NL→command suggestion (GUI `?` prefix). Carries the
+    /// translated command plus the validation notice (danger/warning findings
+    /// joined into one line, empty = clean) and whether it is a multi-step
+    /// `&&` chain. Rendered by the GUI block card with run/edit/cancel
+    /// actions; the CLI never produces this variant.
+    AiSuggestion {
+        question: String,
+        cmd: String,
+        notice: String,
+        multi: bool,
+    },
 }
 
 /// One colored span within a line of syntax-highlighted code.

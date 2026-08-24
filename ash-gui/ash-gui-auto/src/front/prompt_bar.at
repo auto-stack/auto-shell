@@ -19,7 +19,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
               PickCompletion(CompletionItem), PickCompletionIdx(int),
               ToggleHistorySearch,
               AcceptGhost, AcceptGhostWord, OnCtrlL, DoTokenize,
-              OnEnter(str), DoContinuation, BuildSuggestionMeta }
+              OnEnter(str), DoContinuation, BuildSuggestionMeta,
+              AiFill, AiDismiss }
 
     computed {
         // Plan 053 后续:pwd 仅在顶端标题栏(app.at)显示,输入框不再显示 cwd,
@@ -88,6 +89,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
 
     // props: cwd str, home str, command_names []str,
     //        history []str, injected_command str,
+    //        ai_suggestion str(Plan 062 T11:待处理 AI 建议命令,空 = 无条),
     //        on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg
 
     view {
@@ -124,6 +126,32 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                                 style: "text-[10px] text-muted-foreground/70 truncate flex-1 min-w-0 text-right"
                             }
                         }
+                    }
+                }
+            }
+
+            // Plan 062 T11:AI 建议条(`?` 前缀翻译完成时出现,输入框正上方)。
+            // 绑定 store.ai_pending_cmd(经 App prop 透传;view 渲染不依赖
+            // prop watcher —— VM 端 watcher 不可靠,Plan 057 Pick 桥注释同证)。
+            // [✎ 编辑] 填入输入框(本 widget handler 写自身 .input;回车即执行,
+            // CLI F3 的 Enter 语义)、[✕] 经 store.ClearAiPending 关条。直接执行
+            // 走块卡片 [▶ 执行](Rerun 桥)。
+            if .ai_suggestion != "" {
+                row {
+                    style: "items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-2 py-1"
+                    text "AI:" {
+                        style: "text-[10px] text-sky-400/80 font-semibold shrink-0 select-none"
+                    }
+                    text .ai_suggestion {
+                        style: "text-xs font-mono-ash text-foreground/90 truncate flex-1 min-w-0"
+                    }
+                    button "✎ 编辑" {
+                        onclick: .AiFill
+                        style: "text-xs px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 cursor-pointer shrink-0 select-none"
+                    }
+                    button "✕" {
+                        onclick: .AiDismiss
+                        style: "text-xs px-1.5 py-0.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 cursor-pointer shrink-0 select-none"
                     }
                 }
             }
@@ -798,6 +826,26 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
             if .input.trim() == "" {
                 .Exit()
             }
+        }
+
+        // Plan 062 T11:AI 建议条两动作。[✎ 编辑] 镜像 injected_command watch
+        // body 的填入写法(本 widget 自身字段,handler 直写可靠;填入后回车
+        // 即执行,CLI F3 的 Enter 语义);[✕] 关条。直接执行走块卡片 ▶ 按钮
+        // (Rerun 桥)——emit 模拟桥的 cmd 取自 state.input 抢救值(空输入时
+        // 点击执行会拿到空串),故不在此放执行按钮。
+        .AiFill -> {
+            if .ai_suggestion != "" {
+                .input = .ai_suggestion
+                .history_cursor = -1
+                .suggestions = []
+                .BuildSuggestionMeta()
+                .history_open = false
+                .DoTokenize()
+            }
+        }
+
+        .AiDismiss -> {
+            store.ClearAiPending()
         }
 
         // Tab:应用第一个补全候选

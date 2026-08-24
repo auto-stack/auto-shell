@@ -833,6 +833,12 @@ fn spawn_chat_worker(
                                     // Done is handled by the send_turn_streaming return.
                                     return;
                                 }
+                                // auto-ai 新增的回合边界事件(2026-08-23 漂移,
+                                // ask.rs 同款兜底):CLI 内联展示无需呈现。
+                                auto_ai_agent::agent::StreamEvent::TurnStart { .. }
+                                | auto_ai_agent::agent::StreamEvent::TurnEnd { .. } => {
+                                    return;
+                                }
                             };
                             let _ = tx.send(chat_ev);
                         });
@@ -1283,6 +1289,9 @@ fn render_structured_block(
         RenderedOutput::Table { .. } => unreachable!(),
         // Handled by the colored-spans branch above (early return).
         RenderedOutput::Code { .. } => unreachable!(),
+        // Plan 062 T11: only the GUI worker produces this variant; render the
+        // suggestion as its command text if it ever reaches the CLI.
+        RenderedOutput::AiSuggestion { cmd, .. } => Some(format!("AI: {cmd}")),
     };
     let body_lines: Vec<String> = body_text
         .map(|s| s.lines().map(|l| l.to_string()).collect())

@@ -78,6 +78,16 @@ pub fn kill_job(job_id int) {
     host.call("kill_job", "{\"job_id\":" + job_id.str() + "}")
 }
 
+// Plan 062 T11:NL→命令翻译(同步契约端点;返回裸 JSON 字符串)。
+pub fn nl2cmd(nl str) str {
+    return host.call_value("nl2cmd", "{\"nl\":" + json.encode(nl) + "}")
+}
+
+// Plan 062 T11:待回填的 AI 建议命令(取后即清;空串 = 无)。
+pub fn ai_pending() str {
+    return host.call_value("ai_pending", "{}")
+}
+
 // merged-host 模式:事件由 runner 的 ShellEvent 广播经
 // auto_lang::inject_shell_event 直接注入前端事件泵(SSE 同格式),
 // 不消费此流。HTTP 模式:真实 SSE 由 ash-server /api/stream 提供。

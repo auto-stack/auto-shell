@@ -28,6 +28,9 @@ path = "src/bin/ash-runner.rs"
 # Shell engine (same as ash-gui-vue)
 ash-core = { path = "../../ash-core" }
 auto-shell = { path = "../../ash/auto-shell", default-features = false }
+# Plan 062 T11: NL→命令翻译复用 CLI F3 同款 aaid 客户端(auto-ai 兄弟仓,
+# 锚定同 ash-tui / auto-shell 的 path 布局)。
+auto-ai-client = { path = "../../../auto-ai/crates/auto-ai-client" }
 
 # Plan 060 M3:runner 侧 —— GUI 编排(auto-man)+ 宿主桥注入(auto-lang)。
 # 跨仓 path 依赖锚定 D:\autostack 兄弟布局:主检出直接成立;worktree

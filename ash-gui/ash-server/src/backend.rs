@@ -240,6 +240,25 @@ fn register_bridges(
         Ok("{}".to_string())
     }));
 
+    // Plan 062 T11: POST /api/nl2cmd {nl} → 裸 JSON 字符串
+    // {ok,cmd,notice,multi} / {ok:false,error}。call_value 会解析 JSON,
+    // 再编码一层让 shell.at 的 `-> str` 拿到原始 JSON 文本(无 .at 消费者,
+    // 契约占位;HTTP 形态返回未包裹的对象形状,测试直读)。
+    let s = shell.clone();
+    let rt8 = rt.clone();
+    host_call!("nl2cmd", Arc::new(move |args: &str| {
+        let v: serde_json::Value = serde_json::from_str(args)
+            .map_err(|e| format!("nl2cmd: bad args: {}", e))?;
+        let nl = v.get("nl").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let payload = rt8.block_on(s.nl2cmd(nl)).map_err(|e| e)?;
+        serde_json::to_string(&payload).map_err(|e| e.to_string())
+    }));
+
+    // Plan 062 T11: GET /api/ai_pending → 待回填建议命令(取后即清)
+    host_call!("ai_pending", Arc::new(move |_args: &str| {
+        serde_json::to_string(&worker::read_ai_pending()).map_err(|e| e.to_string())
+    }));
+
     // GET /api/stream —— 事件已由事件泵注入,HTTP SSE 语义不适用。
     host_call!("stream", Arc::new(|_args: &str| Ok("{}".to_string())));
 }

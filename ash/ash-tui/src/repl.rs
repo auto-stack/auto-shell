@@ -583,6 +583,10 @@ impl Repl {
                 auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
                     println!("\n  [cancelled]");
                 }
+                // auto-ai 新增的回合边界事件(2026-08-23 漂移,ask.rs 同款
+                // 兜底):CLI 内联展示无需呈现。
+                auto_ai_agent::agent::StreamEvent::TurnStart { .. }
+                | auto_ai_agent::agent::StreamEvent::TurnEnd { .. } => {}
             },
         );
         let session = self.chat.as_mut().expect("chat session initialized in run_chat_loop");

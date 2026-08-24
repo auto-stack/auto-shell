@@ -6,7 +6,7 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job
+use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job, ai_pending
 use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput, JobInfo
 
 // format_git_label — APP-05/06:格式化 git 分支+状态标签。
@@ -112,13 +112,18 @@ store ShellStore {
         var __sse_job_exit int = 0
         var __pending_command_id int = 0
         var __pending_command_str str = ""
+        // Plan 062 T11: 待回填的 AI 建议命令(翻译成功后由 RefreshContext
+        // 经 ai_pending 拉取;App 经 inject_src 传给 PromptBar 的
+        // injected_command → 回填输入框 = 编辑入口,Pick 同语义)。
+        var ai_pending_cmd str = ""
     }
 
     msg Msg { Init, RunCommand(str), RunResult, RunOutput,
               Cancel, RunSmart(int, str, []str), Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, RefreshContext, ClearScreen,
-              OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int), JobStarted, JobDone }
+              OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int), JobStarted, JobDone,
+              ClearAiPending }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -227,7 +232,7 @@ store ShellStore {
                         //  改为显式 || 变体判断 —— Plan 053 M6 修正。)
                         // VM merged 模式 renderer 不填 __sse_output(所有变体 None),
                         // 走 streamed_text 回退。
-                        if .__sse_output.Text != None || .__sse_output.Table != None || .__sse_output.Record != None || .__sse_output.Code != None || .__sse_output.Error != None {
+                        if .__sse_output.Text != None || .__sse_output.Table != None || .__sse_output.Record != None || .__sse_output.Code != None || .__sse_output.Error != None || .__sse_output.AiSuggestion != None {
                             b.output = .__sse_output
                         } else {
                             var out RenderedOutput = RenderedOutput{}
@@ -341,6 +346,13 @@ store ShellStore {
             // 时后端历史已含新命令,重拉保证 ↑ 从最新开始。Vue 版同理受益
             // (codegen 将 history() 映射为 api fetch)。
             .persisted_history = history()
+            // Plan 062 T11: command_result(含 AI 翻译完成)后拉待回填建议 →
+            // App inject_src → PromptBar injected_command watch → 填输入框。
+            // 槽位取后即清,普通命令完成时恒为空串、无副作用。
+            var pending_ai str = ai_pending()
+            if pending_ai != "" {
+                .ai_pending_cmd = pending_ai
+            }
         }
 
         // ── 侧栏 ──
@@ -389,6 +401,11 @@ store ShellStore {
         .KillJob(job_id) -> {
             kill_job(job_id)
             .job_list = jobs()
+        }
+
+        // Plan 062 T11: 关闭 AI 建议条(PromptBar ✕ / 执行后调用)。
+        .ClearAiPending -> {
+            .ai_pending_cmd = ""
         }
 
         // Plan 055 Phase A.3: SSE JobStarted/JobDone 实时更新 jobs(无需轮询)。

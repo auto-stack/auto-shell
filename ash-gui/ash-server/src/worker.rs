@@ -59,6 +59,29 @@ struct CompleteReq {
     reply: tokio::sync::oneshot::Sender<Vec<CompletionItem>>,
 }
 
+/// Plan 062 T11: NL→命令翻译请求(`?` 前缀提交)。`?` 流程带 `reply: None`
+/// —— 结果以既有 `CommandResult` 事件回到块上(零新 SSE 事件族,引擎不动);
+/// 同步 `/api/nl2cmd` 端点带 oneshot reply,直接取回 JSON 结果。
+struct NlReq {
+    block_id: usize,
+    nl: String,
+    reply: Option<tokio::sync::oneshot::Sender<String>>,
+}
+
+/// Plan 062 T11: 最近一次翻译成功的命令。前端 RefreshContext(引擎在每个
+/// command_result 后触发)经 `/api/ai_pending` 取后即清,用于把建议命令
+/// 回填输入框(编辑入口,Pick 同语义)。静态槽镜像 CLI suggest-next 缓存
+/// (ai/suggest.rs 的 PENDING)。
+static AI_PENDING: Mutex<Option<String>> = Mutex::new(None);
+
+/// 取走待回填的 AI 建议命令(空串 = 无)。api `ai_pending` 的 worker 侧实现。
+pub fn read_ai_pending() -> String {
+    match AI_PENDING.lock() {
+        Ok(mut slot) => slot.take().unwrap_or_default(),
+        Err(_) => String::new(),
+    }
+}
+
 /// Session snapshot shared with the completion thread (its own Shell can't
 /// see the main session's cd / last command). Completions never mutate the
 /// session, so a snapshot is equivalent.
@@ -77,6 +100,9 @@ pub struct ShellHandle {
     /// Plan 062 T10: dedicated completion channel (own thread — never waits
     /// behind a running command).
     complete_tx: mpsc::UnboundedSender<CompleteReq>,
+    /// Plan 062 T11: dedicated NL→command channel (own thread — a multi-second
+    /// AI round trip must never block the serialized main worker).
+    nl_tx: mpsc::UnboundedSender<NlReq>,
     /// Cancel flag — set directly (concurrent) so it lands even while the
     /// worker is blocked in `spawn_blocking`. See Plan 040 M5.
     cancel: Arc<AtomicBool>,
@@ -141,6 +167,22 @@ impl ShellHandle {
         reply_rx.await.map_err(|_| "completion worker dropped reply".to_string())
     }
 
+    /// Plan 062 T11: synchronous NL→command translation (contract/tests —
+    /// the interactive `?` flow goes through `run_command` interception and
+    /// receives its result as a CommandResult event instead). Returns a JSON
+    /// string `{ok, cmd, notice, multi}` / `{ok:false, error}`.
+    pub async fn nl2cmd(&self, nl: String) -> Result<String, String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.nl_tx
+            .send(NlReq {
+                block_id: usize::MAX,
+                nl,
+                reply: Some(reply_tx),
+            })
+            .map_err(|_| "nl2cmd channel closed".to_string())?;
+        reply_rx.await.map_err(|_| "nl2cmd worker dropped reply".to_string())
+    }
+
     /// Get the prompt context (git branch/status).
     pub async fn prompt_context(&self) -> Result<PromptContext, String> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -187,6 +229,8 @@ pub fn spawn() -> ShellHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<CommandReq>();
     // Plan 062 T10: dedicated completion channel/thread.
     let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteReq>();
+    // Plan 062 T11: dedicated NL→command channel/thread.
+    let (nl_tx, nl_rx) = mpsc::unbounded_channel::<NlReq>();
     let cancel = Arc::new(AtomicBool::new(false));
     let (event_tx, _) = broadcast::channel::<ShellEvent>(256);
     let boot = Arc::new(tokio::sync::Mutex::new(None::<BootSnapshot>));
@@ -194,6 +238,9 @@ pub fn spawn() -> ShellHandle {
     let session = SharedSession::default();
 
     spawn_completion_worker(complete_rx, session.clone());
+    // Plan 062 T11: nl worker shares the session snapshot (context) and the
+    // event broadcast (CommandResult delivery).
+    spawn_nl_worker(nl_rx, session.clone(), event_tx.clone());
 
     let cancel_for_thread = cancel.clone();
     let event_tx_for_thread = event_tx.clone();
@@ -203,6 +250,8 @@ pub fn spawn() -> ShellHandle {
     let session_for_thread = session.clone();
     // Plan 057: worker-side sender clone for the job-reaper ticker.
     let tick_tx = tx.clone();
+    // Plan 062 T11: main-loop side of the nl channel (`?` interception).
+    let nl_tx_for_loop = nl_tx.clone();
 
     std::thread::Builder::new()
         .name("ash-server-shell".into())
@@ -211,6 +260,11 @@ pub fn spawn() -> ShellHandle {
             // (Shell::new → AutovmReplSession → blocking_lock panics in runtime).
             let mut shell = auto_shell::Shell::new();
             init_shell(&mut shell);
+            // Plan 062 T11: 预填会话 cwd 快照 —— 首条命令(可能是 `?` 翻译)
+            // 之前快照为空,翻译上下文会缺「当前目录」。
+            if let Ok(mut c) = session_for_thread.cwd.lock() {
+                *c = shell.pwd().to_string_lossy().to_string();
+            }
 
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -266,6 +320,40 @@ pub fn spawn() -> ShellHandle {
                         // top of this loop (job_done events in real time).
                         CommandReq::Tick => {}
                         CommandReq::Run { block_id, cmd } => {
+                            // Plan 062 T11: `?` 前缀 → NL→命令翻译(CLI F3 的
+                            // GUI 等价)。拦截在历史展开之前 —— 问题文本不是
+                            // 命令。块保持 Running 直到 nl 线程发 CommandResult
+                            // (复用既有事件交付结果,零新 SSE 事件族,引擎不动)。
+                            let trimmed_in = cmd.trim();
+                            if let Some(nl) = trimmed_in.strip_prefix('?') {
+                                let nl = nl.trim().to_string();
+                                if nl.is_empty() {
+                                    let cwd_err = shell.pwd().to_string_lossy().to_string();
+                                    let _ = event_tx_for_thread.send(
+                                        ShellEvent::CommandResult(CommandResult {
+                                            block_id,
+                                            cwd: cwd_err,
+                                            status: CommandStatus::Failed(
+                                                "AI 用法:? <自然语言描述>(如 ? 列出当前目录的文件)"
+                                                    .into(),
+                                            ),
+                                            output: RenderedOutput::Empty,
+                                            duration_ms: 0,
+                                            exit_code: -1,
+                                        }),
+                                    );
+                                    continue;
+                                }
+                                // 即时提示行(Running 块内可见;command_result
+                                // 到达时 update_block_in_state 清空 streamed_text)。
+                                let _ = event_tx_for_thread.send(ShellEvent::CommandOutput {
+                                    block_id,
+                                    chunk: "⤾ AI 翻译中…\n".to_string(),
+                                });
+                                let _ = nl_tx_for_loop.send(NlReq { block_id, nl, reply: None });
+                                let _ = append_history(trimmed_in);
+                                continue;
+                            }
                             // Plan 062 T6: 提交侧历史展开(!!/!n/!string)——与
                             // CLI repl 同源同表(共享 ~/.auto-shell-history)。
                             // 展开失败(如 !999 越界)→ Failed 块,不执行。
@@ -517,6 +605,7 @@ pub fn spawn() -> ShellHandle {
     ShellHandle {
         tx,
         complete_tx,
+        nl_tx,
         cancel,
         event_rx: event_tx,
         boot,
@@ -593,6 +682,223 @@ fn completion_ctx_shared(
         last_exit_code: Some(session.last_exit.load(Ordering::SeqCst)),
         history,
         aliases: shell.aliases().clone(),
+    }
+}
+
+// ── Plan 062 T11: NL→command worker ─────────────────────────────────────────
+
+/// Dedicated NL→command worker (T10 completion-thread pattern): own OS thread
+/// so a multi-second AI round trip never blocks the serialized main worker
+/// nor the UI. Context (cwd / last command / exit code) comes from the shared
+/// session snapshot; the alias layer (L2) is skipped — the snapshot carries
+/// no alias table and a second Shell just for aliases is not worth it for a
+/// translation prompt.
+fn spawn_nl_worker(
+    rx: mpsc::UnboundedReceiver<NlReq>,
+    session: SharedSession,
+    event_tx: broadcast::Sender<ShellEvent>,
+) {
+    std::thread::Builder::new()
+        .name("ash-server-nl2cmd".into())
+        .spawn(move || {
+            // Multi-thread runtime held for the thread's life — mirrors the
+            // CLI ask_ai requirement (repl.rs): current-thread runtimes can
+            // panic on drop under tokio >=1.52 in some contexts.
+            let runtime = tokio::runtime::Runtime::new()
+                .expect("failed to build nl2cmd worker runtime");
+            let mut rx = rx;
+            // AiClient::new() probes (and lazily starts) the aaid daemon — a
+            // blocking call that must NOT run inside a runtime context, so
+            // the client is built in the sync part of each iteration and
+            // cached across requests (rebuilt after an error so a daemon
+            // restart heals on the next request).
+            let mut client: Option<auto_ai_client::AiClient> = None;
+            while let Some(req) = rx.blocking_recv() {
+                let started = Instant::now();
+                let translation =
+                    translate_nl(&mut client, &session, &req.nl, &runtime);
+                let duration_ms = started.elapsed().as_millis() as u64;
+                let cwd = session
+                    .cwd
+                    .lock()
+                    .map(|c| c.clone())
+                    .unwrap_or_default();
+                match translation {
+                    Ok((cmd, notice, multi)) => {
+                        let payload = serde_json::json!({
+                            "ok": true,
+                            "cmd": cmd,
+                            "notice": notice,
+                            "multi": multi,
+                        })
+                        .to_string();
+                        if let Some(reply) = req.reply {
+                            let _ = reply.send(payload);
+                        } else {
+                            // 槽位先于事件写入:RefreshContext 由本事件触发,
+                            // 先落槽保证 ai_pending 拉取时可见。
+                            if let Ok(mut slot) = AI_PENDING.lock() {
+                                *slot = Some(cmd.clone());
+                            }
+                            let _ = event_tx.send(ShellEvent::CommandResult(
+                                CommandResult {
+                                    block_id: req.block_id,
+                                    cwd,
+                                    status: CommandStatus::Success,
+                                    output: RenderedOutput::AiSuggestion {
+                                        question: req.nl,
+                                        cmd,
+                                        notice,
+                                        multi,
+                                    },
+                                    duration_ms,
+                                    exit_code: 0,
+                                },
+                            ));
+                        }
+                    }
+                    Err(msg) => {
+                        let payload =
+                            serde_json::json!({ "ok": false, "error": msg }).to_string();
+                        if let Some(reply) = req.reply {
+                            let _ = reply.send(payload);
+                        } else {
+                            let _ = event_tx.send(ShellEvent::CommandResult(
+                                CommandResult {
+                                    block_id: req.block_id,
+                                    cwd,
+                                    status: CommandStatus::Failed(msg),
+                                    output: RenderedOutput::Empty,
+                                    duration_ms,
+                                    exit_code: -1,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn ash-server nl2cmd worker thread");
+}
+
+/// One NL→command translation — mirrors the CLI `ask_ai` (repl.rs:388-444):
+/// fixed system prompt + snapshot context, `tier:mid` single-shot, code-fence
+/// stripping, then the same pure validators (danger patterns / multi-step).
+/// Returns `(cmd, notice, multi)`.
+fn translate_nl(
+    client: &mut Option<auto_ai_client::AiClient>,
+    session: &SharedSession,
+    nl: &str,
+    runtime: &tokio::runtime::Runtime,
+) -> Result<(String, String, bool), String> {
+    let cmd = if fake_ai_enabled() {
+        fake_translate(nl)
+    } else {
+        if client.is_none() {
+            *client = Some(
+                auto_ai_client::AiClient::new()
+                    .map_err(|e| format!("AI client init: {e}"))?,
+            );
+        }
+        let system = format!(
+            "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
+             {}\n\
+             The user will describe what they want to do in natural language.\n\
+             Translate it into a SINGLE ash shell command (or pipeline).\n\
+             Rules:\n\
+             - Respond with ONLY the command, no explanation, no markdown.\n\
+             - Use standard Unix commands (ls, grep, find, etc.).\n\
+             - For Ash-specific features, use: ls | .size > 10.mb | sort .name\n\
+             - If multiple steps are needed, use && to chain them.\n\
+             - If you're unsure, give your best single-command guess.",
+            nl_context(session)
+        );
+        let req = auto_ai_client::CompletionRequest::single("tier:mid", nl)
+            .with_system(&system)
+            .with_max_tokens(256)
+            .with_temperature(0.3);
+        match runtime.block_on(client.as_ref().unwrap().complete(&req)) {
+            Ok(resp) if resp.is_ok() => strip_code_fence(resp.content.trim()),
+            Ok(resp) => {
+                *client = None;
+                return Err(format!("AI returned error: {:?}", resp.error));
+            }
+            Err(e) => {
+                *client = None;
+                return Err(format!(
+                    "{e}(start the aaid daemon or set AAID_URL)"
+                ));
+            }
+        }
+    };
+    let findings = auto_shell::ai::validate_suggestion(&cmd);
+    let notice = findings
+        .iter()
+        .map(|f| match f {
+            auto_shell::ai::ValidationFinding::Danger(m) => format!("⚠ 危险:{m}"),
+            auto_shell::ai::ValidationFinding::Warning(m) => format!("⚠ {m}"),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let multi = auto_shell::ai::split_steps(&cmd).len() > 1;
+    Ok((cmd, notice, multi))
+}
+
+/// Snapshot context for the translation prompt — mirrors
+/// `auto_shell::ai::context::build_context_block` (L0 OS/cwd + L1 last
+/// command/exit; the alias layer needs a live Shell and is skipped here).
+fn nl_context(session: &SharedSession) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("操作系统: {}", std::env::consts::OS));
+    let cwd = session
+        .cwd
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    if !cwd.is_empty() {
+        lines.push(format!("当前目录: {cwd}"));
+    }
+    let last = session
+        .last_command
+        .lock()
+        .ok()
+        .filter(|c| !c.is_empty());
+    if let Some(last) = last {
+        lines.push(format!(
+            "上一条命令: {last} (exit {})",
+            session.last_exit.load(Ordering::SeqCst)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Strip markdown code fences (same chain as the CLI ask_ai).
+fn strip_code_fence(cmd: &str) -> String {
+    cmd.trim_start_matches("```bash\n")
+        .trim_start_matches("```sh\n")
+        .trim_start_matches("```\n")
+        .trim_end_matches("\n```")
+        .trim()
+        .to_string()
+}
+
+/// ASH_FAKE_AI (non-empty) swaps the model for a deterministic fake so tests
+/// never touch the real daemon (plan 062 §5 fake-backend contract).
+fn fake_ai_enabled() -> bool {
+    std::env::var("ASH_FAKE_AI")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+}
+
+/// Deterministic fake translation: questions containing 危险/danger exercise
+/// the danger validator (`rm -rf /` → Danger notice); everything else becomes
+/// an executable echo carrying the question (assertable end-to-end).
+fn fake_translate(nl: &str) -> String {
+    let n = nl.trim();
+    if n.contains("danger") || n.contains("危险") {
+        "rm -rf /".to_string()
+    } else {
+        format!("echo fake-ai:{n}")
     }
 }
 

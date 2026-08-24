@@ -327,8 +327,54 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                         row { style: "h-px w-full bg-border" }
                     }
                 }
-                if .block.output != None {
-                    // 2026-08-22(show 修复):Code 变体内联渲染 —— BlockBody 是
+                    if .block.output != None {
+                        // Plan 062 T11:AI NL→命令建议(`?` 前缀提交)—— 内联
+                        // 渲染(同 Text/Code 的 VM 子 widget prop 规避)。执行
+                        // 复用 Rerun 桥(renderer 已验证;深路径参数同
+                        // OpenPath 的 cell.Tagged.text 模式);取消 = DeleteBlock;
+                        // 编辑 = 命令已由 RefreshContext(ai_pending)回填输入框。
+                        if .block.output.AiSuggestion != None {
+                            col {
+                                style: "w-full rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 gap-1 mb-1"
+                                row {
+                                    style: "items-center gap-2"
+                                    text "AI:" {
+                                        style: "text-[10px] text-sky-400/80 font-semibold shrink-0 select-none"
+                                    }
+                                    text .block.output.AiSuggestion.question {
+                                        style: "text-xs text-muted-foreground truncate"
+                                    }
+                                }
+                                text .block.output.AiSuggestion.cmd {
+                                    style: "text-sm font-mono-ash text-foreground whitespace-pre-wrap break-words"
+                                }
+                                if .block.output.AiSuggestion.notice != "" {
+                                    text .block.output.AiSuggestion.notice {
+                                        style: "text-xs text-red-400"
+                                    }
+                                }
+                                if .block.output.AiSuggestion.multi {
+                                    text "多步命令(&& 链,按步审视)" {
+                                        style: "text-[10px] text-amber-400/80"
+                                    }
+                                }
+                                row {
+                                    style: "items-center gap-2 mt-1"
+                                    button "▶ 执行" {
+                                        onclick: .Rerun(.block.output.AiSuggestion.cmd)
+                                        style: "text-xs px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 cursor-pointer select-none"
+                                    }
+                                    button "✕ 取消" {
+                                        onclick: .DeleteBlock(.block.id)
+                                        style: "text-xs px-2 py-0.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 cursor-pointer select-none"
+                                    }
+                                    text "编辑:建议条 ✎ 填入后回车" {
+                                        style: "text-[10px] text-muted-foreground/70"
+                                    }
+                                }
+                            }
+                        }
+                        // 2026-08-22(show 修复):Code 变体内联渲染 —— BlockBody 是
                     // 子 widget,其 output prop 字段在 iced VM 读成空(Text 内联
                     // 的同族 bug,Code 走 BlockBody 时整体空白)。
                     // int 拼 str 一律 .str()(直拼会出错,见 duration_label 注释)。
@@ -359,7 +405,7 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                             row { style: "h-px w-full bg-border" }
                         }
                     }
-                    if .block.output.Table == None && .block.output.Text == None && .block.output.Code == None {
+                    if .block.output.Table == None && .block.output.Text == None && .block.output.Code == None && .block.output.AiSuggestion == None {
                         col {
                             style: "max-h-[400px] overflow-y-auto ash-scroll"
                             BlockBody(output: .block.output, on_open_path: .OpenPath)

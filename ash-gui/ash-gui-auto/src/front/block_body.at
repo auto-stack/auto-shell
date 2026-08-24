@@ -12,7 +12,7 @@
 // .output.columns,substitute_expr 只替换裸 Ident 和单层 self-dot)。
 // 详见 DEBTS。
 
-use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput
+use types: RenderedOutput, TableOutput, CodeOutput, ErrorOutput, AiSuggestionOutput
 
 /// 表格渲染器(ls/ps 等结构化命令的输出)
 // 参数是窄化后的 TableOutput(view fn 只替换裸 Ident 参数,把 .output.Table
@@ -98,6 +98,26 @@ view fn RenderError(output ErrorOutput) {
         style: "px-3 py-2 rounded bg-red-500/10 border border-red-500/20"
         text output.message {
             style: "text-sm font-mono-ash text-red-400"
+        }
+    }
+}
+
+/// Plan 062 T11:AI NL→命令建议(纯展示版)。实际渲染走 block_item.at 的
+/// 内联卡片(VM 子 widget prop 字段读取 bug,Text/Code 同因内联),带
+/// [▶ 执行]/[✕ 取消] 按钮;本渲染器仅覆盖契约完整性(无事件上下文)。
+view fn RenderAiSuggestion(output AiSuggestionOutput) {
+    col {
+        style: "gap-1"
+        text output.question {
+            style: "text-xs text-muted-foreground"
+        }
+        text output.cmd {
+            style: "text-sm font-mono-ash text-foreground whitespace-pre-wrap break-words"
+        }
+        if output.notice != "" {
+            text output.notice {
+                style: "text-xs text-red-400"
+            }
         }
     }
 }
@@ -188,6 +208,8 @@ widget BlockBody(output: RenderedOutput, on_open_path: msg) {
                 }
             } else if .output.Error != None {
                 RenderError(output: .output.Error)
+            } else if .output.AiSuggestion != None {
+                RenderAiSuggestion(output: .output.AiSuggestion)
             } else {
                 text "(no output)" {
                     style: "text-xs text-muted-foreground italic"

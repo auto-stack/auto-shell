@@ -1,8 +1,8 @@
 # 062 — ash-gui(Auto/vue·VM)与 CLI 版功能差距补全
 
 - 日期:2026-08-23
-- 状态:**Phase 1 完成并全量验证**(8 项新回归全过 + 全套件 71 pass/45 skip/0 fail,
-  2026-08-23 深夜);Phase 2/3 未开工。实施记录见 §7
+- 状态:**Phase 1/2 完成;Phase 3 T11(NL→命令)完成**(2026-08-24,§10)。全套件
+  78 pass / 48 skip / 0 失败。T12-T15 未开工。实施记录见 §7/§8/§9/§10
 - 调研对象:
   - **CLI 版** = `ash` bin(`ash/ash/src/main.rs`)+ `ash-tui`(reedline REPL、菜单/高亮/hinter、less/color)+ `auto-shell`(引擎、命令注册表、补全编排)+ `ash-core`(parser/pipeline/interactive 名单)
   - **GUI 版** = `ash-gui/ash-gui-auto`(.at 前端,Vue/VM 双渲染)+ `ash-gui/ash-server`(ash-server HTTP bin / ash-runner merged bin,worker 进程内 auto_shell::Shell)
@@ -314,3 +314,82 @@ main(`2c642ba`),worktree 与两分支已清理。合并后回归:main 全套件 
 ### 顺带清理
 
 - worker 主循环退役 completion_sigs/provider(M7 块随迁补全线程)。
+
+## 10. Phase 3 T11:NL→命令(2026-08-24,独立 session)
+
+### 架构决策:零引擎改动(核心约束)
+
+auto-lang master 被 430/431/432 占用(当前 auto.exe 构建于 00:50,430 波次提交在
+02:20-04:10 之后落地,重建即吸入未测 WIP)——T11 全部落地在 auto-shell 仓,不改引擎:
+
+1. **`?` 前缀拦截在 worker `CommandReq::Run` 分支顶部**(历史展开之前):问题文本
+   非命令,块保持 Running,即时发一条「⤾ AI 翻译中…」提示 chunk,请求转专用线程。
+2. **翻译走 `ash-server-nl2cmd` 专用线程**(T10 补全线程五件套同款:专用 channel +
+   线程 + SharedSession 快照 + 事件回传;无需自有 Shell)。线程内同步循环
+   `blocking_recv`,`AiClient` 缓存复用(**必须在 runtime 外构造**——内含阻塞探活,
+   ai/mod.rs block_on_async 警告同源),每请求 `Runtime::block_on(complete)`
+   (多线程 runtime,CLI ask_ai 同款)。翻译逻辑镜像 repl.rs:388-444:快照上下文
+   (L0 OS+cwd / L1 上一条命令,别名 L2 因无 Shell 跳过)+ tier:mid / 256 tokens /
+   temp 0.3 + 剥代码围栏;随后同源过 `ai::validate_suggestion`(Danger/Warning 拼
+   单行 notice)与 `ai::split_steps`(multi 标记)。
+3. **结果复用既有 `CommandResult` 事件交付**(`RenderedOutput` 新变体
+   `AiSuggestion{question,cmd,notice,multi}`,ash-core 加变体,全消费点 `if let`
+   不受影响,ash-tui 唯一穷尽 match 补臂)——**零新 SSE 事件族**:merged 泵无白名单
+   自动透传,HTTP SSE 全量转发,引擎 update_block_in_state 对 output 走通用
+   `json_to_auto_val`,Vue 侧 RunResult 变体判断补一项即可。三模式(HTTP/merged
+   VM/Vue)同一交付路径。
+4. **同步契约端点 `POST /api/nl2cmd`**(oneshot reply,测试/契约用)+ **`GET
+   /api/ai_pending`**(翻译成功先落槽再发事件;取后即清)。
+
+### 前端:块卡片 + 建议条双层(VM 机制约束下的落地)
+
+- **块卡片**(block_item.at 内联渲染,Text/Code 同款 VM 子 widget prop 规避):
+  问题回显 + 命令(mono)+ 危险行(红)+ 多步提示 + **[▶ 执行]**(复用 Rerun 桥,
+  深路径参数与既有 `cell.Tagged.text` 同构,实测正常)+ **[✕ 取消]**(DeleteBlock 桥)。
+- **建议条**(prompt_bar.at 输入框上方,绑定 `store.ai_pending_cmd` 经 App prop 透传):
+  **[✎ 编辑]**(PromptBar 自身 handler 直写 `.input`,填入后回车即执行 = CLI F3 的
+  Enter 语义)+ [✕](store.ClearAiPending 关条)。
+- 排查中定位的 VM 机制边界(记录,设计依据):
+  - **prop watcher 在 VM 不可靠**(renderer.rs:7116 Pick 桥注释同证;Vue 端 watch 是
+    一等公民)→ 自动回填输入框不可行,改为建议条显式 ✎ 填入;
+  - **PromptBar 内部 `.Run(cmd)` 不触发引擎 emit 模拟**(模拟按外层事件名 `Run` 识别,
+    cmd 取 `state.input` 抢救值,空输入点击执行拿到空串)→ 建议条不放执行按钮,
+    执行统一走块卡片 ▶(Rerun 桥)或 ✎ 填入后回车;
+  - **store.RunCommand 直调会留死块**(引擎注释:VM List 推入的块是堆引用,
+    update_block_in_state 匹配失败,块永远 Running)→ 不走此路。
+- RefreshContext(引擎在每个 command_result 后触发的 store handler)顺带拉
+  `ai_pending()` 写 `store.ai_pending_cmd` —— 这是「App tick 轮询」的实际形态:
+  事件驱动的单点拉取,槽位先落再发事件保证可见。
+
+### 假后端与测试
+
+- `ASH_FAKE_AI`(非空)→ 确定性假翻译:含「危险/danger」→ `rm -rf /`(过危险校验,
+  只断言 notice 绝不执行);否则 `echo fake-ai:<问题>`(可端到端断言)。测试经
+  conftest 环境继承透传进 VM 进程,不动真实服务(plan §5 口径)。
+- NL-01 危险提示 / NL-02 卡片+建议条+✎ 回填 / NL-03 ▶ 执行真跑 + 条关闭 +
+  ✕ 取消删块。**多建议块并存的按钮定位用「最后一个匹配」**(块列表 vtree 顺序,
+  首个会点到旧卡片——首版测试即踩此坑,点到 NL-01 的 `rm -rf /` 执行,被引擎
+  SecurityPolicy 硬拒,无伤)。
+- **真 AI 验证**(aaid 在跑,glm-5.2 经 zhipu 池):「? 用一条命令列出当前目录下的
+  所有文件」→ **`ls -a`**,卡片/建议条/回填全链路正常。
+- **HTTP 冒烟**:ash-server + fake:`POST /api/nl2cmd` 两变体 ✓;`POST
+  /api/run_command` `? …` → SSE `command_result` 帧 `{"AiSuggestion":{…}}` ✓;
+  `/api/ai_pending` 取后即清 ✓。
+- 回归:全套件 **78 pass / 48 skip / 0 失败**(基线 75/48/0 + NL×3;parity 全文件
+  连跑 18 pass + 1 skip;期间 he02/03、JP-01 各出现过一次既有 T10 族负载竞态
+  单跑/重跑即过,与合并记录口径一致)。
+
+### 顺带修复
+
+- ash-tui 两处 StreamEvent match(repl.rs handle_chat_turn / block_tui.rs ChatCmd)
+  补 `TurnStart/TurnEnd` 兜底臂——auto-ai 00a148b 漂移导致本检出 ash-tui 在当前
+  auto-ai master 下本就编不过(ask.rs 同款兜底,T12 chat 前置排雷)。
+- worker 初始化即预填 SharedSession.cwd(否则首条 `?` 翻译的上下文缺当前目录)。
+
+### 已知边界(记录)
+
+- 翻译中块不可 Stop(全局 cancel flag 与其他命令生命周期有竞态,误判会把建议错标
+  Cancelled;翻译秒级,不值得);分步执行(CLI 的 `s`)未做,卡片给 multi 提示;
+- 无 daemon 时翻译失败 → Failed 块带「(start the aaid daemon or set AAID_URL)」
+  提示(对齐 CLI 口径);Vue 端建议条渲染同源,RefreshContext 拉取在 Vue 的触发
+  依赖 SSE dispatch 链(未在本环境验证,块卡片按钮在 Vue 走 .at handler 原生可用)。
