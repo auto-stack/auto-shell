@@ -88,3 +88,14 @@ Error: VM UI error: DynamicComponent init failed: VmBridge init failed for 'App'
   9247,起 ash-gui-auto 前用 `AUTOUI_MCP_PORT=9248` 避让,或先停掉占用进程。
 - auto-lang 的 auto.exe 重建常被运行中的 `auto.exe` 锁住:把占用文件改名
   (`auto.exe.lockedN`)再 build(会话内已用多次,记得事后清理)。
+
+## 6. finish-plan 复审(2026-08-24)
+
+- 本计划为"剩余问题记录 + 路线",实质遗留已由 057(→060/061/062)接棒闭环:
+  §2 阻塞 A 已修(auto-lang `b0434cff0`);§3 表各项中,输入高亮/ghost(057 §2.1-2.3)、
+  表格列对齐(057 §2.4 + 059)、block 限高+内部滚动(060 第四轮 build_scrollable
+  cap 修复)、剪贴板(060 第五轮 arboard 桥)均已落地;Block 泛型字段告警随 059
+  建块点补齐字段消失。
+- 结论:**无未接棒遗留,可归档**(作为 superseded 记录)。§4 Phase 3 的 iced
+  renderer 重活(富文本输入控件原生化、原生网格布局)未做,属引擎远期项,
+  不构成本计划验收缺口。

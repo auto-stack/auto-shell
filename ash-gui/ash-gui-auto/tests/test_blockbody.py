@@ -46,64 +46,68 @@ def test_bb14_empty_output_handled(mcp):
     assert ok, "echo (empty) did not complete"
 
 
-# ── BB-02..06,08..13: xfail (need non-Text output variants from backend) ───
+# ── BB-02..13: 2026-08-24 复核(057 Phase 5 T-A)─────────────────────────────
 
 
-@pytest.mark.skip(reason="BB-02: Table output needs ls/ps command with Table renderer (mock returns Text)")
 def test_bb02_table_renders(mcp):
-    """BB-02: Table variant renders as aligned table (thead+tbody)."""
-    pass
+    """BB-02: `ls` produces a real Table variant (header columns + rows).
+
+    Mock era returned Text; the real backend renders an ls Table with
+    name/type/size/modified columns (Plan 059/060 M2).
+    """
+    from test_command_exec import _submit_command
+    _submit_command(mcp, "echo bb02_warmup")
+    mcp.wait_until(lambda c: "Success" in c.state("blocks"), timeout=15)
+    _submit_command(mcp, "ls")
+    ok = mcp.wait_until(
+        lambda c: "pac.at" in c.snapshot() and "modified" in c.snapshot(),
+        timeout=20, interval=0.5,
+    )
+    assert ok, f"ls table (header/rows) not rendered: {mcp.snapshot()[:400]}"
+    for col in ["name", "type", "size"]:
+        assert col in mcp.snapshot(), f"table column {col!r} missing"
 
 
-@pytest.mark.skip(reason="BB-03: Table header styling is visual (needs Table output)")
+@pytest.mark.skip(reason="BB-03: header/tag styling is visual — snapshot carries no style classes (assert via screenshot baselines if ever needed)")
 def test_bb03_table_header_style(mcp):
-    """BB-03: table header row has bg-muted + border styling."""
     pass
 
 
-@pytest.mark.skip(reason="BB-04: Record output needs Record renderer data")
+@pytest.mark.skip(reason="BB-04: Record variant has no renderer branch in the .at front (api.at simplifies it to ?str); backend can emit it but front drops it — engine/front debt")
 def test_bb04_record_renders(mcp):
-    """BB-04: Record variant renders as key/value grid."""
     pass
 
 
-@pytest.mark.skip(reason="BB-05: MemoryInfo needs Record output with usage_percent")
+@pytest.mark.skip(reason="BB-05: needs Record renderer (see BB-04)")
 def test_bb05_memory_progress(mcp):
-    """BB-05: MemoryInfo shows usage progress bar."""
     pass
 
 
-@pytest.mark.skip(reason="BB-06: memory usage fallback needs MemoryInfo Record output")
+@pytest.mark.skip(reason="BB-06: needs Record renderer (see BB-04)")
 def test_bb06_memory_usage_fallback(mcp):
-    """BB-06: memory usage falls back to 'usage' field if no usage_percent."""
     pass
 
 
-@pytest.mark.skip(reason="BB-08: Dir/FileName clickable needs Table output + emit sim")
+@pytest.mark.skip(reason="BB-08: Dir/FileName click opens a real OS window — side effect unfit for automated suite (OpenPath bridge verified in Plan 059)")
 def test_bb08_only_dir_filename_clickable(mcp):
-    """BB-08: only Dir/FileName cells are clickable."""
     pass
 
 
-@pytest.mark.skip(reason="BB-09: cell tag colors need Table output")
+@pytest.mark.skip(reason="BB-09: cell tag colors are visual — snapshot carries no style classes (VM rendering verified pixel-wise in Plan 060 R6)")
 def test_bb09_cell_tag_colors(mcp):
-    """BB-09: Dir→sky, CodeAtRs→emerald, Executable→cyan, Config→amber."""
     pass
 
 
-@pytest.mark.skip(reason="BB-10: Permission style needs Table output")
+@pytest.mark.skip(reason="BB-10: Permission styling is visual — snapshot carries no style classes")
 def test_bb10_permission_muted(mcp):
-    """BB-10: Permission cells are muted gray."""
     pass
 
 
-@pytest.mark.skip(reason="BB-12: code bold/italic needs `show` command (Code output)")
+@pytest.mark.skip(reason="BB-12: bold/italic span styling is visual — snapshot carries no style classes (Code variant + highlight verified in Plan 060 R3-R4)")
 def test_bb12_code_bold_italic(mcp):
-    """BB-12: code spans render RGB + bold + italic."""
     pass
 
 
-@pytest.mark.skip(reason="BB-13: Error renderer needs Error output variant")
+@pytest.mark.skip(reason="BB-13: no command currently emits the Error output variant (Failed status covers error text; Error renderer untestable end-to-end)")
 def test_bb13_error_renders(mcp):
-    """BB-13: Error variant renders as red-tinted card."""
     pass

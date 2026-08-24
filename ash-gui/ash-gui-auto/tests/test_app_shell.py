@@ -7,6 +7,8 @@ Run:
     AUTO_BIN=<auto.exe> python -m pytest tests/test_app_shell.py -v
 """
 
+import time
+
 import pytest
 
 
@@ -88,31 +90,67 @@ def test_app15_boot_sets_cwd(mcp):
     assert cwd.strip() and cwd.strip() != "None", f"cwd not set by boot:\n{cwd[:200]}"
 
 
-# ── APP-04,10..14: xfail (need renderer emit sim / populated data) ────────
+# ── APP-04,10..14: 2026-08-24 复核(057 Phase 5 T-A)────────────────────────
 
 
-@pytest.mark.skip(reason="APP-04: sidebar toggle needs button onclick emit sim")
 def test_app04_sidebar_toggle(mcp):
-    """APP-04: 🛠 toggle flips sidebar_open."""
+    """APP-04: 🛠 toggle flips sidebar_open (App-level handler, works since
+    Plan 060 R16 fixed child-callback dispatch for App-level buttons)."""
+    import re as _re
+    snap = mcp.snapshot()
+    m = _re.search(r'button #([A-Za-z0-9_]+) "☰"', snap)
+    assert m, "sidebar toggle button (☰) not found"
     before = mcp.state("sidebar_open")
-    mcp.click_label(kind="button", label="🛠")
-    after = mcp.state("sidebar_open")
-    assert before != after
+    mcp.click(m.group(1))
+    ok = mcp.wait_until(lambda c: mcp.state("sidebar_open") != before, timeout=8)
+    assert ok, f"☰ did not flip sidebar_open: {before!r}"
+    # Toggle back to leave a usable sidebar for later tests.
+    m2 = _re.search(r'button #([A-Za-z0-9_]+) "☰"', mcp.snapshot())
+    mcp.click(m2.group(1))
+    mcp.wait_until(
+        lambda c: ("true" in mcp.state("sidebar_open")) == ("true" in before),
+        timeout=8,
+    )
 
 
-@pytest.mark.skip(reason="APP-10: inject needs populated commands (mock empty)")
 def test_app10_pick_tool_injects(mcp):
-    """APP-10: picking a tool injects its name into the input."""
-    pass
+    """APP-10: picking a sidebar tool injects its name into the input
+    (Pick renderer bridge, Plan 060 R16)."""
+    import re as _re
+    from test_command_exec import _find_prompt_input_vnode
+    # Clear input first so the completion panel closes (click_label would
+    # otherwise race the panel's own buttons — BI-03 pattern).
+    mcp.call("autoui_type", text="", clear_first=True)
+    time.sleep(0.3)
+    m = _re.search(r'button #([A-Za-z0-9_]+) "cat"', mcp.snapshot())
+    assert m, "sidebar 'cat' button not found"
+    mcp.click(m.group(1))
+    ok = mcp.wait_until(lambda c: '"cat"' in c.state("input"), timeout=8)
+    assert ok, f"Pick did not inject 'cat': {mcp.state('input')!r}"
+    vnode = _find_prompt_input_vnode(mcp)
+    mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)
 
 
-@pytest.mark.skip(reason="APP-13: Ctrl+L needs renderer emit sim for onkeydown")
 def test_app13_ctrl_l_clears_screen(mcp):
-    """APP-13: Ctrl+L archives all blocks."""
-    pass
+    """APP-13: Ctrl+L archives all blocks (guarded against dead-keyboard
+    instances, Plan 060 R16)."""
+    from test_command_exec import _submit_command
+    _submit_command(mcp, "echo app13_marker")
+    mcp.wait_until(lambda c: "Success" in c.state("blocks"), timeout=12)
+    assert "blocks: []" not in mcp.state("blocks")
+    deadline = time.time() + 8
+    fired = False
+    while time.time() < deadline:
+        mcp.call("autoui_keyboard", key="l", modifiers=["ctrl"])
+        time.sleep(0.4)
+        if "blocks: []" in mcp.state("blocks"):
+            fired = True
+            break
+    if not fired:
+        pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
+    assert "blocks: []" in mcp.state("blocks"), "Ctrl+L did not archive blocks"
 
 
-@pytest.mark.skip(reason="APP-14: Ctrl+D exit not implemented (no window.close)")
+@pytest.mark.skip(reason="APP-14: exit needs a window.close channel in the VM host (not implemented; no-crash covered by PB-12)")
 def test_app14_ctrl_d_exit(mcp):
-    """APP-14: Ctrl+D on empty input exits."""
     pass

@@ -129,7 +129,8 @@ store ShellStore {
         // Note: computed uses parse_expr (not parse_body), so complex
         // .field access may overflow. Keep simple for now.
         history => self.persisted_history
-        git_label => self.git_label
+        // git_label 不再设 computed —— var git_label 与 computed 同名在 vue
+        // codegen 产重复标识符(TS2300);读取方直接用 var(语义相同)。
     }
 
     on {
@@ -174,19 +175,18 @@ store ShellStore {
             // 改字段→字段直读(.next_id 的读写本身正常),不经过局部 int。
             .__pending_command_id = .next_id
             .next_id = .next_id + 1
-            var block Block = Block{}
+            // 完整字面量(嵌套同 Init 的 PromptContext 先例):空字面量在 vue
+            // codegen 产 `let block = {}` 空 TS 对象,后续属性赋值报 TS2339。
+            // 全字面量占位(字段值用字面量,不用 .dot 路径 —— 字面量位的
+            // self 引用在 VM handler codegen 报 Undefined variable: self)+
+            // 动态字段事后赋值:TS 侧字面量含全部字段,后续赋值不报 TS2339。
+            var block Block = Block{ id: 0, command: "", cwd: "",
+                status: BlockStatus{ kind: "Running", message: "" }, output: RenderedOutput{},
+                streamed_text: "", duration_ms: 0, exit_code: 0, collapsed: false,
+                table_sort_col: -1, table_sort_dir: 1, table_filter_q: "" }
             block.id = .__pending_command_id
             block.command = cmd
             block.cwd = .cwd
-            var st BlockStatus = BlockStatus{}
-            st.kind = "Running"
-            st.message = ""
-            block.status = st
-            block.output = None
-            block.streamed_text = ""
-            block.duration_ms = 0
-            block.exit_code = 0
-            block.collapsed = false
             .blocks.push(block)
             // VM renderer 桥接信号(保留 — renderer 读此提交执行器线程)
             .__pending_command_str = cmd
@@ -219,7 +219,7 @@ store ShellStore {
             .git_info = prompt_context()
             for b in .blocks {
                 if b.id == .__sse_block_id {
-                    var st BlockStatus = BlockStatus{}
+                    var st BlockStatus = BlockStatus{ kind: "Success", message: "" }
                     if .__sse_status == "Success" {
                         st.kind = "Success"
                         st.message = ""
@@ -235,8 +235,7 @@ store ShellStore {
                         if .__sse_output.Text != None || .__sse_output.Table != None || .__sse_output.Record != None || .__sse_output.Code != None || .__sse_output.Error != None || .__sse_output.AiSuggestion != None {
                             b.output = .__sse_output
                         } else {
-                            var out RenderedOutput = RenderedOutput{}
-                            out.Text = b.streamed_text
+                            var out RenderedOutput = RenderedOutput{ Text: b.streamed_text }
                             b.output = out
                         }
                         b.streamed_text = ""
@@ -274,7 +273,7 @@ store ShellStore {
             cancel()
             for b in .blocks {
                 if b.status.kind == "Running" {
-                    var st BlockStatus = BlockStatus{}
+                    var st BlockStatus = BlockStatus{ kind: "Success", message: "" }
                     st.kind = "Cancelled"
                     st.message = ""
                     b.status = st
@@ -292,27 +291,20 @@ store ShellStore {
             if args.len() > 0 {
                 display = display + " " + args.join(" ")
             }
-            var block Block = Block{}
+            var block Block = Block{ id: 0, command: "", cwd: "",
+                status: BlockStatus{ kind: "Running", message: "" }, output: RenderedOutput{},
+                streamed_text: "", duration_ms: 0, exit_code: 0, collapsed: false,
+                table_sort_col: -1, table_sort_dir: 1, table_filter_q: "" }
             block.id = id
             block.command = display
             block.cwd = .cwd
-            var st BlockStatus = BlockStatus{}
-            st.kind = "Running"
-            st.message = ""
-            block.status = st
-            block.output = None
-            block.streamed_text = ""
-            block.duration_ms = 0
             .blocks.push(block)
             var result str = run_smart(id, name, args)
             for b in .blocks {
                 if b.id == id {
-                    var ok BlockStatus = BlockStatus{}
-                    ok.kind = "Success"
-                    ok.message = ""
+                    var ok BlockStatus = BlockStatus{ kind: "Success", message: "" }
                     b.status = ok
-                    var out RenderedOutput = RenderedOutput{}
-                    out.Text = result
+                    var out RenderedOutput = RenderedOutput{ Text: result }
                     b.output = out
                     b.streamed_text = ""
                 }
@@ -411,7 +403,9 @@ store ShellStore {
         // Plan 055 Phase A.3: SSE JobStarted/JobDone 实时更新 jobs(无需轮询)。
         // __sse_job_* 由 codegen SSE dispatch 预置(同 RunOutput/RunResult 模式)。
         .JobStarted -> {
-            var ji JobInfo = JobInfo{}
+            var ji JobInfo = JobInfo{ id: 0, command: "", state: "Running", exit_code: 0 }
+            ji.id = .__sse_job_id
+            ji.command = .__sse_job_cmd
             ji.id = .__sse_job_id
             ji.command = .__sse_job_cmd
             ji.state = "Running"

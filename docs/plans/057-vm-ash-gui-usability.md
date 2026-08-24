@@ -1,7 +1,8 @@
 # 057 — 提高 VM 版 ash-gui 可用性:真后端(HTTP) + 显示对齐
 
 - 日期:2026-08-16
-- 状态:**Phase 0/1 完成,Phase 2 大部分完成,Phase 3/4 未做**(见 §4 剩余)
+- 状态:**Phase 0/1/2 完成;Phase 3 被 plan-060 接棒超出;Phase 4 余两件**
+  (§4.4 skip 复核解锁、§4.5 vue 产物重生成;§4.6 被 plan-061 取代)—— 见 §5 复审
 - 上游:plan-056(其 §2 阻塞 A 已修,本文接棒其 §3 剩余项)
 - 跨仓库提交:auto-lang `e0decbadf`/`5856ae069`/`8be979338`/`f085a2334`,
   auto-shell `f93a169`/`d9f4586`/`bf55654`/`27342f4`
@@ -115,3 +116,82 @@ merged 内嵌 ash-core;a2r;VM 嵌套调用帧根因;交互式命令(PTY);store �
 5. gen/front/vue 重生成 + `auto build` 全量验证(.at 多处改动后 vue 产物未更新)。
 6. run_vm.ps1 健壮性:优先用已构建的 target/debug/auto.exe(现 cargo
    Start-Process 偶发不存活,脚本已回退直启 ash-server.exe)。
+
+## 5. finish-plan 复审(2026-08-24)
+
+- §4.1 表格/ghost:计划内已收口 ✓。§4.2 剪贴板:已落地,但形态与原设想不同 ——
+  未做 `os.set_clipboard` native,走 .at handler(block_item.at CopyOutput/ExportCsv,
+  :466-561)+ renderer arboard 桥(auto-lang renderer.rs:6917;060 第五轮 MCP 实测
+  3593 字符入剪贴板,ExportCsv 同桥)。属 DEBTS B7(child-callback 剥离)家族的
+  既知 workaround。
+- §4.3(merged cd 特判回写):被 plan-060 接棒并超出 —— cd/pwd/ls/show 语义全部
+  下沉后端(ash-core),cwd 跟随经事件泵闭环(060 M2/M3 验证);061 后 merged
+  入口 = `auto run -r vm` + cdylib 外部后端。销案。
+- §4.4(http_backend fixture + 解锁 skip):**未做**。且原方案已过时 —— 060 M3/061
+  后 merged 模式本身即真后端数据(81 侧栏钮、SB 契约测试在跑),BACK-01..08 等
+  skip 的"returns mock"理由多已失效,应逐项复核解锁,无需另起 HTTP fixture。
+- §4.5(gen/front/vue 重生成 + auto build 全量验证):**未做** —— gen/ 产物停在
+  2026-08-05,而 .at 源在 057-062 期间持续演进(RunOutput/AiSuggestion 变体、
+  过滤框、补全面板等)。Vue 渲染目标当前未经再验证(062 已知限制中亦有记录)。
+- §4.6(run_vm.ps1 健壮性):被 plan-061 取代(脚本重写为 `auto run -r vm` 薄
+  启动器,conftest 同口径)。销案。
+- 结论:除 §4.4(复核解锁 skip)与 §4.5(vue 重生成验证)两件可做未做的收尾外,
+  全部闭环。
+
+## 6. Phase 5 — 收尾(2026-08-24 立项,finish-plan 复审产物)
+
+> 原 Phase 4 方案(http_backend fixture)已过时:060 M3/061 后 merged 模式
+> 本身即真后端数据。本 phase 以"复核 + 重生成"两任务收口。
+
+- **T-A skip 复核解锁**:tests/ 内 ~40 个 skip(BACK-01..08 / PB-01..08,14,15 /
+  TS-02,04,05 / BB 系)多为"needs populated boot data (mock)"类理由 —— 真后端
+  数据上线后理由多已失效。逐项复核:能过的解锁,仍不能过的改写 skip 理由
+  为真实根因。验收:skip 总数显著下降,零新增失败。
+- **T-B vue 产物重生成 + 验证**:`auto gen` 重生成(gen/ 停在 2026-08-05,
+  落后 .at 演进 057-062 全程),`auto build`(vue-tsc + vite)过或记录真实
+  阻塞。验收:gen/ 时间戳刷新,vue 构建结论明确(过 / 阻塞清单入账)。
+
+### Phase 5 实施记录(2026-08-24)
+
+**T-A skip 复核解锁** —— 41 个静态 skip 逐一裁定:实作 20 项、修正理由保留 21 项。
+- 实作(全部当日验证过):BACK-01/02/03/04/07、BB-02、BL-03/04/05/06、CMD-06、
+  PB-02/05/06/08/14/15、APP-04/10/13、TS-02。
+- 保留 skip 的理由修正为真实根因,四类:视觉类快照不可断言(BB-03/09/10/12、TS-05、
+  PB-01)、Record/Error 变体前端无渲染分支(BB-04/05/06/13)、OS 副作用不宜自动化
+  (BB-08、CMD-12、BACK-08)、smart 命令未注册(BACK-06、CMD-09/10/11、TS-04)、
+  引擎未接线(PB-03、BL-14、APP-14)+ 架构内部已被 BI 系覆盖(BL-16)。
+- 排障发现三笔:
+  1. autoui_keyboard 的方向键键名是 `ArrowUp`/`ArrowDown`(非 `up`),Tab 是 `Tab`;
+  2. **动作通道停摆泄洪污染**:pb09 的 ctrl+r 重试风暴延迟 8-10s 泄洪,会把历史
+     面板打开在后续键盘测试中途 → 方向键进搜索框(表面像"键盘死")。新增
+     `_panel_settled_closed` 守卫(等面板稳定关闭)后 PB-05/06 稳定通过 —— 与
+     060 R16"实例级键盘死"是两回事,后者仅真死实例(守卫 skip 兜底);
+  3. 多块累积时按事件找按钮须限定在目标块(marker 之后),否则点到旧块。
+- 水位:全套件 96 pass / 30 skip(基线 75/48;+21 pass、-18 skip),失败 3-4 个
+  均为在册负载时序/键盘竞态 flake 族,单跑全过。复跑中另定位三笔测试健壮性
+  缺口并修复:pb10 无 element_id type 会打进表格过滤框(TF 后第一个 input 不是
+  prompt —— 显式定向);tf01 受 cs01 键盘死失败残留的打开面板连坐(补
+  `_panel_settled_closed` 前置守卫);动作通道停摆 8-10s 超过部分 8-10s 等待窗
+  (pb10 type / tf01 过滤等待放宽到 20-25s)。注意:全套件对系统内存敏感
+  (并行 auto-lang/auto-ai 会话时实例可能被 OOM 连坐,50 失败级联 —— 060 R16
+  在册环境项,资源空闲窗口复跑即恢复)。
+
+**T-B vue 产物重生成验证** —— `auto gen` 首次刷新(产物原停在 08-05),
+vue-tsc 错误 78 → 13。
+- 仓内修复:s_header 预计算(视图内"字面量+len()"拼接在 vue codegen Bina 文本臂
+  产非法 JS,顺带消除 R016 垃圾节点)、PromptBar 签名补 `ai_suggestion: str` prop
+  (App 一直在传,签名漏声明 —— VM 宽容/Vue 失效)、`.OnInputComplete()` 补参、
+  store 空 struct 字面量改"全字面量占位+事后赋值"(直接嵌 `.dot` 字段值在 VM
+  handler codegen 报 `Undefined variable: self`,`output: None` 字面量位则毒化
+  handler —— 两端兼容写法见 shell_store.at RunCommand 注释)、api.at Block 补
+  table_sort_col/dir/filter_q 三字段、删冗余 `git_label` computed(var/computed
+  同名 → TS2300)。
+- 生成项目侧:Button.vue stub 的 `:class="class"` 保留字错误(class 本就 fallthrough,
+  删 prop)、删除无引用残留 CodeEditor.vue、pnpm 补 @vueuse/core。
+- **剩余 13 错 = 5 类引擎 codegen 阻塞**(详见 DEBTS"Vue 产物构建引擎侧阻塞"):
+  on_delete/onDelete 回调命名不一致(3)、cell.Tagged 可空需 `?.`(2)、Sort/Filter
+  双参 emit 参数数量(2)、cd 补全 handler 的 fs/File.is_dir/await/complete 泄漏
+  进 JS(4)、`.Failed` 动态读 str 字段(1)。另 `auto build` strict 被 v-for 容器
+  缺 `:key`(R006)挡,`--lenient` 可到 vue-tsc 层。
+- **注意**:`auto gen` 会重写 package.json(丢 @vueuse)且 Button.vue stub /
+  CodeEditor 删除不持久 —— 每次 gen 后需重打这三件补丁(引擎模板修好前)。

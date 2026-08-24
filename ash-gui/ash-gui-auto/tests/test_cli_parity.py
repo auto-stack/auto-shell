@@ -52,6 +52,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_command_exec import _submit_command  # noqa: E402
+from test_prompt_input import _panel_settled_closed  # noqa: E402
 from test_prompt_input import _ensure_prompt_active  # noqa: E402
 from test_command_exec import _find_prompt_input_vnode  # noqa: E402
 
@@ -302,6 +303,7 @@ def test_tf01_table_filter_filters_rows(mcp):
     """`ls` table → filter input row exists; typing shrinks the visible rows
     (renderer Filter bridge — id parse aligned with Sort, query from the
     input snapshot). Snapshot 不含 style 类,行存在性用单元格文本判定。"""
+    _panel_settled_closed(mcp)  # cs01 failure can leave the panel open
     _submit_command(mcp, "echo warmup")
     mcp.wait_until(_no_running, timeout=15)
     _submit_command(mcp, "ls")
@@ -321,7 +323,7 @@ def test_tf01_table_filter_filters_rows(mcp):
     mcp.call("autoui_type", element_id=fid, text="src", clear_first=True)
     ok = mcp.wait_until(
         lambda c: "pac.at" not in c.snapshot() and "tests" not in c.snapshot(),
-        timeout=10, interval=0.5,
+        timeout=25, interval=0.5,  # action channel stall can eat 8-10s (062 §7)
     )
     assert ok, (
         f"filter 'src' did not shrink rows (pac.at/tests still visible) — "
@@ -333,6 +335,7 @@ def test_tf01_table_filter_filters_rows(mcp):
 def test_tf02_sort_indicator_renders(mcp):
     """Click the name header → ▲ renders next to it (Plan 059 §4.4 leftover —
     the constant-slot indicator layout, now verified)."""
+    _panel_settled_closed(mcp)  # cs01 failure can leave the panel open
     _submit_command(mcp, "echo warmup")
     mcp.wait_until(_no_running, timeout=15)
     _submit_command(mcp, "ls")

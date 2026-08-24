@@ -106,3 +106,15 @@ input 并未完整实现 Emacs 行内编辑快捷键;要求
 - block 卡片背景/边框(bg-card/60 + border-border)未绘制(057 遗留)
 - VM 引擎 `str.split` 返回 i32 索引列表 + SET_ELEM 仅支持 ListData<Value>:
   系统性缺陷,其他 .at 代码用 split 会踩,值得引擎层根治
+
+## 6. finish-plan 复审(2026-08-24)
+
+- 实现与 18 单测仍在 auto-lang master(renderer.rs:138 `LineEditOp` / :431
+  `line_edit_keymap` / :12764 `mod line_edit_tests`)。
+- §5 遗留逐项:按钮点击补全 → 已由 plan-062 T7 收口(PickCompletionIdx 索引
+  回传,CP-01/02 在跑);block 卡片背景/边框 → 已支持(auto-lang class.rs
+  `card/N`→Surface+alpha、`border` 类,block_item.at:44 使用中);str.split/
+  SET_ELEM → DEBTS.md B5/B6 在册。
+- **仍开放**:①真实键盘键位矩阵的用户手测(MCP 通道到不了编辑器 key_binding
+  闭包,agent 无法替代);②undo/redo 等 §5 限制项(iced 无 API,平台约束)
+  已入账 DEBTS(2026-08-24 复审,"行内编辑平台限制"条)。

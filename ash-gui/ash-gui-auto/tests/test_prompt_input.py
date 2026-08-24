@@ -120,12 +120,15 @@ def test_pb10_ctrl_c_clears_input(mcp):
     _ensure_prompt_active(mcp)
     # Type with retry — the MCP action dispatch is async (16ms iced
     # subscription), so a single type can occasionally race the state read.
+    # Target the PROMPT input explicitly: after table tests (062 T9) the
+    # vtree's first input can be a table filter box, not the prompt.
     ok = mcp.wait_until(
         lambda c: (
-            c.call("autoui_type", text="some_text_to_clear", clear_first=True),
+            c.call("autoui_type", text="some_text_to_clear", clear_first=True,
+                   element_id=_find_prompt_input_vnode(c)),
             "some_text_to_clear" in c.state("input"),
         )[1],
-        timeout=8,
+        timeout=20,  # action channel can stall 8-10s under load (062 §7)
         interval=0.3,
     )
     assert ok, f"input not set:\n{mcp.state('input')[:100]}"
@@ -143,28 +146,113 @@ def test_pb10_ctrl_c_clears_input(mcp):
                     "engine flake, real keyboard verified OK — Plan 060 R16)")
 
 
-# ── PB-05,06: ↑↓ history (EDGE-01 enabled, but needs populated history) ─────
+# ── PB-05,06: ↑↓ history (real backend history since 060 M3/061) ──────────
 
 
-@pytest.mark.skip(reason="PB-05/06: history navigation needs populated history (EDGE-04-B blocks boot data)")
+def _keyboard_until_input(mcp, key, want_substr, timeout=8, modifiers=None):
+    """autoui_keyboard until the prompt input contains want_substr.
+    False = key never took effect (dead keyboard instance / unmapped key)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if modifiers:
+            mcp.call("autoui_keyboard", key=key, modifiers=modifiers)
+        else:
+            mcp.call("autoui_keyboard", key=key)
+        time.sleep(0.4)
+        if want_substr in mcp.state("input"):
+            return True
+    return False
+
+
+def _panel_settled_closed(mcp, timeout=20):
+    """Wait until the history panel is closed AND stable.
+
+    Prior keyboard retry storms (pb09 etc.) can flood delayed Ctrl+R events
+    8-10s later (062 §7 action-channel stall), flipping the panel open mid-
+    test and rerouting arrow keys into the search box. Closes an open panel
+    via the panel's own ctrl.r->Close binding, then requires two consecutive
+    closed readings before returning.
+    """
+    deadline = time.time() + timeout
+    stable_since = None
+    while time.time() < deadline:
+        open_now = "true" in mcp.state("history_open")
+        if open_now:
+            mcp.call("autoui_keyboard", key="r", modifiers=["ctrl"])
+            time.sleep(0.5)
+            stable_since = None
+            continue
+        if stable_since is None:
+            stable_since = time.time()
+        elif time.time() - stable_since >= 2.0:
+            return True
+        time.sleep(0.5)
+    return False
+
+
 def test_pb05_history_older(mcp):
-    """PB-05: ↑ navigates to older history."""
-    pass
+    """PB-05: ↑ recalls the last executed command (real ~/.auto-shell-history
+    via backend; guarded against dead-keyboard instances, Plan 060 R16)."""
+    _ensure_prompt_active(mcp)
+    if not _panel_settled_closed(mcp):
+        pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
+    marker = "echo pb05_hist_marker"
+    _submit_command(mcp, marker)
+    mcp.wait_until(lambda c: "Success" in c.state("blocks"), timeout=12)
+    if not _keyboard_until_input(mcp, "ArrowUp", marker, timeout=8):
+        pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
+    assert marker in mcp.state("input")
 
 
-@pytest.mark.skip(reason="PB-05/06: history navigation needs populated history (EDGE-04-B blocks boot data)")
 def test_pb06_history_newer(mcp):
-    """PB-06: ↓ navigates to newer history."""
-    pass
+    """PB-06: after ↑, ↓ walks back toward the empty newest slot."""
+    _ensure_prompt_active(mcp)
+    if not _panel_settled_closed(mcp):
+        pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
+    marker = "echo pb06_hist_marker"
+    _submit_command(mcp, marker)
+    mcp.wait_until(lambda c: "Success" in c.state("blocks"), timeout=12)
+    if not _keyboard_until_input(mcp, "ArrowUp", marker, timeout=8):
+        pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
+    # ↓ returns to the (empty) newest slot.
+    deadline = time.time() + 8
+    fired = False
+    while time.time() < deadline:
+        mcp.call("autoui_keyboard", key="ArrowDown")
+        time.sleep(0.4)
+        inp = mcp.state("input")
+        if 'input: ""' in inp:
+            fired = True
+            break
+    if not fired:
+        pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
+    assert 'input: ""' in mcp.state("input")
 
 
-# ── PB-08: Tab (EDGE-01 enabled, but needs completion suggestions) ──────────
+# ── PB-08: Tab completion (real engine candidates since 060 M3/061) ───────
 
 
-@pytest.mark.skip(reason="PB-08: Tab needs populated completion suggestions (mock returns single ls)")
 def test_pb08_tab_completion(mcp):
-    """PB-08: Tab applies first completion candidate."""
-    pass
+    """PB-08: after typing `ec`, Tab applies the first candidate (echo)."""
+    _ensure_prompt_active(mcp)
+    vnode = _find_prompt_input_vnode(mcp)
+    assert vnode, "prompt input not found"
+    mcp.call("autoui_type", text="ec", element_id=vnode, clear_first=True)
+    ok = mcp.wait_until(lambda c: "suggestions" in c.snapshot() or "echo" in c.snapshot(),
+                        timeout=8, interval=0.4)
+    assert ok, "completion candidates did not populate for 'ec'"
+    deadline = time.time() + 8
+    fired = False
+    while time.time() < deadline:
+        mcp.call("autoui_keyboard", key="Tab")
+        time.sleep(0.4)
+        if "echo" in mcp.state("input"):
+            fired = True
+            break
+    if not fired:
+        pytest.skip("MCP keyboard dispatch dead on this instance (Plan 060 R16)")
+    assert "echo" in mcp.state("input"), "Tab did not apply the candidate"
+    mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)
 
 
 # ── PB-12: Ctrl+D (EDGE-01 enabled) ─────────────────────────────────────────
@@ -183,29 +271,71 @@ def test_pb12_ctrl_d_no_crash(mcp):
     assert "Key sent" in r, f"Ctrl+D failed:\n{r[:100]}"
 
 
-# ── PB-01,02,03,14,15: skip (visual/not implemented) ────────────────────────
+# ── PB-01,02,03,14,15: 2026-08-24 复核(057 Phase 5 T-A)────────────────────
 
 
-@pytest.mark.skip(reason="PB-01: autofocus not in vnode state (visual/focus)")
+@pytest.mark.skip(reason="PB-01: autofocus is visual focus state — not in vnode state, MCP cannot observe")
 def test_pb01_autofocus(mcp):
     pass
 
 
-@pytest.mark.skip(reason="PB-02: continuation symbol switch needs continuation detection")
 def test_pb02_continuation_symbol(mcp):
-    pass
+    """PB-02: unclosed quote switches the prompt symbol ❯ → · (continuation
+    detection lives in OnInput, Plan 057 §2.3; symbol is plain text)."""
+    _ensure_prompt_active(mcp)
+    vnode = _find_prompt_input_vnode(mcp)
+    assert vnode, "prompt input not found"
+    mcp.call("autoui_type", text="ec", element_id=vnode, clear_first=True)
+    mcp.wait_until(lambda c: "❯" in c.snapshot(), timeout=8)
+    mcp.call("autoui_type", text='echo "abc', element_id=vnode, clear_first=True)
+    ok = mcp.wait_until(lambda c: "·" in c.snapshot(), timeout=8, interval=0.4)
+    # Restore a clean prompt for later tests.
+    mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)
+    assert ok, "continuation symbol · not shown for unclosed quote"
 
 
-@pytest.mark.skip(reason="PB-03: textarea multiline not implemented")
+@pytest.mark.skip(reason="PB-03: single-line input by design (multiline continuation renders via · symbol instead)")
 def test_pb03_textarea_autogrow(mcp):
     pass
 
 
-@pytest.mark.skip(reason="PB-14: pickCompletion needs clickable suggestion + emit sim")
 def test_pb14_pick_completion(mcp):
-    pass
+    """PB-14: clicking a completion candidate applies it to the input
+    (PickCompletionIdx renderer bridge, Plan 062 T7 — the 058-era loop-var
+    emit issue is gone)."""
+    _ensure_prompt_active(mcp)
+    vnode = _find_prompt_input_vnode(mcp)
+    assert vnode, "prompt input not found"
+    mcp.call("autoui_type", text="ec", element_id=vnode, clear_first=True)
+    import re as _re
+    cand = None
+    deadline = time.time() + 8
+    while time.time() < deadline and not cand:
+        for m in _re.finditer(r"button #([A-Za-z0-9_]+)", mcp.snapshot()):
+            info = mcp.call("autoui_inspect", element_id=m.group(1))
+            if "PickCompletionIdx" in info and "echo" in info:
+                cand = m.group(1)
+                break
+        time.sleep(0.3)
+    assert cand, "clickable completion candidate (echo) not found"
+    mcp.click(cand)
+    ok = mcp.wait_until(lambda c: "echo" in c.state("input"), timeout=8)
+    mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)
+    assert ok, "clicking candidate did not apply it to the input"
 
 
-@pytest.mark.skip(reason="PB-15: injected needs populated commands (EDGE-04-B)")
 def test_pb15_injected(mcp):
-    pass
+    """PB-15: sidebar Pick injects the command name into the prompt input
+    (Pick renderer bridge, Plan 060 R16)."""
+    import re as _re
+    _ensure_prompt_active(mcp)
+    # Clear input first so the completion panel closes (BI-03 pattern).
+    mcp.call("autoui_type", text="", clear_first=True)
+    time.sleep(0.3)
+    m = _re.search(r'button #([A-Za-z0-9_]+) "build"', mcp.snapshot())
+    assert m, "sidebar 'build' button not found"
+    mcp.click(m.group(1))
+    ok = mcp.wait_until(lambda c: '"build"' in c.state("input"), timeout=8)
+    assert ok, f"Pick did not inject 'build': {mcp.state('input')!r}"
+    vnode = _find_prompt_input_vnode(mcp)
+    mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)

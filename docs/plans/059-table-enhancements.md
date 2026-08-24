@@ -1,9 +1,9 @@
 # 059 — TableBlock 表格增强 V1:排序 / 过滤 / 斑马线 / 右对齐 / 点击打开 / CSV 导出
 
 - 日期:2026-08-21
-- 状态:**V1 部分完成**(排序 ✓ 斑马线 ✓ 右对齐 ✓ 点击打开(桥接就绪待实测)
-  过滤框 UI ✓ 但筛行链路未通;CSV 导出未做;Vue 列宽拖拽/吸顶/hover 注入未做)。
-  已知遗留见 §5
+- 状态:**VM 侧 V1 闭环**(2026-08-24 复审:过滤链路/▲▼ 指示由 plan-062 T9
+  修复并当日复验通过;首命令 bug 不复现;CSV/TSV 导出在码待人工确认;
+  余 Vue 侧增强 + vue 产物验证,见 §7)
 - 上游:plan-058(行内编辑;其提交 45ef43ad 后出现的"首命令失败"回归影响
   本轮所有验证,见 §5.3)
 - 跨仓库提交:auto-lang worktree(auto-shell 分支)`534b1e36`,
@@ -85,3 +85,46 @@ V1 全量:点击表头排序(方向指示)、列宽调整(仅 Vue 拖拽,VM iced
 
 - DEBTS §B1/B3 修复后:表格可回归纯 .at 声明式实现,renderer 桥退役;
 - DEBTS §B7 修复后:Sort/Filter/OpenPath 桥收敛为标准 emit 链。
+
+## 7. finish-plan 复审(2026-08-24)
+
+- §4.3 过滤链路、§4.4 ▲/▼ 指示:**已由 plan-062 T9 收口**(引擎两修:Filter 桥
+  id 解析 int 优先 + convert_input 事件参数烘焙改 event_to_message_with)。当日
+  复跑 TF-01/TF-02 于当日二进制(auto.exe 08-24 17:28 / ash_server.dll 15:33)
+  均通过。§5.1/§5.2 随之销案。
+- §4.1 CSV 导出:**已在码** —— CopyOutput(Table→TSV)与 ExportCsv(CSV 引号
+  转义)两侧齐全(block_item.at:466-561 + auto-lang renderer.rs:6917 arboard 桥);
+  剪贴板内容无 MCP 断言通道,062 T9 定为"留人工验证"—— 用户点一次导出图标
+  即闭环。
+- §5.3 首命令不执行:**当前不复现**(2026-08-24 探针:全新实例单次提交 echo,
+  5.3s 出块;062 §9 T10 双根因修复后该族消除;测试中 `echo warmup` 已是惯性
+  写法而非规避)。
+- §4.2 Vue 增强(列宽拖拽/吸顶/hover 注入):**未做** —— auto-lang vue.rs 无
+  ash-table 注入,block_item.at 中标记类亦已不存;062 T9 曾裁定"依赖 auto-lang
+  可用窗口,可后置"但未入账 DEBTS。§5.4(vue 产物 gen+build 验证)与 057 §4.5
+  同项,均未做(gen/ 停在 2026-08-05)。
+- 结论:VM 侧 V1 已闭环;尾巴 = Vue 侧表格增强 + vue 产物重验证 + 剪贴板
+  人工确认。
+
+## 8. Phase 2 — 尾巴收口(2026-08-24 立项,finish-plan 复审产物)
+
+- **T-C CSV/TSV 剪贴板自动验证**:CopyOutput(Table→TSV)/ ExportCsv(CSV 转义)
+  的 arboard 桥以 pytest 锁定 —— MCP 点击导出图标后经
+  `powershell Get-Clipboard` 断言剪贴板内容(TSV 列分隔 / CSV 引号转义)。
+  取代 062 T9 的"留人工验证"。验收:新增 1-2 项 pytest 过。
+- **T-D Vue 表格增强**:分三档 —— 行 hover(Vue 端 `hover:` 类原生支持,随
+  T-B 重生成验证即可);表头吸顶(`sticky` 一行 CSS,验证生成产物);列宽
+  拖拽(需 vue.rs 注入脚本或生成物后处理,评估成本后落地或记 DEBTS)。
+  验收:重生成后的 Vue 表格具备 hover + 吸顶,列宽拖拽有明确结论。
+
+### Phase 2 实施记录(2026-08-24)
+
+**T-C 剪贴板自动化**:BL-05(CopyCommand 命令文本)、BL-07(CopyOutput→TSV,
+含 tab 分隔断言)、BL-08(ExportCsv→CSV,含逗号分隔断言)经
+`powershell Get-Clipboard` 锁定 —— 062 T9 的"留人工验证"销案。注意:剪贴板是
+系统级共享,并发测试实例会互踩(读到对方的写入),此类用例不可并行跑。
+
+**T-D Vue 表格增强**:行 hover 已在(`hover:bg-white/[0.03]`,Vue 原生生效);
+表头吸顶已加(`sticky top-0 z-10 backdrop-blur-sm`,block_item.at 表头行 ——
+Vue 生效,VM 忽略 sticky 无害,生成产物已验证);**列宽拖拽延期**(需 vue.rs
+JS 注入或生成物后处理,入 DEBTS)。

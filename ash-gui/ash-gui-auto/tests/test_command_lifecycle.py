@@ -11,6 +11,8 @@ Run:
 
 import time
 
+import re
+
 import pytest
 
 from test_command_exec import _submit_command
@@ -99,34 +101,42 @@ def test_cmd08_duration_badge_after_success(mcp):
     assert "ms" in bs, f"duration badge missing:\n{bs[:400]}"
 
 
-# ── CMD-06,09..12: xfail (need emit sim / smart / populated data) ──────────
+# ── CMD-06,09..12: 2026-08-24 复核(057 Phase 5 T-A)─────────────────────────
 
 
-@pytest.mark.skip(reason="CMD-06: cancel needs Running block + Stop emit sim")
 def test_cmd06_cancel_stops_first_running(mcp):
-    """CMD-06: cancel stops only the first (latest) Running block."""
-    pass
+    """CMD-06: cancel stops the running command (Stop bridge → Cancelled,
+    real process kill; single-Running case — same path as BI-01/CC-01)."""
+    _submit_command(mcp, "ping -n 30 127.0.0.201")
+    ok = mcp.wait_until(lambda c: "Running" in c.state("blocks"), timeout=10)
+    assert ok, "ping never reached Running"
+    stop = None
+    for m in re.finditer(r"button #([A-Za-z0-9_]+)", mcp.snapshot()):
+        info = mcp.call("autoui_inspect", element_id=m.group(1))
+        if "Stop" in info:
+            stop = m.group(1)
+            break
+    assert stop, "stop button not found"
+    mcp.click(stop)
+    ok = mcp.wait_until(lambda c: "Cancelled" in c.state("blocks"), timeout=15)
+    assert ok, f"cancel did not reach Cancelled: {mcp.state('blocks')[:300]}"
 
 
-@pytest.mark.skip(reason="CMD-09: smart commands need populated smart_commands")
+@pytest.mark.skip(reason="CMD-09: no smart commands registered in real backend (see BACK-06)")
 def test_cmd09_smart_runs(mcp):
-    """CMD-09: runSmart creates a block with 'smart NAME' display."""
     pass
 
 
-@pytest.mark.skip(reason="CMD-10: smart success needs populated smart_commands")
+@pytest.mark.skip(reason="CMD-10: no smart commands registered in real backend (see BACK-06)")
 def test_cmd10_smart_success(mcp):
-    """CMD-10: smart success sets output + duration."""
     pass
 
 
-@pytest.mark.skip(reason="CMD-11: smart failure path not implemented (no try/catch in .at)")
+@pytest.mark.skip(reason="CMD-11: smart failure path needs try/catch in .at (engine syntax) — moot until smart commands exist")
 def test_cmd11_smart_failure(mcp):
-    """CMD-11: smart failure → Failed status."""
     pass
 
 
-@pytest.mark.skip(reason="CMD-12: openPath needs clickable table cell + OS dep")
+@pytest.mark.skip(reason="CMD-12: openPath opens a real OS window — side effect unfit for automated suite (see BACK-08)")
 def test_cmd12_open_path(mcp):
-    """CMD-12: openPath opens a path with OS default app."""
     pass

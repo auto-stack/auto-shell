@@ -13,7 +13,7 @@ use types: CompletionItem, HighlightSpan
 // auto.*),不需要 use(use auto.* 在 VM 渲染路径下是 no-op)。fs.read_dir
 // 的白名单登记见 native_catalog.rs 2026-08-22 注释。
 
-widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {
+widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, injected_command: str, ai_suggestion: str, on_run: msg, on_injected: msg, on_clear: msg, on_exit: msg) {
     msg Msg { Run(str), Injected, Clear, Exit,
               HistoryOlder, HistoryNewer,
               PickCompletion(CompletionItem), PickCompletionIdx(int),
@@ -66,6 +66,9 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
         // 字段(handler 侧可以,JobDone 遍历先例)——故 handler 在每次赋值后
         // 预构建平行字符串数组供视图渲染;点击传索引回 handler 取真身。
         var s_labels []str = []
+        // 面板计数行文本(handler 预计算 —— 视图内字面量+len() 拼接在 vue
+        // codegen 的 Bina 文本臂产非法 JS,2026-08-24 规避;jobs_label 同款)。
+        var s_header str = ""
         var s_kinds []str = []
         var s_descs []str = []
         var s_colors []str = []
@@ -108,7 +111,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 col {
                     style: "max-h-40 overflow-y-auto rounded-md border border-border bg-card/60 py-1"
                     // 计数行(len() 拼 str 与 jobs_label 同款,VM/JS 双端 coerce)
-                    text "候选 " + .s_labels.len() + " 项 · Tab 循环 · 点击选用" {
+                    text .s_header {
                         style: "px-2 py-0.5 text-[10px] text-muted-foreground/60 select-none shrink-0"
                     }
                     for i, lb in .s_labels {
@@ -383,7 +386,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 // Plan 053 M4: 续行标志(未闭合分隔符/引号/尾随 \)→ prompt 符号 + Enter 行为。
                 .DoContinuation()
                 // Plan 053 M5: 兜底触发补全(vue 端 OnInputComplete 自带 80ms debounce)。
-                .OnInputComplete()
+                .OnInputComplete(.input)
             }
         }
 
@@ -503,11 +506,8 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                             if in_q {
                                 if cur != "." && cur != ".." && cur.starts_with(frag) {
                                     if File.is_dir(base_dir + "/" + cur) {
-                                        var di CompletionItem = CompletionItem{}
-                                        di.display = cur
-                                        di.description = "dir"
-                                        di.replacement = dir_rel + cur + "/"
-                                        di.kind = "dir"
+                                        var di CompletionItem = CompletionItem{ display: cur, description: "dir",
+                                            replacement: dir_rel + cur + "/", kind: "dir" }
                                         dirs.push(di)
                                     }
                                 }
@@ -735,6 +735,7 @@ widget PromptBar(cwd: str, home: str, command_names: []str, history: []str, inje
                 }
             }
             .s_labels = labels
+            .s_header = "候选 " + labels.len() + " 项 · Tab 循环 · 点击选用"
             .s_kinds = kinds
             .s_descs = descs
             .s_colors = colors

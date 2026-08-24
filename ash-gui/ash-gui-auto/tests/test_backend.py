@@ -8,6 +8,8 @@ Run:
     AUTO_BIN=<auto.exe> python -m pytest tests/test_backend.py -v
 """
 
+import re
+
 import pytest
 
 from test_command_exec import _submit_command
@@ -64,46 +66,86 @@ def test_back12_renderedoutput_text_variant(mcp):
     assert "back12_text" in mcp.state("blocks")
 
 
-# ── BACK-01..04,06..08: xfail (mock data / not wired in vm) ────────────────
+# ── BACK-01..04,06..08: 2026-08-24 复核(057 Phase 5 T-A)───────────────────
+# 原 skip 理由("returns mock")在 060 M3/061 真后端(cdylib→ash-core)后失效,
+# 逐项补写实作断言;smart/open_path 维持 skip(理由更新)。
 
 
-@pytest.mark.skip(reason="BACK-01: command_list returns mock (store uses static values in vm)")
 def test_back01_command_list_returns_data(mcp):
-    """BACK-01: command_list returns cwd+home+commands."""
-    pass
+    """BACK-01: command_list returns real registry data (name + description).
+
+    Boot Init pulls command_list from the backend: the sidebar renders real
+    buttons with registry descriptions (81 entries on the reference box).
+    """
+    snap = mcp.snapshot()
+    assert 'button' in snap, "no command buttons rendered"
+    # Real registry entries carry descriptions (mock era had none).
+    assert "Concatenate files" in snap, (
+        "real command descriptions missing — command_list still mock?"
+    )
+    for name in [".", "build", "cd", "ls"]:
+        assert f'"{name}"' in snap, f"registered command {name!r} missing"
 
 
-@pytest.mark.skip(reason="BACK-02: history returns mock (store uses empty list in vm)")
 def test_back02_history_returns_lines(mcp):
-    """BACK-02: history returns CLI history lines."""
-    pass
+    """BACK-02: history returns real CLI history lines (~/.auto-shell-history
+    via persisted_history; the `history` computed field is a VM vmref that
+    autoui_state cannot read — engine debt, 062 §7)."""
+    hist = mcp.state("persisted_history")
+    assert "ls" in hist, f"persisted_history lacks real entries: {hist[:300]}"
 
 
-@pytest.mark.skip(reason="BACK-03: complete returns mock single 'ls' item")
 def test_back03_complete_returns_items(mcp):
-    """BACK-03: complete returns CompletionItem candidates."""
-    pass
+    """BACK-03: complete returns real CompletionItem candidates ('ec' → echo
+    in the completion panel, with kind/description from the engine)."""
+    from test_command_exec import _find_prompt_input_vnode
+    vnode = _find_prompt_input_vnode(mcp)
+    assert vnode, "prompt input not found"
+    mcp.call("autoui_type", text="ec", element_id=vnode, clear_first=True)
+    # suggestions state: [] -> populated (vmref list) once the engine returns
+    # candidates for the 'ec' prefix (sidebar always contains "echo", so the
+    # snapshot alone cannot distinguish the panel).
+    ok = mcp.wait_until(
+        lambda c: "[]" not in c.state("suggestions"), timeout=10, interval=0.4
+    )
+    # Clean up so later tests start from an empty prompt.
+    mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)
+    assert ok, "engine completion returned no candidates for 'ec'"
 
 
-@pytest.mark.skip(reason="BACK-04: prompt_context returns mock (store skips it in vm)")
 def test_back04_prompt_context(mcp):
-    """BACK-04: prompt_context returns git_branch+status."""
-    pass
+    """BACK-04: prompt_context returns real git context (cwd inside the
+    auto-shell repo → git_label renders ⎇)."""
+    label = mcp.state("git_label")
+    assert "⎇" in label, f"git_label lacks branch marker: {label!r}"
 
 
-@pytest.mark.skip(reason="BACK-06: run_smart returns mock text (needs populated smart_commands)")
+@pytest.mark.skip(reason="BACK-06: no smart commands registered in real backend (run_smart name-only; NL route deferred, DEBTS 062-T14)")
 def test_back06_run_smart(mcp):
-    """BACK-06: run_smart synchronously returns text."""
     pass
 
 
-@pytest.mark.skip(reason="BACK-07: cancel is no-op mock (renderer handles kill)")
 def test_back07_cancel(mcp):
-    """BACK-07: cancel stops running command."""
-    pass
+    """BACK-07: cancel stops a running command (Cancelled status; real kill
+    via the Stop renderer bridge — Plan 060 R16)."""
+    import time
+    _submit_command(mcp, "ping -n 30 127.0.0.201")
+    ok = mcp.wait_until(lambda c: "Running" in c.state("blocks"), timeout=10)
+    assert ok, "ping never reached Running"
+    stop = None
+    for m in re.finditer(r"button #([A-Za-z0-9_]+)", mcp.snapshot()):
+        info = mcp.call("autoui_inspect", element_id=m.group(1))
+        if "Stop" in info:
+            stop = m.group(1)
+            break
+    assert stop, "stop button not found on running block"
+    mcp.click(stop)
+    ok = mcp.wait_until(
+        lambda c: "Cancelled" in c.state("blocks"), timeout=15
+    )
+    assert ok, f"cancel did not reach Cancelled: {mcp.state('blocks')[:400]}"
 
 
-@pytest.mark.skip(reason="BACK-08: open_path needs OS integration + clickable cell")
+@pytest.mark.skip(reason="BACK-08: open_path opens a real OS window — side effect unfit for automated suite (bridge verified manually, Plan 059)")
 def test_back08_open_path(mcp):
-    """BACK-08: open_path opens with OS default app."""
     pass

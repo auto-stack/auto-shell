@@ -29,19 +29,28 @@ def test_ts03_smartcommands_conditional(mcp):
     assert "ash" in snap.lower()  # app renders regardless
 
 
-@pytest.mark.skip(reason="TS-02: pick needs populated commands (mock empty) + emit sim")
 def test_ts02_pick_injects_command(mcp):
-    """TS-02: clicking a command injects its name into the input."""
-    pass
+    """TS-02: clicking a command button injects its name into the input
+    (Pick renderer bridge, Plan 060 R16; real registry data since 061)."""
+    import re as _re
+    import time as _time
+    from test_command_exec import _find_prompt_input_vnode
+    mcp.call("autoui_type", text="", clear_first=True)
+    _time.sleep(0.3)
+    m = _re.search(r'button #([A-Za-z0-9_]+) "ls"', mcp.snapshot())
+    assert m, "sidebar 'ls' button not found"
+    mcp.click(m.group(1))
+    ok = mcp.wait_until(lambda c: '"ls"' in c.state("input"), timeout=8)
+    assert ok, f"Pick did not inject 'ls': {mcp.state('input')!r}"
+    vnode = _find_prompt_input_vnode(mcp)
+    mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)
 
 
-@pytest.mark.skip(reason="TS-04: runSmart needs populated smart_commands (mock empty)")
+@pytest.mark.skip(reason="TS-04: no smart commands registered in real backend (see BACK-06)")
 def test_ts04_runsmart_triggers(mcp):
-    """TS-04: clicking a SmartCommand runs it."""
     pass
 
 
-@pytest.mark.skip(reason="TS-05: command color styling is visual (needs populated list)")
+@pytest.mark.skip(reason="TS-05: color styling is visual — snapshot carries no style classes")
 def test_ts05_command_colors(mcp):
-    """TS-05: commands sky-blue, smart purple styling."""
     pass

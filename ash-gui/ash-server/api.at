@@ -112,6 +112,11 @@ pub type Block = {
     // collapse_glyph/exit_label computed 回退成 "${...}" 字面量。
     exit_code: int
     collapsed: bool
+    // 表格增强前端状态(Plan 059,VM 由 renderer 直改,Vue 由 Sort/Filter
+    // handler 维护;后端不经手,契约补字段供两端 Block 类型一致)。
+    table_sort_col: int
+    table_sort_dir: int
+    table_filter_q: str
 }
 
 pub type GitStatusInfo = {

@@ -214,7 +214,7 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                         // bg-white/10(暗色主题下比内容略浅)。block id 事件参数(.block.id)
                         // 经引擎侧回落解析器修复(DEBTS §B8)。
                         row {
-                            style: "ash-table-row ash-table-header items-center bg-white/10 border-b border-border display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr))"
+                            style: "ash-table-row ash-table-header sticky top-0 z-10 backdrop-blur-sm items-center bg-white/10 border-b border-border display:grid; grid-template-columns: repeat(" + .block.output.Table.columns.len().str() + ", minmax(60px, 1fr))"
                             for ci, cname in .block.output.Table.columns {
                                 button {
                                     onclick: .Sort(.block.id, ci)

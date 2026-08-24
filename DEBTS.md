@@ -667,3 +667,72 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
   handler 原生可用)。
 - prompt_bar `auto_hint`(# 符号)是引擎 is_auto_expression 静态强信号的
   启发式镜像,两端口径可漂移(仅视觉提示,执行路由以引擎为准)。
+
+## ash-gui 引擎侧在册债(Plan 058/060 复审入账,2026-08-24)
+
+> finish-plan 复审 056-060 时发现以下债此前仅记录于计划正文,未入账。
+> 均为引擎(auto-lang)或 VM 机制域,短期内不可在本仓解决。
+
+### MCP 键盘派发每实例偶发死(Plan 060 R16 发现②)
+
+- **现状**:`autoui_keyboard`(Ctrl+r/Enter 等)在约半数启动实例上完全无效
+  (重试/预热/聚焦均不救),另一半正常 —— 同一二进制,启动期竞态。真实键盘
+  不受影响。
+- **现行 workaround**:键盘依赖测试(history_search/pb09/CC-01)实例级 skip,
+  注明 Plan 060 R16。
+- **根因**:疑似 key_bindings 填充竞态,未定位;auto-lang 域(master 长期被
+  并行 Plan 占用,2026-08-24 仍在 433 后演进)。
+- **推翻条件**:auto-lang 侧定位并修复启动期键盘订阅竞态。
+
+### 快速连打时 input 重放丢命令(Plan 060 第五轮)
+
+- **现状**:type 后 <80ms submit 时,oninput debounce 重放旧 input,renderer
+  RunCommand 桥判"input 非空"丢弃命令(不建块、无任何反馈)。
+- **现行 workaround**:测试辅助 `_submit_command` type 后等待 input 落盘再
+  submit(0.4s 间隔);真实用户快速操作仍可触发。
+- **根因**:序列号守卫未覆盖 input 重放路径;引擎/renderer 机制域。
+- **推翻条件**:renderer 侧对 input 重放加序列号守卫或以提交时快照为准。
+
+### 字符串池无 GC / VM 确定性析构未接线(Plan 060 第十二/十三轮)
+
+- **现状**:VM 字符串池只增不减;`DROP=0x05` 为空壳、codegen 零发射,
+  设计声明的三层生命周期(作用域清理/逃逸分析/Shared 引用计数)在 VM 后端
+  均未接线。正确性风险已被 u32 化 + 内容去重消除,仅内存单调增长。
+- **接受理由**:量级可控(ash-gui 重启即释放);真 RAII/GC 均为引擎大件。
+- **推翻条件**:auto-lang 立项实现(路线见 060 §第十二轮:DROP 发射+引用
+  计数 / 标记清除 / 定期重建三选)。
+
+### 行内编辑平台限制(Plan 058 §5,iced 0.14 约束)
+
+- **undo/redo 无 API**(C-_/C-x u 不做);yank-pop(M-y)、quoted-insert(C-v)、
+  word-case(M-u/l/c)、Vim operator-pending(d3w/ciw)/visual/`:` 命令行、
+  Vue 端 Vim 模式(需 JS 层)—— 均未实现,表结构留有扩展位。
+- **接受理由**:iced 0.14 `TextEditor` 无撤销 API;其余为低频编辑件,
+  键位表架构已就绪,后续可增量补。
+
+## Vue 产物构建引擎侧阻塞(Plan 057 Phase 5 T-B,2026-08-24)
+
+> `auto gen` 重生成 + 仓内契约修复后,vue-tsc 余 13 错 / 5 类,均为 auto-lang
+> vue/ts codegen 域(master 时点被 Plan 443 会话占用,未动)。修复后 Vue 构建
+> 应能全绿;当前 Vue/浏览器模式**不可构建**,merged VM 模式不受影响。
+
+1. **子组件回调命名不一致**(3 错):BlockList/BlockItem 的 props 类型生成
+   `on_delete: () => void`(snake_case 且必填),而 App/BlockList 绑定发射
+   `onDelete` —— 名字永不相配(043 R4 修过 PascalCase emit,`Delete` 形态漏网)。
+2. **可空变体字段模板访问**(2 错):`cell.Tagged.text` 在 v-if 守卫内仍报
+   TS18049,生成物需 `?.`。
+3. **多参 emit 参数数量**(2 错):`Sort(int,int)`/`Filter(str)` 的 emit 签名
+   生成 0 参(043 B-1 只修了单 payload)。
+4. **VM stdlib 泄漏进 JS**(4 错):prompt_bar cd 补全 handler 的
+   fs.read_dir/File.is_dir/`await complete`/`fs` 原样输出到 .vue script ——
+   VM-only 原语无 JS shim 时应降级或报错,而非生成坏 JS。
+5. **str 字段动态变体读**(1 错):`.__sse_status.Failed`(status 是裸串或
+   {"Failed":msg})—— 需 any 通道或契约化。
+6. **v-for 容器缺 `:key`**(R006,strict build 阻塞):codegen 只给 registry
+   组件(如 Button)发 `:key`,div/row 容器的 v-for 不发。
+7. **gen 模板缺口**:`auto gen` 重写 package.json 丢 `@vueuse/core`;Button.vue
+   stub 的 `:class="class"` 保留字写法、无引用的 CodeEditor.vue 残留不清理 ——
+   gen 后需三件手工补丁(pnpm add @vueuse/core / 修 Button stub / 删 CodeEditor)。
+
+另:**表格列宽拖拽(Vue)延期** —— 需 vue.rs 按标记类注入拖拽脚本或生成物后
+处理(Plan 059 §4.2;hover/吸顶已于 2026-08-24 以纯 CSS 类落地)。

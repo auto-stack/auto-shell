@@ -1,8 +1,8 @@
 # 060 — api.at 契约归一:merged 模式进程内后端(退役 renderer 桥)
 
 - 日期:2026-08-22
-- 状态:**M1+M2 完成**(契约归一 ✓ 语义下沉 ✓ 12 条命令 MCP 全量验证通过;
-  M3 留接口不做)。实施记录与设计偏差见 §6
+- 状态:**M1+M2+M3 完成**(M3 于 2026-08-22 终落地 ash-runner,后经 plan-061
+  演进为 `auto run -r vm` + cdylib 形态)。第十六轮后的引擎侧善后见文末 §7 复审
 - 上游:Plan 057(VM+HTTP 一等模式,SSE 泵)、Plan 059(表格增强,ls 拦截的
  下游债务)、2026-08-22 的 cd/pwd 会话拦截与 `ls | where` 过滤(过渡实现)
 - 跨仓库:auto-shell(worktree `plan-060`)+ auto-lang(worktree `auto-shell`)
@@ -675,5 +675,27 @@ master,首命令即崩。稳定运行请用 worktree 构建产物(基线 db8a460
 四桥,全套 63/44/0 验证):
 `D:\autostack\auto-shell\.worktrees\verify-bridge\ash-gui\ash-server\target\debug\ash-runner.exe`
 (cwd 须为某 ash-gui-auto 检出;`.worktrees/auto-lang` junction 已重指
-bridge worktree,worktree 内重建保持稳定基线;引擎修复后主检出重编即恢复,
-junction 可指回 `D:\autostack\auto-lang`)。
+  bridge worktree,worktree 内重建保持稳定基线;引擎修复后主检出重编即恢复,
+  junction 可指回 `D:\autostack\auto-lang`)。
+
+## 7. finish-plan 复审(2026-08-24)
+
+- **静默退出债(§第五/十五轮)与 RC canary 崩溃(§R16 补记):已在上游销案** ——
+  auto-lang Plan 419 §9.7(分支 419-uaf `a76e9cbe`)定性为真 UAF:
+  `json_to_vm_value` 外层 Array/Object 臂组装顶层容器漏「插入即 retain」,
+  子对象提前释放(RC 落地前同缺口即静默堆损坏);修复后崩溃用例转绿、ash-gui
+  62 过、canary 保持开启(auto-lang KNOWN-DEBT-AND-RISKS 419-P1/P2 条目 ✅)。
+  正文第十五轮"活跃债"定性随之过时。
+- **MCP 键盘派发偶发死(R16 发现②):仍活跃**(062 收官口径 2026-08-24 全套件
+  仍有 CC-01 实例级 skip)—— **已入账 DEBTS**(2026-08-24 复审)。
+- **快速连打 input 重放丢命令(§第五轮 UI 债):状态未变**,已入账 DEBTS(同上)。
+- 诊断探针(DBG-HOST/DBG-HOSTCALL/DBG-BRIDGE/DBG-PUMP):已全部移除 ✓;
+  `.worktrees/auto-lang` junction 已指回主检出(062 §7 合并记录)✓;ash-runner
+  被 plan-061 退役(bin 保留参考)✓。
+- run_smart/jobs mock(§5):jobs 已真化且有 UI(plan-062 T2 jobs 面板 + Kill);
+  run_smart 仍按名执行,NL 路由延期(DEBTS 062-T14 在册)。
+- 字符串池无 GC / VM 确定性析构未接线(§第十二/十三轮):auto-lang KNOWN-DEBT
+  无对应条目(仅 417-followup remap 表 u16 相邻项)—— 已入账本仓 DEBTS
+  (2026-08-24 复审)。
+- 结论:M1+M2+M3 全部完成;本日复验(TF-01/02 + 全新实例首命令探针)通过。
+  三笔 UI/引擎债(键盘竞态 / input 重放 / 池 GC)已入账 DEBTS,**可归档**。
