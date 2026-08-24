@@ -463,3 +463,46 @@ T12 chat 面板的交互形态相关);③ local 池路由质量验证。三件�
   键盘竞态/时序 flake 族(本轮机器负载显著:套件耗时 12.5min vs T11 时的 9.5min,
   同机 auto-ai/auto-lang 并行会话在跑)。新增 AC-01/CR-01/C1-01 三项在所有轮次
   稳定通过;无真实回归。
+
+## 12. Phase 3 续 2:T12 块内 AI chat(2026-08-24 下午,同 session)
+
+### 形态决策:零引擎的「块内 chat」先行
+
+原 T12 规格(新 SSE 事件族 AiChunk/AiToolCall/AiToolResult + 右侧抽屉面板)需动
+引擎 —— 沿用 T11 的既有事件方案先落**块内 chat**(对齐 CLI block_tui 的聊天
+形态:块即对话上下文):`?? <消息>` 提交 → 专用 chat 线程 → 流式增量经既有
+`CommandOutput` 事件写块(Running 态实时渲染)→ 回合结束 `CommandResult`
+收尾。多轮会话跨块持续(`ChatSession` 持久化 ~/.auto-shell-ai-chat.json),
+`?? /clear` 清空(与 CLI F4 同名指令)。右侧抽屉面板(AiChunk 事件族)留作
+引擎空闲后的升级件,届时块内形态可保留为 fallback。
+
+### 实现
+
+- **`ash-server-chat` 专用线程**(nl2cmd 线程同款范式):懒建 `ChatSession`
+  (失败置 None,daemon 重启后下一条消息自愈);上下文经 `set_context_str`
+  走 SharedSession 快照(与 nl2cmd 同款,ChatSession 不持 Shell);
+  `send_turn_streaming` 的 `on_event` 把 Delta/ToolStart/Tool/Warning/Thinking/
+  Error 事件映射为增量文本行(渲染对齐 CLI block_tui 的 ChatEv:⚙ 工具/← 结果/
+  ⚠ 警告/💭 思考);回合后 `save()`。
+- **关键坑(记录)**:`CommandResult.output = RenderedOutput::Empty` 序列化为
+  裸字符串 `"Empty"`(非 null)→ 引擎 update_block_in_state 不走 streamed_text
+  回退分支、且清空 streamed_text —— 流出的内容全丢(症状:块 Success 3ms、
+  output 显示字面量 "Empty")。chat 线程累计全量流文本,收尾以 `Text(全文)`
+  发送(成功与失败路径都带,失败保留已流出部分、错误信息进 status)。
+- **fake client**:`ChatSession::with_client(Arc<dyn Client>)` 可注入 ——
+  `FakeChatClient` 回显最后一条用户消息(纯文本响应一步终止 ReAct 循环),
+  ASH_FAKE_AI 同一闸门。
+- 前端**零改动**(块的 Running 流式 + Text 收尾渲染均为既有机制;Vue 的
+  RunOutput/RunResult 同链)。
+- deps:ash-server 增 auto-ai-agent(ChatSession/Client trait)+ async-trait。
+
+### 验证
+
+- CH-01(fake):`?? 你好…` → 全量回复落块(fake-chat: 回显)+ 第二轮复用同
+  会话线程;CH-02(fake):`?? /clear` → 「会话已清空」块。
+- **真 AI 验证**(aaid/glm-5.2):`?? 用一句话说明你能做什么` → 5.2s 回合,
+  agent(Nicole 角色,带文件/命令工具)中文回复,流式落块、Success 收尾、
+  会话持久化。
+- 回归:parity 全文件 **22 pass + 1 skip**(nl03 偶发一次为已知 flake,单跑过);
+  全套件 **83 pass / 44 skip / 4 失败**(cs01/c101/run_echo/cmd03,均单跑即过
+  —— 负载时序族,套件 12.9min;CH×2 + AC/CR/C1 全部稳定通过,无真实回归)。

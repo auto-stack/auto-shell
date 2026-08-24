@@ -25,6 +25,10 @@ Phase 3 (T11):
 - CR-01     context-aware ranking (B3 verification): inside a git repo, the
             git candidate outranks grep for prefix "g".
 - C1-01     AutoScript mode prompt symbol (#) on Auto-syntax input (尾部小项).
+- CH-01/02  block AI chat (`??` prefix, T12 zero-engine block form): a chat
+            turn streams into the block via CommandOutput and finishes
+            Success; `?? /clear` resets the persistent session. Fake client
+            under ASH_FAKE_AI (deterministic echo, no daemon).
 
 Flake notes: the MCP action channel occasionally delays (not drops) submits —
 single submit + generous wait beats retry storms (a retry storm can queue
@@ -618,3 +622,41 @@ def test_c101_autoscript_prompt_symbol(mcp):
     assert not re.search(r'text #[A-Za-z0-9_]+ "#"', snap), (
         f"'#' should be gone for shell input:\n{snap[:300]}"
     )
+
+
+# ── T12: block AI chat (`??` prefix, fake client) ───────────────────────────
+
+def test_ch01_chat_turn_streams_into_block(mcp):
+    """`?? <消息>` → 专用 chat 线程(ChatSession/ReAct)流式增量经
+    CommandOutput 写入块(Running 态实时),回合结束 Success、文本保留
+    (fake client 回显 fake-chat:…)。两轮连发验证会话线程复用。"""
+    if not _fake_ai():
+        pytest.skip("set ASH_FAKE_AI=1 for T11/T12 fake-AI tests")
+    _submit_command(mcp, "?? 你好,介绍一下当前目录")
+    # fake-chat 文本只在增量/结果阶段出现(后台 & 块可能恒 Running,不能用
+    # "全局无 Running" 判完成;以完整回复文本到达为准 —— fake 回显整条消息)
+    ok = mcp.wait_until(
+        lambda c: "fake-chat:你好,介绍一下当前目录" in c.snapshot(),
+        timeout=30, interval=1,
+    )
+    assert ok, f"chat turn did not finish in the block:\n{mcp.snapshot()[:500]}"
+    assert "fake-chat:你好,介绍一下当前目录" in mcp.snapshot(), (
+        f"chat reply should echo the turn text:\n{mcp.snapshot()[:400]}"
+    )
+    # 第二轮:同一会话线程继续服务
+    _submit_command(mcp, "?? 第二轮测试")
+    ok = mcp.wait_until(
+        lambda c: "fake-chat:第二轮测试" in c.snapshot(), timeout=30, interval=1
+    )
+    assert ok, f"second chat turn did not arrive:\n{mcp.snapshot()[:400]}"
+
+
+def test_ch02_chat_clear_command(mcp):
+    """`?? /clear` → 会话清空,块显示确认文本(与 CLI F4 同名指令)。"""
+    if not _fake_ai():
+        pytest.skip("set ASH_FAKE_AI=1 for T11/T12 fake-AI tests")
+    _submit_command(mcp, "?? /clear")
+    ok = mcp.wait_until(
+        lambda c: "会话已清空" in c.snapshot(), timeout=15, interval=0.5
+    )
+    assert ok, f"/clear did not produce the confirmation block:\n{mcp.snapshot()[:400]}"

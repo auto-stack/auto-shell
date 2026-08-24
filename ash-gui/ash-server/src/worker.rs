@@ -68,6 +68,15 @@ struct NlReq {
     reply: Option<tokio::sync::oneshot::Sender<String>>,
 }
 
+/// Plan 062 T12: 块内 AI chat 请求(`??` 前缀提交)。流式增量经既有
+/// `CommandOutput` 事件写进块的 streamed_text(Running 态实时渲染),
+/// 回合结束发 `CommandResult` 收尾 —— 复用 T11 的零引擎事件方案,
+/// 对齐 CLI block_tui 的块内聊天形态(右侧抽屉面板留待引擎新事件族)。
+struct ChatReq {
+    block_id: usize,
+    msg: String,
+}
+
 /// Plan 062 T11: 最近一次翻译成功的命令。前端 RefreshContext(引擎在每个
 /// command_result 后触发)经 `/api/ai_pending` 取后即清,用于把建议命令
 /// 回填输入框(编辑入口,Pick 同语义)。静态槽镜像 CLI suggest-next 缓存
@@ -103,6 +112,9 @@ pub struct ShellHandle {
     /// Plan 062 T11: dedicated NL→command channel (own thread — a multi-second
     /// AI round trip must never block the serialized main worker).
     nl_tx: mpsc::UnboundedSender<NlReq>,
+    /// Plan 062 T12: dedicated AI-chat channel (own thread — the ChatSession
+    /// and its agent turns live there for the process lifetime).
+    chat_tx: mpsc::UnboundedSender<ChatReq>,
     /// Cancel flag — set directly (concurrent) so it lands even while the
     /// worker is blocked in `spawn_blocking`. See Plan 040 M5.
     cancel: Arc<AtomicBool>,
@@ -231,6 +243,8 @@ pub fn spawn() -> ShellHandle {
     let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteReq>();
     // Plan 062 T11: dedicated NL→command channel/thread.
     let (nl_tx, nl_rx) = mpsc::unbounded_channel::<NlReq>();
+    // Plan 062 T12: dedicated AI-chat channel/thread.
+    let (chat_tx, chat_rx) = mpsc::unbounded_channel::<ChatReq>();
     let cancel = Arc::new(AtomicBool::new(false));
     let (event_tx, _) = broadcast::channel::<ShellEvent>(256);
     let boot = Arc::new(tokio::sync::Mutex::new(None::<BootSnapshot>));
@@ -241,6 +255,9 @@ pub fn spawn() -> ShellHandle {
     // Plan 062 T11: nl worker shares the session snapshot (context) and the
     // event broadcast (CommandResult delivery).
     spawn_nl_worker(nl_rx, session.clone(), event_tx.clone());
+    // Plan 062 T12: chat worker shares the session snapshot (context) and the
+    // event broadcast (streaming + result delivery).
+    spawn_chat_worker(chat_rx, session.clone(), event_tx.clone());
 
     let cancel_for_thread = cancel.clone();
     let event_tx_for_thread = event_tx.clone();
@@ -252,6 +269,8 @@ pub fn spawn() -> ShellHandle {
     let tick_tx = tx.clone();
     // Plan 062 T11: main-loop side of the nl channel (`?` interception).
     let nl_tx_for_loop = nl_tx.clone();
+    // Plan 062 T12: main-loop side of the chat channel (`??` interception).
+    let chat_tx_for_loop = chat_tx.clone();
 
     std::thread::Builder::new()
         .name("ash-server-shell".into())
@@ -325,6 +344,37 @@ pub fn spawn() -> ShellHandle {
                             // 命令。块保持 Running 直到 nl 线程发 CommandResult
                             // (复用既有事件交付结果,零新 SSE 事件族,引擎不动)。
                             let trimmed_in = cmd.trim();
+                            // Plan 062 T12: `??` 前缀 → 块内 AI chat(先于单 `?`
+                            // 检查 —— "??" 同样以 '?' 开头)。多轮会话跨块持续
+                            // (ChatSession 持久化 ~/.auto-shell-ai-chat.json),
+                            // `?? /clear` 清空。
+                            if let Some(chat_msg) = trimmed_in.strip_prefix("??") {
+                                let chat_msg = chat_msg.trim().to_string();
+                                if chat_msg.is_empty() {
+                                    let cwd_err = shell.pwd().to_string_lossy().to_string();
+                                    let _ = event_tx_for_thread.send(
+                                        ShellEvent::CommandResult(CommandResult {
+                                            block_id,
+                                            cwd: cwd_err,
+                                            status: CommandStatus::Failed(
+                                                "AI chat 用法:?? <消息>(?? /clear 清空会话)".into(),
+                                            ),
+                                            output: RenderedOutput::Empty,
+                                            duration_ms: 0,
+                                            exit_code: -1,
+                                        }),
+                                    );
+                                    continue;
+                                }
+                                let _ = event_tx_for_thread.send(ShellEvent::CommandOutput {
+                                    block_id,
+                                    chunk: "💬 AI 对话中…
+".to_string(),
+                                });
+                                let _ = chat_tx_for_loop.send(ChatReq { block_id, msg: chat_msg });
+                                let _ = append_history(trimmed_in);
+                                continue;
+                            }
                             if let Some(nl) = trimmed_in.strip_prefix('?') {
                                 let nl = nl.trim().to_string();
                                 if nl.is_empty() {
@@ -606,6 +656,7 @@ pub fn spawn() -> ShellHandle {
         tx,
         complete_tx,
         nl_tx,
+        chat_tx,
         cancel,
         event_rx: event_tx,
         boot,
@@ -899,6 +950,205 @@ fn fake_translate(nl: &str) -> String {
         "rm -rf /".to_string()
     } else {
         format!("echo fake-ai:{n}")
+    }
+}
+
+// ── Plan 062 T12: block AI chat worker ──────────────────────────────────────
+
+/// Dedicated AI-chat worker thread: owns the persistent [`ChatSession`]
+/// (agent + ReAct + shell-backed tools) for the process lifetime. Streaming
+/// deltas/tool events become `CommandOutput` chunks (block streamed_text,
+/// rendered live while Running); the turn ends with a `CommandResult`
+/// (`output: Empty` → the frontend falls back to the streamed text, same as
+/// the execute path). `?? /clear` rebuilds the conversation.
+fn spawn_chat_worker(
+    rx: mpsc::UnboundedReceiver<ChatReq>,
+    session: SharedSession,
+    event_tx: broadcast::Sender<ShellEvent>,
+) {
+    std::thread::Builder::new()
+        .name("ash-server-chat".into())
+        .spawn(move || {
+            // Multi-thread runtime held for the thread's life (agent turns are
+            // driven per-request with block_on; client construction happens in
+            // the sync ChatSession factories below, never inside the runtime).
+            let runtime = tokio::runtime::Runtime::new()
+                .expect("failed to build chat worker runtime");
+            let mut rx = rx;
+            // Lazy: built on the first turn. Rebuilt (None) after a load error
+            // so a daemon restart heals on the next message.
+            let mut chat: Option<auto_shell::ai::ChatSession> = None;
+            while let Some(req) = rx.blocking_recv() {
+                let started = Instant::now();
+                let cwd = session
+                    .cwd
+                    .lock()
+                    .map(|c| c.clone())
+                    .unwrap_or_default();
+                // 会话命令:/clear(与 CLI F4 同名指令)。
+                if req.msg == "/clear" {
+                    if let Some(c) = chat.as_mut() {
+                        c.clear();
+                        let _ = c.save();
+                    }
+                    let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
+                        block_id: req.block_id,
+                        cwd,
+                        status: CommandStatus::Success,
+                        output: RenderedOutput::Text("AI 会话已清空。".into()),
+                        duration_ms: started.elapsed().as_millis() as u64,
+                        exit_code: 0,
+                    }));
+                    continue;
+                }
+                if chat.is_none() {
+                    match build_chat_session() {
+                        Ok(c) => chat = Some(c),
+                        Err(e) => {
+                            let _ = event_tx.send(ShellEvent::CommandResult(
+                                CommandResult {
+                                    block_id: req.block_id,
+                                    cwd,
+                                    status: CommandStatus::Failed(format!(
+                                        "AI chat init: {e}(start the aaid daemon or set AAID_URL)"
+                                    )),
+                                    output: RenderedOutput::Empty,
+                                    duration_ms: 0,
+                                    exit_code: -1,
+                                },
+                            ));
+                            continue;
+                        }
+                    }
+                }
+                let c = chat.as_mut().unwrap();
+                // 上下文走快照(与 nl2cmd 同款);ChatSession 不持 Shell。
+                c.set_context_str(nl_context(&session));
+                let user = req.msg.clone();
+                let event_tx_cb = event_tx.clone();
+                let bid = req.block_id;
+                // 累计全量流文本:command_result 的 output 若为 Empty(裸字符串
+                // "Empty",非 null)不会触发前端的 streamed_text 回退且会清空
+                // streamed_text —— 收尾必须自带 Text(全文)。
+                let acc = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+                let acc_cb = acc.clone();
+                let on_event: std::sync::Arc<dyn Fn(auto_ai_agent::StreamEvent) + Send + Sync> =
+                    std::sync::Arc::new(move |ev| {
+                        // 事件 → 增量文本行(对齐 CLI block_tui 的 ChatEv 渲染)。
+                        let chunk = match ev {
+                            auto_ai_agent::StreamEvent::Delta { text } => text,
+                            auto_ai_agent::StreamEvent::ToolStart { tool, args } => {
+                                format!("\n  ⚙ {tool} {}", auto_shell::ai::brief::brief_args(&args))
+                            }
+                            auto_ai_agent::StreamEvent::Tool { tool, result, .. } => {
+                                format!("\n  ← {tool}: {}", auto_shell::ai::brief::brief_result(&result))
+                            }
+                            auto_ai_agent::StreamEvent::Warning { text } => {
+                                format!("\n  ⚠ {text}")
+                            }
+                            auto_ai_agent::StreamEvent::Thinking { text } => {
+                                format!("\n  💭 {text}")
+                            }
+                            auto_ai_agent::StreamEvent::Error { message } => {
+                                format!("\n  [error] {message}")
+                            }
+                            _ => return,
+                        };
+                        if let Ok(mut a) = acc_cb.lock() {
+                            a.push_str(&chunk);
+                        }
+                        let _ = event_tx_cb.send(ShellEvent::CommandOutput {
+                            block_id: bid,
+                            chunk,
+                        });
+                    });
+                let turn = runtime.block_on(c.send_turn_streaming(&user, on_event));
+                let duration_ms = started.elapsed().as_millis() as u64;
+                let streamed = acc
+                    .lock()
+                    .map(|a| a.clone())
+                    .unwrap_or_default();
+                match turn {
+                    Ok(_final_text) => {
+                        // 持久化文本回合(工具消息已滤)。收尾带 Text(全量流
+                        // 文本)—— command_result 会清空 streamed_text,若不带
+                        // output,内容即丢失(Empty 是裸字符串变体,不触发回退)。
+                        let _ = c.save();
+                        let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
+                            block_id: req.block_id,
+                            cwd,
+                            status: CommandStatus::Success,
+                            output: RenderedOutput::Text(streamed),
+                            duration_ms,
+                            exit_code: 0,
+                        }));
+                    }
+                    Err(msg) => {
+                        // 失败但保留已流出的增量(错误信息进 status,文本进 output)。
+                        if msg.contains("daemon unavailable") {
+                            chat = None; // daemon 重启后下一条消息重建会话
+                        }
+                        let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
+                            block_id: req.block_id,
+                            cwd,
+                            status: CommandStatus::Failed(msg),
+                            output: RenderedOutput::Text(streamed),
+                            duration_ms,
+                            exit_code: -1,
+                        }));
+                    }
+                }
+            }
+        })
+        .expect("failed to spawn ash-server chat worker thread");
+}
+
+/// Build the ChatSession — real daemon client, or the deterministic fake
+/// under `ASH_FAKE_AI` (same gate as the nl2cmd worker / ai_layer).
+fn build_chat_session() -> Result<auto_shell::ai::ChatSession, String> {
+    if fake_ai_enabled() {
+        let client: std::sync::Arc<dyn auto_ai_agent::Client> =
+            std::sync::Arc::new(FakeChatClient);
+        return Ok(auto_shell::ai::ChatSession::with_client(client));
+    }
+    auto_shell::ai::ChatSession::load()
+}
+
+/// Plan 062 T12: deterministic chat client for tests — echoes the last user
+/// message. Plain text (no tool calls) terminates the ReAct loop in one step.
+struct FakeChatClient;
+
+#[async_trait::async_trait]
+impl auto_ai_agent::Client for FakeChatClient {
+    async fn complete(
+        &self,
+        req: &auto_ai_client::CompletionRequest,
+    ) -> Result<auto_ai_client::CompletionResponse, auto_ai_client::ClientError> {
+        let last_user = req
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .and_then(|m| {
+                Some(m
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        auto_ai_client::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""))
+            })
+            .unwrap_or_default();
+        Ok(auto_ai_client::CompletionResponse {
+            content: format!("fake-chat:{last_user}"),
+            tool_calls: vec![],
+            stop_reason: Some("end_turn".into()),
+            usage: None,
+            model: "fake".into(),
+            error: None,
+        })
     }
 }
 
