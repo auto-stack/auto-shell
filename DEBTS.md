@@ -715,6 +715,9 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 > `auto gen` 重生成 + 仓内契约修复后,vue-tsc 余 13 错 / 5 类,均为 auto-lang
 > vue/ts codegen 域(master 时点被 Plan 443 会话占用,未动)。修复后 Vue 构建
 > 应能全绿;当前 Vue/浏览器模式**不可构建**,merged VM 模式不受影响。
+> **2026-08-24 晚复查**:auto-lang master 已合入 443(defineModel 降级收窄)
+> 与 435 P0/P1(schema 统一/drift 围栏),重编 auto.exe + 重生成后
+> **13 错构成不变** —— 下列 5 类均未被触及,仍待引擎侧立项。
 
 1. **子组件回调命名不一致**(3 错):BlockList/BlockItem 的 props 类型生成
    `on_delete: () => void`(snake_case 且必填),而 App/BlockList 绑定发射

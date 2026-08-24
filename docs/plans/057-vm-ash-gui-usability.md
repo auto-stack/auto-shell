@@ -195,3 +195,8 @@ vue-tsc 错误 78 → 13。
   缺 `:key`(R006)挡,`--lenient` 可到 vue-tsc 层。
 - **注意**:`auto gen` 会重写 package.json(丢 @vueuse)且 Button.vue stub /
   CodeEditor 删除不持久 —— 每次 gen 后需重打这三件补丁(引擎模板修好前)。
+
+**依赖复查(2026-08-24 晚)**:auto-lang master 已合入 Plan 443 完成(defineModel
+降级收窄)与 Plan 435 P0/P1;重编 auto.exe + 重生成 + 复测,**13 错构成不变**
+(5 类引擎阻塞均未被触及,435 P5 在途)。VM 侧新引擎冒烟 8/8 过。→ 本计划仍差
+引擎侧 vue codegen 5 类修复(DEBTS 在册)方可归档。
