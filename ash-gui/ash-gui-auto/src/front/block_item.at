@@ -6,9 +6,13 @@
 
 use block_body: BlockBody
 use types: Block
+// Plan 063 T2:分步执行直调 store(PromptBar .AiDismiss → store 直调先例)
+// —— 双参 msg 跨 widget 的 emit 转发在 vue codegen 生成 `Handler($event)`
+// 单参展开会丢参(TS2554),不走 BlockList → App 回调链。
+use shell_store: ShellStore
 
-widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg) {
-    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand(int), CopyOutput(int), ExportCsv(int), DeleteBlock(int), ToggleCollapse(int), Sort(int, int), Filter(str) }
+widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg, ai_steps_list: []str, ai_steps_styles: []str) {
+    msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand(int), CopyOutput(int), ExportCsv(int), DeleteBlock(int), ToggleCollapse(int), Sort(int, int), Filter(str), RunAiStep(int), RunAllSteps(int) }
 
     // Plan 055 D5: collapsed 移到 block 数据(per-block,避免 VM 单根 state
     // 合并致全折叠);model 不再持有折叠状态。
@@ -354,22 +358,56 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                                     }
                                 }
                                 if .block.output.AiSuggestion.multi {
-                                    text "多步命令(&& 链,按步审视)" {
+                                    // Plan 063 T2: 分步渲染 —— 每步一行命令 +
+                                    // 独立 [▶](store.RunAiStep:标记 ✓/灰后按
+                                    // RunCommand 提交)+ [▶▶ 全部执行](逐条
+                                    // 派发,worker 主循环串行天然按序)。步数据
+                                    // 走 store 级 prop 链(merged 模式 renderer
+                                    // 构造的块不含新契约字段,块本地 steps 不可
+                                    // 用 —— 引擎边界);样式经 ai_steps_styles
+                                    // 索引取(●色点同款,已执行步换灰 + "✓ "
+                                    // 前缀)。整条 [▶ 执行] 在 multi 时由 [▶▶]
+                                    // 替代 —— CLI F3 的 [s] 分步审视的 GUI 等价。
+                                    text "多步命令 —— 建议按步审视后执行:" {
                                         style: "text-[10px] text-amber-400/80"
                                     }
-                                }
-                                row {
-                                    style: "items-center gap-2 mt-1"
-                                    button "▶ 执行" {
-                                        onclick: .Rerun(.block.output.AiSuggestion.cmd)
-                                        style: "text-xs px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 cursor-pointer select-none"
+                                    for i, sc in .ai_steps_list {
+                                            row {
+                                                style: "items-center gap-2"
+                                                text sc {
+                                                    style: .ai_steps_styles[i]
+                                                }
+                                                button "▶" {
+                                                    onclick: .RunAiStep(i)
+                                                    style: "text-xs px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 cursor-pointer select-none shrink-0"
+                                                }
+                                            }
+                                        }
+                                    row {
+                                        style: "items-center gap-2 mt-1"
+                                        button "▶▶ 全部执行" {
+                                            onclick: .RunAllSteps(.block.id)
+                                            style: "text-xs px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 cursor-pointer select-none"
+                                        }
+                                        button "✕ 取消" {
+                                            onclick: .DeleteBlock(.block.id)
+                                            style: "text-xs px-2 py-0.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 cursor-pointer select-none"
+                                        }
                                     }
-                                    button "✕ 取消" {
-                                        onclick: .DeleteBlock(.block.id)
-                                        style: "text-xs px-2 py-0.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 cursor-pointer select-none"
-                                    }
-                                    text "编辑:建议条 ✎ 填入后回车" {
-                                        style: "text-[10px] text-muted-foreground/70"
+                                } else {
+                                    row {
+                                        style: "items-center gap-2 mt-1"
+                                        button "▶ 执行" {
+                                            onclick: .Rerun(.block.output.AiSuggestion.cmd)
+                                            style: "text-xs px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 cursor-pointer select-none"
+                                        }
+                                        button "✕ 取消" {
+                                            onclick: .DeleteBlock(.block.id)
+                                            style: "text-xs px-2 py-0.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 cursor-pointer select-none"
+                                        }
+                                        text "编辑:建议条 ✎ 填入后回车" {
+                                            style: "text-[10px] text-muted-foreground/70"
+                                        }
                                     }
                                 }
                             }
@@ -455,6 +493,18 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
         // 给父级,由 store.ToggleCollapse 翻 blocks[id].collapsed)。
         .ToggleCollapse(id) -> { }
         .Rerun(cmd) -> { }
+        // Plan 063 T2: AI 建议分步执行 —— 直调 store(空 handler + emit
+        // 转发不可用:双参 msg 的 vue codegen 生成 `$event` 单参展开;
+        // store 直调无损,PromptBar .AiDismiss 同款)。onclick 只传步索引
+        // (双参「深路径+循环变量」的按钮在 VM 不渲染,单参循环变量
+        // PickCompletionIdx 先例);块 id 在 handler 内取 .block(prop 读)。
+        .RunAiStep(idx) -> {
+            store.RunAiStep(.block.id, idx)
+        }
+
+        .RunAllSteps(id) -> {
+            store.RunAllSteps(id)
+        }
         // 复制命令到剪贴板(navigator API 由 ts_adapter 透传)
         // Plan 053 M6-B3: 非安全上下文(http)navigator.clipboard 可能不可用,
         // 加 != null 守卫避免抛异常(loose null check 覆盖 null/undefined)。

@@ -23,7 +23,16 @@ static PENDING: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
 /// Whether the user has enabled suggest-next (`ai.suggest_next : true`).
 /// Default false — opt-in.
+/// Plan 063 T1: `ASH_SUGGEST_NEXT` (non-empty) overrides the config — the
+/// pytest suite needs to toggle the flag per run without touching the user's
+/// `~/.config/ash/config.at` (same env-gate convention as ASH_FAKE_AI /
+/// ASH_DEBUG_JOBS). `0`/`false` force-disable, anything else force-enables.
 pub fn is_enabled() -> bool {
+    if let Ok(v) = std::env::var("ASH_SUGGEST_NEXT") {
+        if !v.is_empty() {
+            return v != "0" && v != "false";
+        }
+    }
     let cfg = crate::auto_config::load();
     crate::auto_config::get_bool(&cfg, "ai", "suggest_next").unwrap_or(false)
 }
@@ -34,7 +43,25 @@ pub fn is_enabled() -> bool {
 ///
 /// `last_cmd` is the command that just ran; `output_snippet` is a short prefix
 /// of its output (capped so we don't flood the prompt).
+///
+/// Plan 063 T1: under `ASH_FAKE_AI` the deterministic fake lands in the slot
+/// SYNCHRONOUSLY — the GUI drains the slot from the RefreshContext that fires
+/// right after the CommandResult event, so an async thread would race the
+/// first pull every time (the CLI is unaffected: it drains at the next prompt).
 pub fn suggest_next_async(cwd: String, last_cmd: String, output_snippet: String) {
+    if std::env::var("ASH_FAKE_AI")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        if let Ok(mut guard) = PENDING.lock() {
+            *guard = Some(vec![
+                format!("echo fake-next:{last_cmd}"),
+                "ls".to_string(),
+                "pwd".to_string(),
+            ]);
+        }
+        return;
+    }
     std::thread::spawn(move || {
         let suggestions = fetch_suggestions(&cwd, &last_cmd, &output_snippet);
         if let Ok(s) = suggestions {

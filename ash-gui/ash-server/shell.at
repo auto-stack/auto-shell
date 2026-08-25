@@ -88,6 +88,16 @@ pub fn ai_pending() str {
     return host.call_value("ai_pending", "{}")
 }
 
+// Plan 063 T1:suggest-next 建议列表(JSON 数组串,"[]" = 无,取后即清)。
+pub fn ai_next() str {
+    return host.call_value("ai_next", "{}")
+}
+
+// Plan 063 T2:最近一次翻译的拆步结果(\n 连接 str,空 = 无,取后即清)。
+pub fn ai_steps() str {
+    return host.call_value("ai_steps", "{}")
+}
+
 // merged-host 模式:事件由 runner 的 ShellEvent 广播经
 // auto_lang::inject_shell_event 直接注入前端事件泵(SSE 同格式),
 // 不消费此流。HTTP 模式:真实 SSE 由 ash-server /api/stream 提供。

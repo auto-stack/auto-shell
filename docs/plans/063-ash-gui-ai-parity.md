@@ -1,7 +1,38 @@
 # 063 — ash-gui 与 CLI 版 AI 能力对齐
 
 - 日期:2026-08-25
-- 状态:**调研完成,待批准排期**(零引擎件 T1-T3 可立即开工;T4 需引擎窗口)
+- 状态:**Phase 1(T1-T3)已实施,VM 端到端验收通过**(plan-063 worktree
+  分支;T4/T5 仍需引擎窗口,未动)
+- 实施记录(2026-08-25,Phase 1 = T1-T3):
+  - **T1 suggest-next**:worker 收尾钩子(`is_enabled` → `suggest_next_async`,
+    与 CLI repl 同款 best-effort)+ `/api/ai_next` 端点(drain auto-shell 的
+    PENDING 槽,JSON 数组串取后即清)+ App 级「💡 接下来」chips 行(渲染读
+    store 字段 —— `[]str` 走 widget prop 在 VM 视图侧读不到,App 级是计划
+    原口径)+ `.PickNext` 经 injected_command 注入(Pick 同语义)。config
+    注入走 `ASH_SUGGEST_NEXT` env 覆盖(零污染,ASH_FAKE_AI 同款门控惯例)。
+  - **T2 分步执行**:nl worker 产 `split_steps` 全量(AiSuggestion 事件带
+    steps + `ai_steps` 槽落 `
+` 连接 str —— handler 三层深读在 VM 静默中止,
+    str 槽是 ai_pending 已验证通道)+ RefreshContext 拆到 store 级
+    `ai_steps_list/styles`(引擎边界:renderer 构造的块不含新契约字段)+
+    multi 卡片分步行(每步 [▶] + [▶▶ 全部执行] + ✓/灰已执行标记)。
+  - **T3 smart NL 路由**:命令行 `smart list | smart run <名> [args] |
+    smart <NL>`(与 CLI 同词法,worker 解析)+ 专用路由线程
+    (`ash-server-smart-nlu`,route 自带 one-shot runtime 故无需常驻)+
+    命中回主循环 `RunSmart{reply: None}` 按名执行(executor 需 !Send Shell),
+    未命中 Failed 带可用命令 hint;事件收尾自带 `Text(累计全量)`(Empty
+    清空 streamed_text 的 DEBT)。smart 加载改用 **shell 会话 cwd**(
+    `load_smart_specs`:VM 宿主 boot 时 chdir 到 src/front,进程 cwd 扫描
+    落空)。
+  - **验收**:tests/test_ai_parity.py —— 默认轮(SN-03/ST-01..03/SM-01..02)
+    6 passed;SN-01/02 需 `ASH_SUGGEST_NEXT=1` 单独一轮(2 passed)。062
+    基线(test_cli_parity 全族含 NL/CH/AC)分批回归通过;vue-tsc 0 错 +
+    vite build 绿;auto-shell suggest 单测 3 passed。
+  - **连带修复**:conftest `_kill` 改 `taskkill /T`(孤儿窗口进程占 9247
+    是轮间「MCP connection refused」flake 的主因);FakeChatClient 补
+    `model_meta`(auto-ai 上游新增字段,既有破坏)。
+  - **新债**:见 DEBTS「Plan 063 新增已知限制」(store 级单份 steps /
+    NL 回退仅命令行 / 打灰用 ✓+样式数组近似)。
 - 调研对象:
   - **CLI 版** = `ash/ash-tui/src/repl.rs` + `ash/auto-shell/src/{repl_mode,ai/*,smart_command}`
   - **GUI 版** = `ash-gui/ash-gui-auto`(.at 前端)+ `ash-gui/ash-server/worker.rs`

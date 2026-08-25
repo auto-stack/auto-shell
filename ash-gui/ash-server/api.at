@@ -78,11 +78,14 @@ pub type RecordOutput = {
 /// Plan 062 T11:AI NL→命令建议(`?` 前缀提交)。notice 为空 = 校验干净;
 /// 非空 = 危险/警告发现拼接(Danger/Warning 合并单行,分号连接)。
 /// multi = `&&` 多步链(CLI F3 的 [s] 分步提示)。
+/// Plan 063 T2:steps = split_steps 拆步结果(非 multi 时单元素),
+/// 供块卡片分步渲染(每步一行 + 独立 [▶] + 全部执行)。
 pub type AiSuggestionOutput = {
     question: str
     cmd: str
     notice: str
     multi: bool
+    steps: []str
 }
 
 pub type RenderedOutput = {
@@ -117,6 +120,12 @@ pub type Block = {
     table_sort_col: int
     table_sort_dir: int
     table_filter_q: str
+    // Plan 063 T2:AI 建议分步(前端本地;RunResult 时由 store 从
+    // output.AiSuggestion.steps 拆写 handler 侧数组)。step_styles 平行
+    // 存每步样式串(已执行步换灰样式 —— 视图条件文法不支持索引读,
+    // 样式预计算进数组,●色点同款;steps 元素同时加 "✓ " 前缀兜底)。
+    steps: []str
+    step_styles: []str
 }
 
 pub type GitStatusInfo = {
@@ -288,6 +297,26 @@ pub fn nl2cmd(nl str) str {
 #[api(method = "GET", path = "/api/ai_pending")]
 pub fn ai_pending() str {
     return shell.ai_pending()
+}
+
+/// Plan 063 T1:suggest-next 建议列表(命令完成后后台拉取的「接下来
+/// 可能想」×3)。返回 JSON 数组串,"[]" = 无;取后即清(ai_pending 同款
+/// 槽位语义)。RefreshContext 在每个 command_result 后拉取,前端渲染
+/// 输入框上方 chips 行(点击 = Pick 同语义填入输入框)。
+/// GET /api/ai_next
+#[api(method = "GET", path = "/api/ai_next")]
+pub fn ai_next() str {
+    return shell.ai_next()
+}
+
+/// Plan 063 T2:最近一次翻译的拆步结果(多步时 `\n` 连接,单步/无 = 空串;
+/// 取后即清)。RefreshContext 拉取后写入翻译块的本地 steps 字段 —— 拆步
+/// 不走 AiSuggestion 事件的 handler 深路径读(VM 限制),str 槽是
+/// ai_pending 已验证的通道。
+/// GET /api/ai_steps
+#[api(method = "GET", path = "/api/ai_steps")]
+pub fn ai_steps() str {
+    return shell.ai_steps()
 }
 
 // ═══════════════════════════════════════════════════════════

@@ -57,6 +57,10 @@ pub fn create_router(shell: ShellHandle) -> Router {
         // Plan 062 T11: NL→命令翻译(同步契约)+ 待回填建议拉取。
         .route("/api/nl2cmd", post(nl2cmd))
         .route("/api/ai_pending", get(ai_pending))
+        // Plan 063 T1: suggest-next 建议列表(JSON 数组串,取后即清)。
+        .route("/api/ai_next", get(ai_next))
+        // Plan 063 T2: 最近一次翻译的拆步结果(\n 连接 str,取后即清)。
+        .route("/api/ai_steps", get(ai_steps))
         .route("/api/stream", get(stream_sse))
         .with_state(state)
 }
@@ -180,6 +184,16 @@ async fn nl2cmd(
 /// 待回填的 AI 建议命令(取后即清;空串 = 无)。
 async fn ai_pending(State(_state): State<AppState>) -> impl IntoResponse {
     Json(crate::worker::read_ai_pending()).into_response()
+}
+
+/// Plan 063 T1: suggest-next 建议列表(JSON 数组串,"[]" = 无,取后即清)。
+async fn ai_next(State(_state): State<AppState>) -> impl IntoResponse {
+    Json(crate::worker::read_ai_next()).into_response()
+}
+
+/// Plan 063 T2: 最近一次翻译的拆步结果(\n 连接 str,空 = 无,取后即清)。
+async fn ai_steps(State(_state): State<AppState>) -> impl IntoResponse {
+    Json(crate::worker::read_ai_steps()).into_response()
 }
 
 #[derive(Deserialize)]

@@ -15,7 +15,7 @@ use back.api: command_list, history, complete, run_command, run_smart, prompt_co
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
               ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int), ToggleCollapse(int), RefreshJobs,
-              ToggleJobs, KillJob(int) }
+              ToggleJobs, KillJob(int), PickNext(int) }
 
     model {
         var sidebar_open bool = true
@@ -137,8 +137,34 @@ widget App {
                     on_rerun: .Rerun,
                     on_stop: .Stop,
                     on_delete: .DeleteBlock,
-                    on_toggle_collapse: .ToggleCollapse
+                    on_toggle_collapse: .ToggleCollapse,
+                    // Plan 063 T2: AI 建议分步(store 级数据,merged 模式
+                    // renderer 构造的块不含新契约字段 —— 引擎边界,经 prop
+                    // 链传给 BlockItem 渲染)。
+                    ai_steps_list: .store.ai_steps_list,
+                    ai_steps_styles: .store.ai_steps_styles
                 )
+
+                // Plan 063 T1: suggest-next chips(命令完成后出现,下个
+                // command_result 的 RefreshContext 拉新/清空 —— CLI「下个提
+                // 示符前展示」的 GUI 等价)。渲染读 store 字段(job_list 的
+                // for j 同款先例 —— []str 走 widget prop 在 VM 视图侧读不
+                // 到);点击 .PickNext → injected_command 注入(Pick 同语义,
+                // store 注入 + App 级 handler,计划 T1 原口径)。
+                if .store.ai_next_cmds.len() > 0 {
+                    row {
+                        style: "items-center gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1 mx-3 mb-1"
+                        text "💡 接下来:" {
+                            style: "text-[10px] text-emerald-400/80 font-semibold shrink-0 select-none"
+                        }
+                        for i, c in .store.ai_next_cmds {
+                            button c {
+                                onclick: .PickNext(i)
+                                style: "text-xs font-mono-ash px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300/90 hover:bg-emerald-500/20 cursor-pointer select-none"
+                            }
+                        }
+                    }
+                }
 
                 // 命令输入
                 PromptBar(
@@ -171,6 +197,17 @@ widget App {
 
         .Pick(name) -> {
             .injected_command = name
+        }
+
+        // Plan 063 T1: suggest-next chip 点击(handler 侧读 store 数组 ✓,
+        // .ai_next_cmds[i] 两层索引读;注入 injected_command 走 Pick 桥)。
+        .PickNext(i) -> {
+            if i >= 0 && i < .store.ai_next_cmds.len() {
+                var ncmd str = .store.ai_next_cmds[i]
+                if ncmd != "" {
+                    .injected_command = ncmd
+                }
+            }
         }
 
         .RunSmart(name) -> {
