@@ -401,7 +401,15 @@ store ShellStore {
                 }
                 npi = npi + 1
             }
-            .ai_next_cmds = nexts
+            // Plan 063 复查修正(064 期间排查):RefreshContext 在一次命令
+            // 后可能被多次触发(实测 4 次:首拉有数据、后续空)—— 空拉
+            // 不覆盖(ai_pending 段 062 起就有同款守卫,chips 段原先漏了,
+            // 数据被空拉清掉致 SN 族间歇失败)。语义:chips 保留到下一次
+            // 「有数据」的拉取才替换(config 关后旧 chips 残留属可接受边角,
+            // 同 CLI 最后建议残留到退出)。
+            if nexts.len() > 0 {
+                .ai_next_cmds = nexts
+            }
             // Plan 063 T2: 翻译完成时后端把拆步结果(steps,\n 连接)落在
             // ai_steps 槽(与 ai_pending 同款「槽位先落再发事件」),此处
             // 拉取后写入 store 级分步字段 + 定位翻译块(`?` 前缀,取最后
