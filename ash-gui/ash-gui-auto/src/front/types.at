@@ -79,6 +79,9 @@ type Block {
     // 是本体,这里同步供前端文档参考)。
     steps []str
     step_styles []str
+    // Plan 063 T5:chat 回合号(`??` 第 N 次提问;ai_turn 事件写入,块头
+    // 横幅"· 第 N 轮"渲染。非 chat 块恒 0。
+    turn int
 }
 
 /// Plan 055 Phase A: 后台作业信息(作业控制 `cmd &`)。
@@ -107,6 +110,14 @@ type CommandResult {
 type CommandOutput {
     block_id int
     chunk str
+}
+
+/// Plan 063 T4:AI chat 抽屉的一行(kind 决定渲染样式)。
+/// kind: turn(── 第 N 轮 ── 分隔线)| user(提问)| text(回答增量)
+///      | tool(⚙ 工具调用)| result(← 工具结果)| sys(系统提示)。
+type ChatEvent {
+    kind str
+    text str
 }
 
 /// Shell 事件(SSE 流推送的 union)

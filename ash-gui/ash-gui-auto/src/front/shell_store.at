@@ -131,6 +131,21 @@ store ShellStore {
         // 索引读,●色点同款预计算)。
         var ai_steps_list []str = []
         var ai_steps_styles []str = []
+        // Plan 063 T4: AI chat 抽屉(右侧面板)。chat_events 由 SSE 事件族
+        // 维护:VM merged 模式 renderer 直写 Value::Array(job_list 同款),
+        // vue/HTTP 模式由下方无参 handler 读 __ai_* 预置字段追加(RunOutput
+        // 同款双轨)。?? 提交时 RunCommand 自动开抽屉。
+        var chat_drawer_open bool = false
+        var chat_events List<ChatEvent> = List<ChatEvent>.new([])
+        // Plan 063 T4: vue 轨 SSE 预置字段(ai_* 事件族,VM 轨由 renderer
+        // 直写不经 handler)。
+        var __ai_block_id int = 0
+        var __ai_turn int = 0
+        var __ai_text str = ""
+        var __ai_tool str = ""
+        var __ai_args str = ""
+        var __ai_result str = ""
+        var __ai_question str = ""
     }
 
     msg Msg { Init, RunCommand(str), RunResult, RunOutput,
@@ -138,7 +153,8 @@ store ShellStore {
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, RefreshContext, ClearScreen,
               OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int), JobStarted, JobDone,
-              ClearAiPending, RunAiStep(int, int), RunAllSteps(int) }
+              ClearAiPending, RunAiStep(int, int), RunAllSteps(int),
+              AiTurn, AiChunk, AiToolCall, AiToolResult, ChatCleared, ToggleChatDrawer }
 
     computed {
         // Note: computed uses parse_expr (not parse_body), so complex
@@ -189,6 +205,11 @@ store ShellStore {
         // struct literals for state structs ("Undefined variable: self").
         // Build via empty literal + field assignment (verified pattern).
         .RunCommand(cmd) -> {
+            // Plan 063 T4:`??` 提交自动开 chat 抽屉(块内形态保留 fallback,
+            // 抽屉是结构化渲染主位)。
+            if cmd.trim().starts_with("??") {
+                .chat_drawer_open = true
+            }
             // Plan 054 M1:vue/HTTP 模式 store 自己 push Running block(无 renderer
             // 桥) + 发命令到后端。VM 模式 renderer 拦截 RunCommand 构造 block,
             // 此处的 push/run_command 由 VM mock 或 renderer 处理(兼容)。
@@ -208,7 +229,7 @@ store ShellStore {
                 status: BlockStatus{ kind: "Running", message: "" }, output: RenderedOutput{},
                 streamed_text: "", duration_ms: 0, exit_code: 0, collapsed: false,
                 table_sort_col: -1, table_sort_dir: 1, table_filter_q: "",
-                steps: [], step_styles: [] }
+                steps: [], step_styles: [], turn: 0 }
             block.id = .__pending_command_id
             block.command = cmd
             block.cwd = .cwd
@@ -320,7 +341,7 @@ store ShellStore {
                 status: BlockStatus{ kind: "Running", message: "" }, output: RenderedOutput{},
                 streamed_text: "", duration_ms: 0, exit_code: 0, collapsed: false,
                 table_sort_col: -1, table_sort_dir: 1, table_filter_q: "",
-                steps: [], step_styles: [] }
+                steps: [], step_styles: [], turn: 0 }
             block.id = id
             block.command = display
             block.cwd = .cwd
@@ -582,6 +603,48 @@ store ShellStore {
                 }
             }
             .job_list = kept
+        }
+
+        // ── Plan 063 T4: AI chat 抽屉事件族(vue/HTTP 轨;VM merged 模式
+        // 由 renderer 直写 chat_events 不经这些 handler,__ai_* 预置字段
+        // 由 vue codegen 的 SSE dispatch 填充,同 RunOutput/JobStarted 模式)──
+        .AiTurn -> {
+            // 不用 .str():本 handler 只在 vue 轨跑,JS '+' 自动 coerce
+            // number(jobs_label 同款注释);VM 轨由 renderer 直写不经此。
+            var t ChatEvent = ChatEvent{ kind: "turn", text: "" }
+            t.text = "── 第 " + .__ai_turn + " 轮 ──"
+            .chat_events.push(t)
+            var u ChatEvent = ChatEvent{ kind: "user", text: "" }
+            u.text = .__ai_question
+            .chat_events.push(u)
+        }
+
+        .AiChunk -> {
+            var c ChatEvent = ChatEvent{ kind: "text", text: "" }
+            c.text = .__ai_text
+            .chat_events.push(c)
+        }
+
+        .AiToolCall -> {
+            var c ChatEvent = ChatEvent{ kind: "tool", text: "" }
+            c.text = "⚙ " + .__ai_tool + " " + .__ai_args
+            .chat_events.push(c)
+        }
+
+        .AiToolResult -> {
+            var c ChatEvent = ChatEvent{ kind: "result", text: "" }
+            c.text = "← " + .__ai_tool + ": " + .__ai_result
+            .chat_events.push(c)
+        }
+
+        // `?? /clear` 后抽屉会话历史一并清空。
+        .ChatCleared -> {
+            .chat_events = List<ChatEvent>.new([])
+        }
+
+        // Plan 063 T4: 标题栏 💬 开合抽屉。
+        .ToggleChatDrawer -> {
+            .chat_drawer_open = !.chat_drawer_open
         }
     }
 }

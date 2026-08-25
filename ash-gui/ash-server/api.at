@@ -126,6 +126,9 @@ pub type Block = {
     // 样式预计算进数组,●色点同款;steps 元素同时加 "✓ " 前缀兜底)。
     steps: []str
     step_styles: []str
+    // Plan 063 T5:chat 回合号(`??` 第 N 次提问;ai_turn 事件写入,块头
+    // 横幅"· 第 N 轮"。前端本地状态,后端不经手,契约补字段供两端一致)。
+    turn: int
 }
 
 pub type GitStatusInfo = {
@@ -174,6 +177,23 @@ pub type ShellEvent = {
     block_id: int
     chunk: str
     result: CommandResult
+}
+
+/// Plan 063 T4/T5: AI chat 抽屉事件族(SSE,与 ShellEvent 同流;`turn` 是
+/// 会话级回合号 —— 第 N 次 `??` 提问,块头横幅与抽屉分隔线共用)。
+/// - ai_turn:回合开始(携带提问,抽屉画"── 第 N 轮 ──"+ 提问行,块头写 turn)
+/// - ai_chunk / ai_tool_call / ai_tool_result:回答增量 / 工具调用 / 工具结果
+/// - chat_cleared:`?? /clear` 后清空抽屉历史
+/// 块内 `??` 文本流(command_output/command_result)保留为 fallback,两族并行。
+pub type ChatSseEvent = {
+    event: str
+    block_id: int
+    turn: int
+    question: str
+    text: str
+    tool: str
+    args: str
+    result: str
 }
 
 /// Plan 055 Phase A: 后台作业信息(作业控制 `cmd &`)。

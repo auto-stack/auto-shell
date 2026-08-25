@@ -15,7 +15,7 @@ use back.api: command_list, history, complete, run_command, run_smart, prompt_co
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
               ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int), ToggleCollapse(int), RefreshJobs,
-              ToggleJobs, KillJob(int), PickNext(int) }
+              ToggleJobs, KillJob(int), PickNext(int), ToggleChat }
 
     model {
         var sidebar_open bool = true
@@ -85,8 +85,13 @@ widget App {
                     if .store.job_list.len() > 0 {
                         button .jobs_label {
                             onclick: .ToggleJobs
-                            style: "text-xs px-1.5 py-0.5 rounded text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer select-none"
+                            style: "text-xs px-1.5 py-0.5 rounded text-amber-400/80 hover:text-amber-300 hover:bg-amber-500/10 cursor-pointer select-none shrink-0"
                         }
+                    }
+                    // Plan 063 T4: chat 抽屉开关(?? 提交时自动开,手动可关)。
+                    button "💬" {
+                        onclick: .ToggleChat
+                        style: "text-xs px-1.5 py-0.5 rounded text-sky-400/80 hover:text-sky-300 hover:bg-sky-500/10 cursor-pointer select-none shrink-0"
                     }
                     // Plan 054 M5: 主题切换。
                     text .theme_glyph {
@@ -187,6 +192,72 @@ widget App {
                     on_exit: .Exit
                 )
             }
+
+            // Plan 063 T4: AI chat 抽屉(右侧面板;?? 提交自动开,💬 手动
+            // 开合)。chat_events 由 SSE ai_* 事件族维护(VM 轨 renderer 直写
+            // / vue 轨无参 handler,job_list 同款双轨);块内 ?? 形态保留为
+            // fallback,抽屉是结构化渲染(回合分隔线/提问/回答/工具行)。
+            if .store.chat_drawer_open {
+                col {
+                    style: "w-80 shrink-0 border-l border-border bg-card/30 flex-col min-h-0"
+
+                    row {
+                        style: "items-center gap-2 px-3 h-9 border-b border-border shrink-0"
+                        text "💬 AI 对话" {
+                            style: "text-xs font-semibold text-sky-300/90 select-none"
+                        }
+                        button "✕" {
+                            onclick: .ToggleChat
+                            style: "ml-auto text-xs px-1.5 py-0.5 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 cursor-pointer select-none"
+                        }
+                    }
+
+                    // 会话流(可滚动)。kind 决定样式:turn=分隔线,user=提问
+                    // (sky),text=回答正文,tool/result=⚙/← 等宽暗色行。
+                    col {
+                        style: "flex-1 overflow-y-auto px-3 py-2 gap-1 min-h-0"
+                        for ev in .store.chat_events {
+                            if ev.kind == "turn" {
+                                text ev.text {
+                                    style: "text-[10px] text-muted-foreground/70 font-mono-ash select-none pt-1"
+                                }
+                            }
+                            if ev.kind == "user" {
+                                text ev.text {
+                                    style: "text-xs text-sky-200/90 whitespace-pre-wrap break-words"
+                                }
+                            }
+                            if ev.kind == "text" {
+                                text ev.text {
+                                    style: "text-xs text-foreground/85 whitespace-pre-wrap break-words"
+                                }
+                            }
+                            if ev.kind == "tool" {
+                                text ev.text {
+                                    style: "text-[11px] font-mono-ash text-amber-400/80 whitespace-pre-wrap break-words"
+                                }
+                            }
+                            if ev.kind == "result" {
+                                text ev.text {
+                                    style: "text-[11px] font-mono-ash text-muted-foreground/80 whitespace-pre-wrap break-words"
+                                }
+                            }
+                        }
+                        if .store.chat_events.len() == 0 {
+                            text "暂无对话 —— 输入 ?? <消息> 开始" {
+                                style: "text-[11px] text-muted-foreground/60"
+                            }
+                        }
+                    }
+
+                    row {
+                        style: "px-3 py-1.5 border-t border-border shrink-0"
+                        text "?? 提问 · ?? /clear 清空 · 块内形态保留" {
+                            style: "text-[10px] text-muted-foreground/50 select-none"
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -208,6 +279,12 @@ widget App {
                     .injected_command = ncmd
                 }
             }
+        }
+
+        // Plan 063 T4: chat 抽屉开合(store 级字段,?? 提交时 RunCommand
+        // 自动置开)。
+        .ToggleChat -> {
+            store.ToggleChatDrawer()
         }
 
         .RunSmart(name) -> {

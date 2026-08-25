@@ -76,6 +76,13 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                     style: "font-mono-ash text-sm text-foreground/90 truncate"
                     onclick: .ToggleCollapse
                 }
+                // Plan 063 T5:chat 回合横幅(`??` 块,ai_turn 事件写入
+                // block.turn;非 chat 块 turn=0 不渲染)。
+                if .block.turn > 0 {
+                    text "· 第 " + .block.turn + " 轮" {
+                        style: "text-[10px] text-sky-400/80 select-none shrink-0"
+                    }
+                }
 
                 // 右侧操作区:停止(运行中)+ 悬停显示的复制/重跑 + 状态图标
                 // 2026-08-21:hover 背景统一 bg-white/10 —— VM 的 muted 色映射为

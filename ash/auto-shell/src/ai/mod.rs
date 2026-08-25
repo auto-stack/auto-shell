@@ -389,6 +389,19 @@ impl ChatSession {
     ) -> Result<String, String> {
         // v1: no cancellation. Ctrl-C handling is a later enhancement.
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.send_turn_streaming_with_cancel(user, on_event, cancel).await
+    }
+
+    /// Plan 063 T5(GUI chat 回合可 Stop):与 [`Self::send_turn_streaming`]
+    /// 同语义,但 cancel 标志由调用方持有 —— agent 的 ReAct 循环在既有
+    /// 检查点轮询该标志,置位后本轮中止并经 `StreamEvent::Cancelled`
+    /// 通知事件流。CLI 走 send_turn_streaming,保持不可取消不变。
+    pub async fn send_turn_streaming_with_cancel(
+        &mut self,
+        user: &str,
+        on_event: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<String, String> {
         let result = self
             .agent
             .run_stream(user, on_event, cancel)

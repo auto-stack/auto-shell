@@ -78,6 +78,8 @@ export interface Block {
     table_filter_q: string;
     steps: string[];
     step_styles: string[];
+    /** Plan 063 T5: chat turn number (ai_turn event; 0 for non-chat blocks). */
+    turn: number;
 }
 
 export interface GitStatusInfo {

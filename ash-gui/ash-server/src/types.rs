@@ -141,4 +141,13 @@ pub enum ShellEvent {
     JobStarted { job_id: u32, block_id: usize, cmd: String },
     JobDone { job_id: u32, exit_code: i32, cmd: String },
     JobList(Vec<JobInfo>),
+    /// Plan 063 T4:AI chat 抽屉事件族(块内文本流保留为 fallback,本族
+    /// 供右侧抽屉面板做结构化渲染)。`turn` 是会话级回合号(第 N 次用户
+    /// 提问),块头横幅与抽屉分隔线共用。
+    AiTurn { block_id: usize, turn: usize, question: String },
+    AiChunk { block_id: usize, turn: usize, text: String },
+    AiToolCall { block_id: usize, turn: usize, tool: String, args: String },
+    AiToolResult { block_id: usize, turn: usize, tool: String, result: String },
+    /// Plan 063 T5:`?? /clear` 后通知前端清空抽屉里的会话历史。
+    ChatCleared { block_id: usize },
 }

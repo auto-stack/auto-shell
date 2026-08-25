@@ -174,6 +174,18 @@ pub fn read_ai_next() -> String {
 /// Plan 064: worker 启动时刻(boot 窗口判定 —— 开机脚本的延迟执行)。
 static WORKER_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
+/// Plan 063 T5: chat 回合专属 cancel 标志。与 worker 的命令级 `cancel`
+/// 生命周期解耦(062 已知边界:chat 在独立线程跑,主循环 flag 的置位/
+/// 复位时序会互相错杀)—— chat 线程每回合开始时复位本标志再传入
+/// agent 的 run_stream;`ShellHandle::cancel`(Stop 按钮)同时置位。
+static CHAT_CANCEL: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+fn chat_cancel_flag() -> Arc<AtomicBool> {
+    CHAT_CANCEL
+        .get_or_init(|| Arc::new(AtomicBool::new(false)))
+        .clone()
+}
+
 /// Session snapshot shared with the completion thread (its own Shell can't
 /// see the main session's cd / last command). Completions never mutate the
 /// session, so a snapshot is equivalent.
@@ -288,8 +300,12 @@ impl ShellHandle {
     }
 
     /// Cancel the running command (concurrent — sets the flag directly).
+    /// Plan 063 T5:同时置位 chat 回合的专属标志(`??` 对话跑在 chat 线程,
+    /// 不经命令级 flag;worker 串行,同一时刻至多一个在跑,Stop 语义
+    /// "停当前"因此对两者统一成立)。
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
+        chat_cancel_flag().store(true, Ordering::SeqCst);
     }
 
     /// Plan 055 Phase A: list background jobs (`cmd &`)。
@@ -1395,10 +1411,23 @@ fn spawn_chat_worker(
                     .unwrap_or_default();
                 // 会话命令:/clear(与 CLI F4 同名指令)。
                 if req.msg == "/clear" {
+                    // 会话未建(本进程首条是 /clear)时也先构建再清 —— 否则
+                    // 磁盘上的持久化会话(~/.auto-shell-ai-chat.json)原样带入
+                    // 下一回合,轮号从历史累计值继续(CD-01:清场语义要确定)。
+                    if chat.is_none() {
+                        match build_chat_session() {
+                            Ok(c) => chat = Some(c),
+                            Err(_) => {}
+                        }
+                    }
                     if let Some(c) = chat.as_mut() {
                         c.clear();
                         let _ = c.save();
                     }
+                    // Plan 063 T4:抽屉里的会话历史随 /clear 一并清空。
+                    let _ = event_tx.send(ShellEvent::ChatCleared {
+                        block_id: req.block_id,
+                    });
                     let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
                         block_id: req.block_id,
                         cwd,
@@ -1435,13 +1464,53 @@ fn spawn_chat_worker(
                 let user = req.msg.clone();
                 let event_tx_cb = event_tx.clone();
                 let bid = req.block_id;
+                // Plan 063 T4:会话级回合号(本次提问是第 N 轮)—— 抽屉
+                // 分隔线与块头横幅共用;在 send 之前快照(+1 = 含本轮)。
+                let turn_no = c.turn_count() + 1;
+                let _ = event_tx_cb.send(ShellEvent::AiTurn {
+                    block_id: bid,
+                    turn: turn_no,
+                    question: user.clone(),
+                });
                 // 累计全量流文本:command_result 的 output 若为 Empty(裸字符串
                 // "Empty",非 null)不会触发前端的 streamed_text 回退且会清空
                 // streamed_text —— 收尾必须自带 Text(全文)。
                 let acc = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
                 let acc_cb = acc.clone();
+                // Plan 063 T5:StreamEvent::Cancelled 到达即记下(收尾映射
+                // Cancelled 而非 Failed/Success)。
+                let cancelled_seen = Arc::new(AtomicBool::new(false));
+                let cancelled_cb = cancelled_seen.clone();
                 let on_event: std::sync::Arc<dyn Fn(auto_ai_agent::StreamEvent) + Send + Sync> =
                     std::sync::Arc::new(move |ev| {
+                        // Plan 063 T4:结构化事件先行(抽屉渲染),再产块内
+                        // 文本行(fallback 块形态,对齐 CLI block_tui 的 ChatEv)。
+                        match &ev {
+                            auto_ai_agent::StreamEvent::Delta { text } => {
+                                let _ = event_tx_cb.send(ShellEvent::AiChunk {
+                                    block_id: bid,
+                                    turn: turn_no,
+                                    text: text.clone(),
+                                });
+                            }
+                            auto_ai_agent::StreamEvent::ToolStart { tool, args } => {
+                                let _ = event_tx_cb.send(ShellEvent::AiToolCall {
+                                    block_id: bid,
+                                    turn: turn_no,
+                                    tool: tool.clone(),
+                                    args: auto_shell::ai::brief::brief_args(args),
+                                });
+                            }
+                            auto_ai_agent::StreamEvent::Tool { tool, result, .. } => {
+                                let _ = event_tx_cb.send(ShellEvent::AiToolResult {
+                                    block_id: bid,
+                                    turn: turn_no,
+                                    tool: tool.clone(),
+                                    result: auto_shell::ai::brief::brief_result(result),
+                                });
+                            }
+                            _ => {}
+                        }
                         // 事件 → 增量文本行(对齐 CLI block_tui 的 ChatEv 渲染)。
                         let chunk = match ev {
                             auto_ai_agent::StreamEvent::Delta { text } => text,
@@ -1460,6 +1529,10 @@ fn spawn_chat_worker(
                             auto_ai_agent::StreamEvent::Error { message } => {
                                 format!("\n  [error] {message}")
                             }
+                            auto_ai_agent::StreamEvent::Cancelled { .. } => {
+                                cancelled_cb.store(true, Ordering::SeqCst);
+                                return;
+                            }
                             _ => return,
                         };
                         if let Ok(mut a) = acc_cb.lock() {
@@ -1470,12 +1543,36 @@ fn spawn_chat_worker(
                             chunk,
                         });
                     });
-                let turn = runtime.block_on(c.send_turn_streaming(&user, on_event));
+                // Plan 063 T5:回合开始先复位 chat 专属 cancel(上一回合的
+                // 置位不诛连本轮;Stop 与 run_stream 之间的竞态窗口里置位
+                // 的 flag 会被 agent 的首个检查点捕获,语义正确)。
+                let chat_cancel = chat_cancel_flag();
+                chat_cancel.store(false, Ordering::SeqCst);
+                let turn = runtime.block_on(c.send_turn_streaming_with_cancel(
+                    &user,
+                    on_event,
+                    chat_cancel,
+                ));
                 let duration_ms = started.elapsed().as_millis() as u64;
                 let streamed = acc
                     .lock()
                     .map(|a| a.clone())
                     .unwrap_or_default();
+                let was_cancelled =
+                    cancelled_seen.load(Ordering::SeqCst);
+                if was_cancelled {
+                    // Plan 063 T5:用户 Stop —— 部分流文本保留在 output,
+                    // 状态 Cancelled(与命令级取消同色不与失败混淆)。
+                    let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
+                        block_id: req.block_id,
+                        cwd,
+                        status: CommandStatus::Cancelled,
+                        output: RenderedOutput::Text(streamed),
+                        duration_ms,
+                        exit_code: 130,
+                    }));
+                    continue;
+                }
                 match turn {
                     Ok(_final_text) => {
                         // 持久化文本回合(工具消息已滤)。收尾带 Text(全量流
@@ -1524,6 +1621,11 @@ fn build_chat_session() -> Result<auto_shell::ai::ChatSession, String> {
 
 /// Plan 062 T12: deterministic chat client for tests — echoes the last user
 /// message. Plain text (no tool calls) terminates the ReAct loop in one step.
+///
+/// Plan 063 T4/T5 测试旋钮(仅当最后一条消息是 user 时生效):
+/// - 含 `slow` → 先睡 4s(Stop 测试的点击窗口);
+/// - 含 `use tool` → 回一个 `echo` 工具调用(抽屉 ⚙/← 行的结构化事件源);
+///   工具结果回来后走普通回声文本收尾。
 struct FakeChatClient;
 
 #[async_trait::async_trait]
@@ -1532,23 +1634,52 @@ impl auto_ai_agent::Client for FakeChatClient {
         &self,
         req: &auto_ai_client::CompletionRequest,
     ) -> Result<auto_ai_client::CompletionResponse, auto_ai_client::ClientError> {
+        let text_of = |m: &&auto_ai_client::Message| {
+            m.content
+                .iter()
+                .filter_map(|b| match b {
+                    auto_ai_client::ContentBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        };
+        // 工具结果消息的 role 也是 "user"(wire 兼容)但内容是 ToolResult 块、
+        // 无文本 —— 「最后一条有文本的 user 消息」才是本次提问;旋钮只对
+        // 「末尾消息就是文本 user 提问」的新回合生效。
         let last_user = req
             .messages
             .iter()
             .rev()
-            .find(|m| m.role == "user")
-            .and_then(|m| {
-                Some(m
-                    .content
-                    .iter()
-                    .filter_map(|b| match b {
-                        auto_ai_client::ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(""))
+            .filter(|m| m.role == "user")
+            .find_map(|m| {
+                let t = text_of(&m);
+                if t.is_empty() { None } else { Some(t) }
             })
             .unwrap_or_default();
+        let last_is_user = req
+            .messages
+            .last()
+            .map(|m| m.role == "user" && !text_of(&m).is_empty())
+            .unwrap_or(false);
+        if last_is_user && last_user.contains("slow") {
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        }
+        if last_is_user && last_user.contains("use tool") {
+            return Ok(auto_ai_client::CompletionResponse {
+                content: String::new(),
+                tool_calls: vec![auto_ai_client::ToolCall {
+                    id: "call-fake-1".into(),
+                    name: "echo".into(),
+                    input: serde_json::json!({ "args": ["drawer-tool-ran"] }),
+                }],
+                stop_reason: Some("tool_use".into()),
+                usage: None,
+                model: "fake".into(),
+                error: None,
+                model_meta: None,
+            });
+        }
         Ok(auto_ai_client::CompletionResponse {
             content: format!("fake-chat:{last_user}"),
             tool_calls: vec![],
