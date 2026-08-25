@@ -1,8 +1,41 @@
 # 063 — ash-gui 与 CLI 版 AI 能力对齐
 
 - 日期:2026-08-25
-- 状态:**Phase 1(T1-T3)已实施,VM 端到端验收通过**(plan-063 worktree
-  分支;T4/T5 仍需引擎窗口,未动)
+- 状态:**Phase 1(T1-T3)+ Phase 2(T4/T5)全部完成,VM 端到端验收通过**
+  (P1 零引擎落 plan-063 分支;P2 引擎窗口件落 plan-063-t45 worktree +
+  auto-lang plan-063-064-finish 分支)
+- 实施记录(2026-08-25 晚,Phase 2 = T4/T5,引擎窗口件):
+  - **T4 chat 抽屉**:新 SSE 事件族 `ai_turn/ai_chunk/ai_tool_call/
+    ai_tool_result/chat_cleared`(types.rs 契约 + api.at ChatSseEvent 文档)
+    与块内文本流并行(fallback 保留);chat worker 在 send 前快照
+    `turn_count()+1` 发 AiTurn,回调里结构化事件先行、块文本行照旧。
+    前端右侧抽屉(w-80):回合分隔线/提问/回答增量/⚙← 工具行 kind 分样式
+    渲染 + 空态提示 + 底部用法条;标题栏 💬 开合,`??` 提交自动开
+    (store.RunCommand 前缀检测)。chat_events 双轨:VM 轨 renderer 直写
+    Value::Array(job_list 同款所有权模型,新增 append_chat_events helper),
+    vue 轨无参 handler 读 `__ai_*` 预置字段(vue.rs legacy SSE 链扩 5 事件 +
+    emit_preset_dispatch 六臂)。`?? /clear` 同时发 ChatCleared 清抽屉。
+  - **T5 回合可 Stop + 横幅**:`ChatSession::send_turn_streaming_with_cancel`
+    (cancel Arc 透传,agent 既有 5 检查点;CLI 的 send_turn_streaming 保持
+    不可取消);worker 持 `CHAT_CANCEL` 专属 static(回合开始复位,与命令级
+    cancel 生命周期解耦 —— 062 已知边界的正解),ShellHandle::cancel 同时
+    置位;取消检测走 StreamEvent::Cancelled 事件(收尾映射
+    CommandStatus::Cancelled + exit 130,非 Failed)。块头横幅:Block 契约
+    加 `turn` 字段(api.at + 手写 api.ts 同步),renderer ai_turn 臂经
+    set_block_turn 写块(Obj/VmRef 物化匹配,update_block_in_state 同款),
+    block_item 渲染"· 第 N 轮";抽屉分隔线同源同号。
+  - **连带修复**:`?? /clear` 在会话未建时原先只回确认不清持久化文件
+    (轮号从 ~/.auto-shell-ai-chat.json 累计值继续)—— 现先建会话再 clear
+    + save,清场语义确定(CD 测试依赖)。标题栏 ⚙/💬 按钮补 shrink-0
+    (抽屉开时主列变窄,无 shrink 的 ⚙ 计数被 truncate 掉 —— jp02 全量
+    回归挂的根因)。FakeChatClient 测试旋钮:`use tool` 关键词 → echo
+    工具调用(工具结果消息 role=user 无文本块,判定取"最后一条有文本的
+    user 消息");`slow` → 8s 延迟(Stop 测试窗口)。
+  - **验收**:tests/test_chat_drawer.py CD-01..05 全绿(抽屉自动开/工具行/
+    第 N 轮横幅+块头/Stop→Cancelled//clear 清抽屉);063 全族 + 064 双轮 +
+    062 test_cli_parity(含 CH 块内 chat 族)回归通过(he02/03 键盘 flake
+    在册豁免);vue-tsc 0 错 + vite build 绿(gen 重生成 + restore-vue-assets
+    push,api.ts Block.turn 手补已 --pull 入权威副本)。
 - 实施记录(2026-08-25,Phase 1 = T1-T3):
   - **T1 suggest-next**:worker 收尾钩子(`is_enabled` → `suggest_next_async`,
     与 CLI repl 同款 best-effort)+ `/api/ai_next` 端点(drain auto-shell 的
@@ -92,7 +125,7 @@ DEBTS 062-T13 的"依赖 Ollama"口径随本计划修正。
     命令行 `smart run "<nl>"`(与 CLI 同词法,worker 解析)。
   - 验收:SM-01(fake:NL → 命中注册的 smart 命令)、SM-02(未命中 → Failed)。
 
-### Phase 2 — 引擎侧升级件(需 auto-lang 窗口,可后置)
+### Phase 2 — 引擎侧升级件(2026-08-25 晚已实施,见顶部实施记录)
 
 - **T4 chat 抽屉面板**(062 T12 升级件原规格):AiChunk/AiToolCall/AiToolResult
   SSE 事件族 + 右侧抽屉 widget(流式文本 + 工具事件内联 + 会话历史滚动);

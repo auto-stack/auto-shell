@@ -628,13 +628,14 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 
 ## ash-gui CLI 对齐(Plan 062 延期项/已知限制)
 
-### T12 升级件:AiChunk SSE 事件族 + 右侧抽屉 chat 面板(需引擎窗口)
+### ~~T12 升级件:AiChunk SSE 事件族 + 右侧抽屉 chat 面板(需引擎窗口)~~
 
-- **现状**:T12 已落零引擎「块内 chat」(`??` 前缀,流式经既有 CommandOutput
-  事件,§12);原规格的 AiChunk/AiToolCall/AiToolResult 事件族 + 抽屉面板未做。
-- **接受理由**:新 SSE 事件族需动 auto-lang master(renderer 白名单/vue 链),
-  430/432 在途占用;块内形态已达成 CLI block_tui 对齐。
-- **参考**:`ash-server/src/worker.rs` spawn_chat_worker。
+<!-- Plan 063 T4/T5 销案(2026-08-25 晚):ai_turn/ai_chunk/ai_tool_call/ai_tool_result/
+     chat_cleared 事件族 + 右侧抽屉(回合分隔线/提问/回答/⚙← 工具行,?? 自动开 +
+     💬 开合)+ 回合可 Stop(CHAT_CANCEL 解耦)+ 块头"· 第 N 轮"横幅已落地;
+     引擎侧 renderer 五事件臂 + vue 桥白名单随 auto-lang master ac896a40b 合入。
+     块内 `??` 文本流保留为 fallback。验收 CD-01..05(tests/test_chat_drawer.py)。
+     详情见 docs/plans/063 顶部 Phase 2 实施记录。 -->
 
 <!-- Plan 063 销案(2026-08-25):T13/T14 已由 plan-063 Phase 1 收口后移除 ——
      T13(suggest-next)按「worker 收尾钩子 + /api/ai_next 取后即清 + App 级
@@ -652,8 +653,9 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 
 ### 已知限制(小项,视觉/边角)
 
-- AI 翻译/建议块在翻译中不可 Stop(全局 cancel flag 与其他命令生命周期有竞态,
-  误判会把建议错标 Cancelled;翻译秒级)—— `worker.rs` Run 分支。
+- AI **翻译**(`?` 前缀)块在翻译中不可 Stop(`?` 走 nl 线程,不经 063 T5
+  的 CHAT_CANCEL;chat 回合(`??`)已可 Stop,Cancelled 语义,063 Phase 2
+  落地;翻译秒级)—— `worker.rs` Run 分支。
 - `CommandResult.output = RenderedOutput::Empty` 序列化为裸字符串 `"Empty"`
   (非 null),引擎 update_block_in_state 不走 streamed_text 回退且清空之 ——
   长流式收尾必须自带 `Text(全文)`(chat 线程已如此,新调用方需注意)。
@@ -665,18 +667,24 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 - prompt_bar `auto_hint`(# 符号)是引擎 is_auto_expression 静态强信号的
   启发式镜像,两端口径可漂移(仅视觉提示,执行路由以引擎为准)。
 
-### Plan 063 新增已知限制(2026-08-25,T1-T3 落地边角)
+### Plan 063 新增已知限制(2026-08-25,T1-T3 落地边角;Phase 2 复核仍开)
 
 - **分步数据是 store 级单份**:引擎边界 —— merged 模式 renderer 构造的块
   不含新契约字段(steps 永远落不到块上),store handler 也遍历不了
   renderer-owned 的 .blocks(Cancel 注释同证);故分步放
   `store.ai_steps_list` 且不绑定块 id,连续两次 multi 翻译时旧块显示新
-  steps。引擎窗口(块字段清单/事件族)打开后可归位到块本地字段。
+  steps。【063 Phase 2 注:块本地字段的引擎通道已开(Block.turn 经
+  set_block_turn 落块本地成功)—— steps 归位到块本地字段从此可行,
+  但本轮未做(分步渲染已验收,单活跃翻译块假设仍成立)。】
 - **smart NL 回退仅命令行路径**:`smart run <名>` 未命中转 nlu::route
   (事件流收尾);侧栏 HTTP `/api/run_smart` 同步路径保持 not found 返回
   (侧栏名字恒来自注册表,不命中只在手敲时发生)。
 - **分步的"已执行步打灰"用 ✓ 前缀 + 预计算样式数组近似**:视图条件文法
   不支持索引读/contains,样式平行数组是 ●色点同款的既有模式。
+- **chat 抽屉(063 Phase 2)只回放本进程内的回合**:启动前落盘的
+  ~/.auto-shell-ai-chat.json 历史不进抽屉(ChatSession 侧有,前端无
+  chat_history 端点;块内 `??` 形态同样只见当轮)。跨重启回放需新端点,
+  留待真实需求。
 
 ## ash-gui 引擎侧在册债(Plan 058/060 复审入账,2026-08-24)
 
