@@ -658,7 +658,10 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
   (非 null),引擎 update_block_in_state 不走 streamed_text 回退且清空之 ——
   长流式收尾必须自带 `Text(全文)`(chat 线程已如此,新调用方需注意)。
 - Vue 端 `ai_pending` 编辑回填链未在本环境验证(块卡片按钮在 Vue 走 .at
-  handler 原生可用)。
+  handler 原生可用)。【065 续:HTTP 视觉验证 T1 boot/T2 echo 已过;T3 chips/
+  T4 逐步行根因为 codegen 双 bug(substr 双参直译 + SSE 桥缺 RefreshContext
+  跟随),已在 auto-lang 分支 plan-065-engine(3b3152522)修复 —— 待合并
+  master 后 vue 轨拉取链即通;编辑回填链(块卡片按钮 → ai_pending)仍待验。】
 - prompt_bar `auto_hint`(# 符号)是引擎 is_auto_expression 静态强信号的
   启发式镜像,两端口径可漂移(仅视觉提示,执行路由以引擎为准)。
 

@@ -100,3 +100,49 @@
 3. MCP bind 失败静默 return(引擎,SO_REUSEADDR/重试/信号)。
 4. renderer.rs shell_event_subscription 不可达重复匹配臂(清理)。
 5. codegen api.ts 产出 + API_FUNCTIONS 名单(引擎)。
+
+---
+
+## 续篇(2026-08-25 下午:HTTP 视觉验证 + 引擎侧修复)
+
+### 事故与恢复:worktree 清理穿透 junction
+
+上一阶段收尾时 `rm -rf .worktrees/plan-065` 在 Git Bash 下**穿透了目录内的
+junction**(gen/dist/autostack/examples/target 借用主仓资产的软链),把主仓
+`gen/front/vue` 的 index.html/components.json/dist 与 ash-gui-auto 的
+dist/autostack/examples 一并删掉(src/ 完好,ash-server/target 完好)。
+恢复:index.html/components.json 按 codegen 模板手工重建;后续 `auto gen`
+(引擎分支构建)重生成全树,vue-tsc + vite build 全绿。**教训:Git Bash 的
+rm 对 Windows junction 会递归目标;清理含 junction 的目录前必须先逐个
+`cmd //c rmdir <junc>`(只摘链不穿目标)。** `examples/`、`autostack/` 内容
+未逐项核对(源码无引用,gen/run 可重建),如有自置内容请从回收站/备份确认。
+
+### HTTP 视觉验证(web-gui-tester 流程,IAB)
+
+- **T1 boot 链 ✓(视觉)**:页面加载 → Init 拉 boot_script 直提 → 首块
+  `script …boot-http.ash` + 输出 `boot-http-ok`,标题栏 git 标签 ⎇ main ⇡7
+  正确(RefreshContext 的 prompt_context 链同验)。
+- **T2 echo+SSE ✓(视觉)**:真实键入(注意:`fill()` 会绕过 vue 输入链,
+  必须 click+type)→ 块 Success,1ms/:0 徽章/输出全渲染,输入框清空。
+- **T3 chips ✗ → 根因 → 已修**:命令后无 chips。双根因,均在 codegen:
+  1. **substr 双参语义直译错**(vue.rs + ts_adapter 两张表):`.at`
+     `substr(start,LEN)` 直译 JS `substring(start,END)`,`substr(i,1)`
+     恒空串 → ai_next 引号扫描器产出恒空 → chips 永不落位;同病影响
+     OnEnter 括号配平/ghost 分词/cwd 缩写等 44 处发射点。
+  2. **SSE 桥缺 RefreshContext 跟随**:VM 轨由引擎 renderer.rs 触发,
+     vue 轨 command_result→RunResult() 后无人补位 → ai_pending/ai_next/
+     ai_steps 拉取链整条不跑。
+- **T4 分步卡**:翻译卡 + ▶▶ 全部执行 + ✕ 取消 ✓(视觉);逐步行 ✗
+  (同根因 2,steps 走 ai_steps 拉取)。
+- 修复后:**codeGen 发射 + vue-tsc + vite build 全绿**(全新 gen + 同步脚本
+  流程端到端打通);chips/逐步行的修复后视觉复验待 IAB webview 恢复(今日
+  两次崩溃,工具级问题)。ash-server(:3000)+ vite(:3001)保持运行,可在
+  普通浏览器打开 http://localhost:3001 人工复核。
+
+### 引擎分支 plan-065-engine(auto-lang,已提交未合并)
+
+3b3152522:①substr 双参换算(两条转译路径)②SSE 桥 RefreshContext 跟随
+(store 声明该 handler 时)③MCP bind 重试+FATAL 标记 ④死臂清理
+⑤CloseRequested 打点(自退排查)。验收:ui_gen 单测 742+12 全过;auto-shell
+电池(新引擎)9 passed,RefreshContext 13=8 命令+5 翻译收尾,严格 1:1。
+**未合并**:master 有在途工作,待用户择机合入。
