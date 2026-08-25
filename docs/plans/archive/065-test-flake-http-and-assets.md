@@ -139,10 +139,10 @@ rm 对 Windows junction 会递归目标;清理含 junction 的目录前必须先
   两次崩溃,工具级问题)。ash-server(:3000)+ vite(:3001)保持运行,可在
   普通浏览器打开 http://localhost:3001 人工复核。
 
-### 引擎分支 plan-065-engine(auto-lang,已提交未合并)
+### 引擎分支 plan-065-engine(auto-lang,已合并 master)
 
-3b3152522:①substr 双参换算(两条转译路径)②SSE 桥 RefreshContext 跟随
-(store 声明该 handler 时)③MCP bind 重试+FATAL 标记 ④死臂清理
-⑤CloseRequested 打点(自退排查)。验收:ui_gen 单测 742+12 全过;auto-shell
-电池(新引擎)9 passed,RefreshContext 13=8 命令+5 翻译收尾,严格 1:1。
-**未合并**:master 有在途工作,待用户择机合入。
+3b3152522 → merge 9d02b895b(2026-08-25):①substr 双参换算(两条转译路径)
+②SSE 桥 RefreshContext 跟随(store 声明该 handler 时)③MCP bind 重试+
+FATAL 标记 ④死臂清理 ⑤CloseRequested 打点(自退排查)。验收:ui_gen 单测
+742+12 全过;auto-shell 电池(新引擎)9 passed,RefreshContext 13=8 命令+
+5 翻译收尾,严格 1:1。worktree/分支已清理。
