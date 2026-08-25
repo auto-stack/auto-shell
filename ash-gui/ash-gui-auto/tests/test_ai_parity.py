@@ -81,6 +81,22 @@ def _find_buttons_exact(mcp, label):
     )
 
 
+def _clear_suggestion_cards(mcp):
+    """Plan 065:测试间彻底清场 —— 点掉所有建议卡的 ✕ 取消并等到全部消失。
+
+    ST-02 原先点完取消不等移除完成;ST-03 的 multi-a 等待被残留卡瞬时
+    满足,▶▶ 按钮尚未渲染即断言 → 序列性假失败(单跑恒绿)。这就是 063
+    遗留的「残留块干扰」根源:清场必须闭环(点击 → 等消失)。"""
+    for _ in range(5):
+        cancel = _find_last_button_by_label(mcp, r"✕ 取消")
+        if not cancel:
+            return
+        mcp.click(cancel)
+        mcp.wait_until(
+            lambda c: "✕ 取消" not in c.snapshot(), timeout=8, interval=0.5
+        )
+
+
 # ── T1: suggest-next chips (SN) ─────────────────────────────────────────────
 
 def test_sn01_chips_after_command(mcp):
@@ -167,10 +183,7 @@ def test_st01_multi_renders_step_rows(mcp):
     if dismiss:
         mcp.click(dismiss)
         mcp.wait_until(lambda c: "✎ 编辑" not in c.snapshot(), timeout=8, interval=0.5)
-    cancel = _find_last_button_by_label(mcp, r"✕ 取消")
-    if cancel:
-        mcp.click(cancel)
-        mcp.wait_until(lambda c: "multi-a" not in c.snapshot(), timeout=8, interval=0.5)
+    _clear_suggestion_cards(mcp)
 
 
 def test_st02_single_step_run_leaves_others(mcp):
@@ -185,6 +198,12 @@ def test_st02_single_step_run_leaves_others(mcp):
         interval=0.5,
     )
     assert ok, "step rows did not render before the single-step test"
+    # Plan 065:卡片头(译文含 multi-b/c 文本)先于步进按钮渲染 —— steps 由
+    # RefreshContext 拉取后的下一次 view 重建才落按钮。把「按钮出现」本身
+    # 作为等待条件,消除头部先行窗口的竞态。
+    mcp.wait_until(
+        lambda c: len(_find_buttons_exact(c, "▶")) >= 3, timeout=15, interval=0.5
+    )
     step_btns = _find_buttons_exact(mcp, "▶")
     assert len(step_btns) >= 3, (
         f"expected ≥3 per-step buttons, got {len(step_btns)}:\n{mcp.snapshot()[:300]}"
@@ -204,9 +223,7 @@ def test_st02_single_step_run_leaves_others(mcp):
         f"other steps lost their run buttons:\n{snap[:400]}"
     )
     # 清场:移除建议块(避免影响后续测试的按钮定位)。
-    cancel = _find_last_button_by_label(mcp, r"✕ 取消")
-    if cancel:
-        mcp.click(cancel)
+    _clear_suggestion_cards(mcp)
 
 
 def test_st03_run_all_dispatches_in_order(mcp):
@@ -220,6 +237,14 @@ def test_st03_run_all_dispatches_in_order(mcp):
         interval=0.5,
     )
     assert ok, "step rows did not render before the run-all test"
+    # Plan 065:同 ST-02 —— 等按钮出现再取 id(卡片头先行,按钮随 steps 拉取
+    # 后的下一次 view 重建落位)。
+    ok = mcp.wait_until(
+        lambda c: bool(_find_button_by_label(c, r"▶▶ 全部执行")),
+        timeout=15,
+        interval=0.5,
+    )
+    assert ok, "run-all button not found"
     run_all = _find_button_by_label(mcp, r"▶▶ 全部执行")
     assert run_all, "run-all button not found"
     mcp.click(run_all)
@@ -234,17 +259,21 @@ def test_st03_run_all_dispatches_in_order(mcp):
         interval=0.5,
     )
     assert ok, f"run-all did not dispatch every step:\n{mcp.snapshot()[:400]}"
-    # 全部执行且标记:三个步都带 ✓(RunAllSteps 逐条标记;严格 vtree 顺序
-    # 断言对前序测试的执行块残留敏感 —— 派发顺序由 worker 主循环串行保证,
-    # 单跑轮已验证视觉顺序)。
+    # 全部执行且标记:三个步都带 ✓(RunAllSteps 逐条标记)。
     snap = mcp.snapshot()
     assert "✓ echo multi-a" in snap and "✓ echo multi-b" in snap and "✓ echo multi-c" in snap, (
         "not every step got the executed mark"
     )
+    # Plan 065:恢复严格派发顺序断言(063 弱化为全 ✓ —— 残留块干扰)。根治
+    # 后已确定性:提交不再放大(_submit_command 耐心重发)+ 测试间彻底清场
+    # (_clear_suggestion_cards 闭环)。rfind 定位各步**执行块头**(最后一次
+    # 出现;步行/输出不含 "echo" 前缀),三块按 a→b→c 派发序落 vtree。
+    pa, pb, pc = snap.rfind("echo multi-a"), snap.rfind("echo multi-b"), snap.rfind("echo multi-c")
+    assert 0 <= pa < pb < pc, (
+        f"executed blocks out of dispatch order: a@{pa} b@{pb} c@{pc}"
+    )
     # 清场。
-    cancel = _find_last_button_by_label(mcp, r"✕ 取消")
-    if cancel:
-        mcp.click(cancel)
+    _clear_suggestion_cards(mcp)
 
 
 # ── T3: smart NL routing (SM) ────────────────────────────────────────────────

@@ -10,6 +10,7 @@ Run:
     AUTO_BIN=<path-to-auto.exe> python -m pytest tests/test_command_exec.py -v
 """
 
+import os
 import re
 
 import pytest
@@ -88,12 +89,21 @@ def _submit_command(mcp, cmd_text):
     # Plan 057: typing now populates the completion suggestions row, which
     # rebuilds the vtree and invalidates the cached vnode id (content hash) —
     # re-resolve the textarea id on every attempt.
-    deadline = time.time() + 8
+    # Plan 065:盲重发不安全 —— submit 在 MCP 请求时把 view(滞后快照)里的
+    # 输入框值嵌入动作消息,首个 submit 未被处理前重发,每条都带完整命令
+    # 文本排队:一次 echo 实测被执行 4 次(4×command_result → 4×
+    # RefreshContext,SN 族 chips 被空拉清掉的放大源;重复块即 ST-03 的
+    # 「残留块」)。改为每次 submit 后耐心轮询清空(0.2s 步进),超时才重发
+    # —— 丢消息仍可恢复,处理滞后不再放大提交。
+    PATIENCE = float(os.environ.get("ASH_SUBMIT_PATIENCE", "3"))
+    deadline = time.time() + 10
     while time.time() < deadline:
         mcp.call("autoui_action", element_id=vnode, action="submit")
-        time.sleep(0.4)
-        if 'input: ""' in mcp.state("input"):
-            return
+        patient_until = time.time() + PATIENCE
+        while time.time() < patient_until:
+            if 'input: ""' in mcp.state("input"):
+                return
+            time.sleep(0.2)
         vnode = _find_prompt_input_vnode(mcp) or vnode
 
 
