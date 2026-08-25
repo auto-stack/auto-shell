@@ -761,7 +761,9 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 
 ### Plan 065 新增(2026-08-25:测试 flake 排查 + HTTP 层验证)
 
-**引擎侧(auto-lang)——下次引擎窗口的候选清单,事实均已实测钉死:**
+**引擎侧(auto-lang)——下次引擎窗口的候选清单,事实均已实测钉死
+(2026-08-25 复核:5 条中 3 开 2 已修,已修项随 auto-lang master
+9d02b895b 落地):**
 
 1. **submit 动作在请求时携带滞后 view 值**(mcp_server.rs `execute_action_vnode`
    的 Submit 分支:从 `shared.view` 的 Input/Textarea `value` 抓文本嵌入
@@ -775,13 +777,14 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
    exit 0(死亡现场已抓:pytest-capture 日志 + teardown 打印 code=0)。
    与 renderer.rs 2026-08-22 注释的「心跳周期 view 重建在大 Code 块下
    静默退出」同一族;iced 0.14.0。同机多轮起停后恶化(单轮/单族稳定),
-   疑似与窗口/GPU 状态累积有关 —— 根因未明,需引擎侧在 window close
-   路径加打点。
-3. **MCP bind 失败静默 return**(mcp_server.rs `run()`):占口失败只
-   eprintln,VM 无头继续跑,测试表现为 startup 超时 skip。测试侧已用
-   ephemeral 端口绕开;引擎侧可加 SO_REUSEADDR/失败重试或可观测信号。
-4. `shell_event_subscription` 里有一段**不可达的重复 `Ok(ev)` 匹配臂**
-   (renderer.rs,手改残留,无害但应清)。
+   疑似与窗口/GPU 状态累积有关 —— 根因未明。**CloseRequested 打点已随
+   plan-065-engine 合入 master(auto-lang 9d02b895b)**,下次复现时 VM 日志
+   直接打印关闭请求到达时刻 —— 届时按日志继续追。
+3. ~~**MCP bind 失败静默 return**~~ ✅ **已修**(auto-lang master
+   9d02b895b):失败改 10×300ms 有限重试 + `AutoUI MCP: FATAL:` 可 grep
+   标记;测试侧另有 ephemeral 端口双保险。
+4. ~~`shell_event_subscription` 不可达重复 `Ok(ev)` 匹配臂~~ ✅ **已修**
+   (auto-lang master 9d02b895b)。
 5. codegen 的 `API_FUNCTIONS` 硬编码旧 demo 名单(vue.rs),api.ts 端点
    生成缺位 —— auto-shell 侧已加 restore-vue-assets.py 同步脚本兜底,
    根治仍应 codegen 产出。
