@@ -53,3 +53,6 @@ __pycache__/
 /snap-bounds.txt
 /icontest2/
 /vt.json
+
+# Windows recycle-bin artifact that occasionally appears at repo root (system-protected, undeletable without admin)
+$RECYCLE.BIN/
