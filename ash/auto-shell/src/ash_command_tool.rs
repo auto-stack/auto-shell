@@ -182,6 +182,56 @@ impl Tool for AshCommandTool {
     }
 }
 
+/// Plan 068(统一 agent):提案工具 —— 与 [`AshCommandTool`] 同名注册,但
+/// `execute` **不执行**命令:把拼好的 CLI 串送进 proposal 通道(宿主渲染
+/// 建议卡等用户审批),并告知 agent 命令已提交审批、结果将在用户执行后的
+/// 下一轮对话可见。用户点执行走普通命令路径,执行结果经会话上下文快照
+/// 回流(多轮闭环)。
+pub struct ProposeTool {
+    name: String,
+    description: String,
+    sink: mpsc::Sender<String>,
+}
+
+impl ProposeTool {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        sink: mpsc::Sender<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            sink,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for ProposeTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
+        let cmd_str = json_args_to_cli(&self.name, args)?;
+        self.sink
+            .send(cmd_str.clone())
+            .map_err(|_| ToolError::Exec("proposal channel closed".into()))?;
+        Ok(ToolOutput::text(format!(
+            "已提交审批:建议命令 `{cmd_str}` 已展示给用户,等待用户决定是否执行。
+\"
+            用户执行后,命令与结果会在下一轮对话的上下文中可见。请基于这一点继续回答
+\"
+            (给出操作指引/说明这条命令做什么),不要假设它已执行。"
+        )))
+    }
+}
+
 /// Rebuild a CLI string from the model's JSON arguments.
 ///
 /// Supports:

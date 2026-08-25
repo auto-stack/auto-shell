@@ -52,15 +52,6 @@ struct CompleteReq {
     reply: tokio::sync::oneshot::Sender<Vec<CompletionItem>>,
 }
 
-/// Plan 062 T11: NL→命令翻译请求(`?` 前缀提交)。`?` 流程带 `reply: None`
-/// —— 结果以既有 `CommandResult` 事件回到块上(零新 SSE 事件族,引擎不动);
-/// 同步 `/api/nl2cmd` 端点带 oneshot reply,直接取回 JSON 结果。
-struct NlReq {
-    block_id: usize,
-    nl: String,
-    reply: Option<tokio::sync::oneshot::Sender<String>>,
-}
-
 /// Plan 062 T12: 块内 AI chat 请求(`??` 前缀提交)。流式增量经既有
 /// `CommandOutput` 事件写进块的 streamed_text(Running 态实时渲染),
 /// 回合结束发 `CommandResult` 收尾 —— 复用 T11 的零引擎事件方案,
@@ -171,9 +162,6 @@ pub struct ShellHandle {
     /// Plan 062 T10: dedicated completion channel (own thread — never waits
     /// behind a running command).
     complete_tx: mpsc::UnboundedSender<CompleteReq>,
-    /// Plan 062 T11: dedicated NL→command channel (own thread — a multi-second
-    /// AI round trip must never block the serialized main worker).
-    nl_tx: mpsc::UnboundedSender<NlReq>,
     /// Plan 062 T12: dedicated AI-chat channel (own thread — the ChatSession
     /// and its agent turns live there for the process lifetime).
     chat_tx: mpsc::UnboundedSender<ChatReq>,
@@ -220,22 +208,6 @@ impl ShellHandle {
             })
             .map_err(|_| "completion channel closed".to_string())?;
         reply_rx.await.map_err(|_| "completion worker dropped reply".to_string())
-    }
-
-    /// Plan 062 T11: synchronous NL→command translation (contract/tests —
-    /// the interactive `?` flow goes through `run_command` interception and
-    /// receives its result as a CommandResult event instead). Returns a JSON
-    /// string `{ok, cmd, notice, multi}` / `{ok:false, error}`.
-    pub async fn nl2cmd(&self, nl: String) -> Result<String, String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.nl_tx
-            .send(NlReq {
-                block_id: usize::MAX,
-                nl,
-                reply: Some(reply_tx),
-            })
-            .map_err(|_| "nl2cmd channel closed".to_string())?;
-        reply_rx.await.map_err(|_| "nl2cmd worker dropped reply".to_string())
     }
 
     /// Get the prompt context (git branch/status).
@@ -289,8 +261,6 @@ pub fn spawn() -> ShellHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<CommandReq>();
     // Plan 062 T10: dedicated completion channel/thread.
     let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteReq>();
-    // Plan 062 T11: dedicated NL→command channel/thread.
-    let (nl_tx, nl_rx) = mpsc::unbounded_channel::<NlReq>();
     // Plan 062 T12: dedicated AI-chat channel/thread.
     let (chat_tx, chat_rx) = mpsc::unbounded_channel::<ChatReq>();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -300,9 +270,6 @@ pub fn spawn() -> ShellHandle {
     let session = SharedSession::default();
 
     spawn_completion_worker(complete_rx, session.clone());
-    // Plan 062 T11: nl worker shares the session snapshot (context) and the
-    // event broadcast (CommandResult delivery).
-    spawn_nl_worker(nl_rx, session.clone(), event_tx.clone());
     // Plan 062 T12: chat worker shares the session snapshot (context) and the
     // event broadcast (streaming + result delivery).
     spawn_chat_worker(chat_rx, session.clone(), event_tx.clone());
@@ -314,8 +281,6 @@ pub fn spawn() -> ShellHandle {
     let session_for_thread = session.clone();
     // Plan 057: worker-side sender clone for the job-reaper ticker.
     let tick_tx = tx.clone();
-    // Plan 062 T11: main-loop side of the nl channel (`?` interception).
-    let nl_tx_for_loop = nl_tx.clone();
     // Plan 062 T12: main-loop side of the chat channel (`??` interception).
     let chat_tx_for_loop = chat_tx.clone();
     std::thread::Builder::new()
@@ -424,6 +389,9 @@ pub fn spawn() -> ShellHandle {
                                 let _ = append_history(trimmed_in);
                                 continue;
                             }
+                            // Plan 068(统一 agent):`?` 是唯一 AI 入口 ——
+                            // 与 `??`(兼容保留)同走 chat worker;agent 需要执行
+                            // 非只读命令时经 proposal 通道产建议卡等审批。
                             if let Some(nl) = trimmed_in.strip_prefix('?') {
                                 let nl = nl.trim().to_string();
                                 if nl.is_empty() {
@@ -433,8 +401,7 @@ pub fn spawn() -> ShellHandle {
                                             block_id,
                                             cwd: cwd_err,
                                             status: CommandStatus::Failed(
-                                                "AI 用法:? <自然语言描述>(如 ? 列出当前目录的文件)"
-                                                    .into(),
+                                                "AI 用法:? <消息>(? /clear 清空会话)".into(),
                                             ),
                                             output: RenderedOutput::Empty,
                                             duration_ms: 0,
@@ -443,13 +410,11 @@ pub fn spawn() -> ShellHandle {
                                     );
                                     continue;
                                 }
-                                // 即时提示行(Running 块内可见;command_result
-                                // 到达时 update_block_in_state 清空 streamed_text)。
                                 let _ = event_tx_for_thread.send(ShellEvent::CommandOutput {
                                     block_id,
-                                    chunk: "⤾ AI 翻译中…\n".to_string(),
+                                    chunk: "💬 AI 对话中…\n".to_string(),
                                 });
-                                let _ = nl_tx_for_loop.send(NlReq { block_id, nl, reply: None });
+                                let _ = chat_tx_for_loop.send(ChatReq { block_id, msg: nl });
                                 let _ = append_history(trimmed_in);
                                 continue;
                             }
@@ -824,7 +789,6 @@ pub fn spawn() -> ShellHandle {
     ShellHandle {
         tx,
         complete_tx,
-        nl_tx,
         chat_tx,
         cancel,
         event_rx: event_tx,
@@ -907,111 +871,6 @@ fn completion_ctx_shared(
 
 // ── Plan 062 T11: NL→command worker ─────────────────────────────────────────
 
-/// Dedicated NL→command worker (T10 completion-thread pattern): own OS thread
-/// so a multi-second AI round trip never blocks the serialized main worker
-/// nor the UI. Context (cwd / last command / exit code) comes from the shared
-/// session snapshot; the alias layer (L2) is skipped — the snapshot carries
-/// no alias table and a second Shell just for aliases is not worth it for a
-/// translation prompt.
-fn spawn_nl_worker(
-    rx: mpsc::UnboundedReceiver<NlReq>,
-    session: SharedSession,
-    event_tx: broadcast::Sender<ShellEvent>,
-) {
-    std::thread::Builder::new()
-        .name("ash-server-nl2cmd".into())
-        .spawn(move || {
-            // Multi-thread runtime held for the thread's life — mirrors the
-            // CLI ask_ai requirement (repl.rs): current-thread runtimes can
-            // panic on drop under tokio >=1.52 in some contexts.
-            let runtime = tokio::runtime::Runtime::new()
-                .expect("failed to build nl2cmd worker runtime");
-            let mut rx = rx;
-            // AiClient::new() probes (and lazily starts) the aaid daemon — a
-            // blocking call that must NOT run inside a runtime context, so
-            // the client is built in the sync part of each iteration and
-            // cached across requests (rebuilt after an error so a daemon
-            // restart heals on the next request).
-            let mut client: Option<auto_ai_client::AiClient> = None;
-            while let Some(req) = rx.blocking_recv() {
-                let started = Instant::now();
-                let translation =
-                    translate_nl(&mut client, &session, &req.nl, &runtime);
-                let duration_ms = started.elapsed().as_millis() as u64;
-                let cwd = session
-                    .cwd
-                    .lock()
-                    .map(|c| c.clone())
-                    .unwrap_or_default();
-                match translation {
-                    Ok((cmd, notice, multi, steps)) => {
-                        let payload = serde_json::json!({
-                            "ok": true,
-                            "cmd": cmd,
-                            "notice": notice,
-                            "multi": multi,
-                            "steps": steps,
-                        })
-                        .to_string();
-                        if let Some(reply) = req.reply {
-                            let _ = reply.send(payload);
-                        } else {
-                            // 槽位先于事件写入:RefreshContext 由本事件触发,
-                            // 先落槽保证 ai_pending 拉取时可见。
-                            if let Ok(mut slot) = AI_PENDING.lock() {
-                                *slot = Some(cmd.clone());
-                            }
-                            // Plan 063 T2: 拆步结果同款落槽(多步才有内容;
-                            // 单步落空串,前端按块清拆)。
-                            if let Ok(mut slot) = AI_STEPS.lock() {
-                                let joined = if multi {
-                                    steps.join("\n")
-                                } else {
-                                    String::new()
-                                };
-                                *slot = Some(joined);
-                            }
-                            let _ = event_tx.send(ShellEvent::CommandResult(
-                                CommandResult {
-                                    block_id: req.block_id,
-                                    cwd,
-                                    status: CommandStatus::Success,
-                                    output: RenderedOutput::AiSuggestion {
-                                        question: req.nl,
-                                        cmd,
-                                        notice,
-                                        multi,
-                                        steps,
-                                    },
-                                    duration_ms,
-                                    exit_code: 0,
-                                },
-                            ));
-                        }
-                    }
-                    Err(msg) => {
-                        let payload =
-                            serde_json::json!({ "ok": false, "error": msg }).to_string();
-                        if let Some(reply) = req.reply {
-                            let _ = reply.send(payload);
-                        } else {
-                            let _ = event_tx.send(ShellEvent::CommandResult(
-                                CommandResult {
-                                    block_id: req.block_id,
-                                    cwd,
-                                    status: CommandStatus::Failed(msg),
-                                    output: RenderedOutput::Empty,
-                                    duration_ms,
-                                    exit_code: -1,
-                                },
-                            ));
-                        }
-                    }
-                }
-            }
-        })
-        .expect("failed to spawn ash-server nl2cmd worker thread");
-}
 
 /// One NL→command translation — mirrors the CLI `ask_ai` (repl.rs:388-444):
 /// fixed system prompt + snapshot context, `tier:mid` single-shot, code-fence
@@ -1165,6 +1024,27 @@ fn spawn_chat_worker(
             // Lazy: built on the first turn. Rebuilt (None) after a load error
             // so a daemon restart heals on the next message.
             let mut chat: Option<auto_shell::ai::ChatSession> = None;
+            // Plan 068: proposal 通道(ProposeTool → 本线程)。回合内 agent
+            // 调非只读工具时命令串经此到达:写 AI_PENDING 槽(RefreshContext
+            // 拉 → 建议条)+ 发 ai_chunk 抽屉行。drain 挂在 on_event 回调
+            // (流事件驱动,频度足够)与回合收尾双保险。
+            let (prop_tx, prop_rx) = std::sync::mpsc::channel::<String>();
+            let prop_tx_session = prop_tx.clone();
+            // std Receiver 非 Sync(on_event 回调要 Send+Sync),套 Mutex。
+            let prop_rx = std::sync::Arc::new(std::sync::Mutex::new(prop_rx));
+            let drain_proposals = move |event_tx: &broadcast::Sender<ShellEvent>, rx: &std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>, bid: usize, turn_no: usize| {
+                let Ok(mut rx) = rx.lock() else { return };
+                while let Ok(cmd) = rx.try_recv() {
+                    if let Ok(mut slot) = AI_PENDING.lock() {
+                        *slot = Some(cmd.clone());
+                    }
+                    let _ = event_tx.send(ShellEvent::AiChunk {
+                        block_id: bid,
+                        turn: turn_no,
+                        text: format!("📋 建议命令: {cmd}(✎ 填入回车执行)"),
+                    });
+                }
+            };
             while let Some(req) = rx.blocking_recv() {
                 let started = Instant::now();
                 let cwd = session
@@ -1178,7 +1058,7 @@ fn spawn_chat_worker(
                     // 磁盘上的持久化会话(~/.auto-shell-ai-chat.json)原样带入
                     // 下一回合,轮号从历史累计值继续(CD-01:清场语义要确定)。
                     if chat.is_none() {
-                        match build_chat_session() {
+                        match build_chat_session(prop_tx_session.clone()) {
                             Ok(c) => chat = Some(c),
                             Err(_) => {}
                         }
@@ -1202,7 +1082,7 @@ fn spawn_chat_worker(
                     continue;
                 }
                 if chat.is_none() {
-                    match build_chat_session() {
+                    match build_chat_session(prop_tx_session.clone()) {
                         Ok(c) => chat = Some(c),
                         Err(e) => {
                             let _ = event_tx.send(ShellEvent::CommandResult(
@@ -1244,8 +1124,13 @@ fn spawn_chat_worker(
                 // Cancelled 而非 Failed/Success)。
                 let cancelled_seen = Arc::new(AtomicBool::new(false));
                 let cancelled_cb = cancelled_seen.clone();
+                let drain_cb = drain_proposals.clone();
+                let prop_rx_cb = prop_rx.clone();
                 let on_event: std::sync::Arc<dyn Fn(auto_ai_agent::StreamEvent) + Send + Sync> =
                     std::sync::Arc::new(move |ev| {
+                        // Plan 068:先 drain proposal(工具调用发生在流事件
+                        // 之间,on_event 频度足够即时上屏)。
+                        drain_cb(&event_tx_cb, &prop_rx_cb, bid, turn_no);
                         // Plan 063 T4:结构化事件先行(抽屉渲染),再产块内
                         // 文本行(fallback 块形态,对齐 CLI block_tui 的 ChatEv)。
                         match &ev {
@@ -1321,6 +1206,7 @@ fn spawn_chat_worker(
                     .lock()
                     .map(|a| a.clone())
                     .unwrap_or_default();
+                drain_proposals(&event_tx, &prop_rx, bid, turn_no);
                 let was_cancelled =
                     cancelled_seen.load(Ordering::SeqCst);
                 if was_cancelled {
@@ -1372,14 +1258,33 @@ fn spawn_chat_worker(
 }
 
 /// Build the ChatSession — real daemon client, or the deterministic fake
-/// under `ASH_FAKE_AI` (same gate as the nl2cmd worker / ai_layer).
-fn build_chat_session() -> Result<auto_shell::ai::ChatSession, String> {
+/// under `ASH_FAKE_AI` (same gate as the ai_layer).
+fn build_chat_session(
+    proposals: std::sync::mpsc::Sender<String>,
+) -> Result<auto_shell::ai::ChatSession, String> {
+    // Plan 068(统一 agent):GUI 会话带 proposal sink —— 非只读命令注册为
+    // 提案工具(审批门);CLI 侧 ChatSession::load 无 sink 保持旧行为。
     if fake_ai_enabled() {
         let client: std::sync::Arc<dyn auto_ai_agent::Client> =
             std::sync::Arc::new(FakeChatClient);
-        return Ok(auto_shell::ai::ChatSession::with_client(client));
+        return Ok(auto_shell::ai::ChatSession::with_client_and_proposals(
+            client,
+            auto_shell::ai::history_path(),
+            proposals,
+        ));
     }
-    auto_shell::ai::ChatSession::load()
+    // Real client: load() keeps its own history path; rebuild with proposals.
+    match auto_ai_client::AiClient::new() {
+        Ok(c) => {
+            let client: std::sync::Arc<dyn auto_ai_agent::Client> = std::sync::Arc::new(c);
+            Ok(auto_shell::ai::ChatSession::with_client_and_proposals(
+                client,
+                auto_shell::ai::history_path(),
+                proposals,
+            ))
+        }
+        Err(e) => Err(format!("AI client init: {e}")),
+    }
 }
 
 /// Plan 062 T12: deterministic chat client for tests — echoes the last user
@@ -1427,6 +1332,25 @@ impl auto_ai_agent::Client for FakeChatClient {
             .unwrap_or(false);
         if last_is_user && last_user.contains("slow") {
             tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        }
+        // Plan 068:提案旋钮 —— 消息含 "propose" → agent 调非只读命令
+        // (git 不在白名单 → ProposeTool → 建议条 + 抽屉 📋 行)。
+        if last_is_user && last_user.contains("propose") {
+            return Ok(auto_ai_client::CompletionResponse {
+                content: String::new(),
+                tool_calls: vec![auto_ai_client::ToolCall {
+                    id: "call-fake-propose".into(),
+                    // "build" 是注册表里的非只读命令(写文件)→ ProposeTool;
+                    // git/ls 等外部命令不在 agent 工具注册表,不可用。
+                    name: "build".into(),
+                    input: serde_json::json!({ "args": ["--check"] }),
+                }],
+                stop_reason: Some("tool_use".into()),
+                usage: None,
+                model: "fake".into(),
+                error: None,
+                model_meta: None,
+            });
         }
         if last_is_user && last_user.contains("use tool") {
             return Ok(auto_ai_client::CompletionResponse {

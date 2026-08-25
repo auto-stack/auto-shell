@@ -415,128 +415,71 @@ def test_gp01_ghost_fuzzy_subsequence(mcp):
     )
 
 
-# ── T11: NL→command (`?` prefix, fake AI backend) ───────────────────────────
-# 断言口径:建议卡片在块内渲染(snapshot 判定);块状态走 blocks state。
-# 危险变体只断言提示,绝不点执行(fake 的 danger 翻译是 rm -rf /)。
+# ── Plan 068: 统一 agent —— `?` 唯一 AI 入口(NL 族重写)──────────────────
+# 旧 NL-01..03 的翻译建议卡随 nl 线程退役;`?` 现在直达 agent:
+# 回答直接流、命令经 proposal 建议条等审批(✎ 填入回车执行)。
 
 def _fake_ai():
     return bool(os.environ.get("ASH_FAKE_AI"))
 
 
-def test_nl01_danger_notice_on_suggestion(mcp):
-    """`? 危险 …` → fake 翻译 `rm -rf /` → 建议卡片带危险校验行
-    (auto_shell::ai::validate_suggestion 同源,警告不阻断)。"""
+def test_nl01_question_goes_to_agent(mcp):
+    """`? <消息>` → 统一 agent 回答(fake-chat 回声落块)。"""
     if not _fake_ai():
-        pytest.skip("set ASH_FAKE_AI=1 for T11 fake-AI tests")
-    _submit_command(mcp, "? 危险 clean everything")
+        pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
+    _submit_command(mcp, "? 你好统一入口")
     ok = mcp.wait_until(
-        lambda c: "rm -rf /" in c.snapshot(), timeout=15, interval=0.5
+        lambda c: "fake-chat:你好统一入口" in c.snapshot(), timeout=30, interval=1
     )
-    snap = mcp.snapshot()
-    assert ok, f"suggestion card (rm -rf /) did not render:\n{snap[:400]}"
-    assert "危险" in snap, f"danger notice missing on the card:\n{snap[:400]}"
-    # 关闭建议条(残留会让 NL-02 的 ✎ 编辑 点击打到本条的 rm -rf /)
-    dismiss = _find_button_by_label(mcp, r"✕")
-    if dismiss:
-        mcp.click(dismiss)
-        mcp.wait_until(
-            lambda c: "✎ 编辑" not in c.snapshot(), timeout=8, interval=0.5
-        )
-    # 移除本建议块(残留的 ▶ 执行/✕ 取消 会让 NL-03 的按钮定位点到旧卡片)
-    cancel = _find_last_button_by_label(mcp, r"✕ 取消")
-    if cancel:
-        mcp.click(cancel)
-        mcp.wait_until(
-            lambda c: "rm -rf /" not in c.snapshot(), timeout=8, interval=0.5
-        )
+    assert ok, f"agent reply did not arrive: {mcp.snapshot()[:400]}"
 
 
-def test_nl02_suggestion_and_input_injection(mcp):
-    """`? show git status 简述` → 建议卡片 + 输入框上方 AI 建议条
-    (RefreshContext → ai_pending → store 字段 → PromptBar prop);[✎ 编辑]
-    点击后命令填入输入框(PromptBar 自身 handler 直写)。"""
+def test_nl02_proposal_bar_and_fill(mcp):
+    """`? propose …` → agent 调非只读命令 → 建议条渲染命令;
+    [✎ 编辑] 填入输入框(审批门:填入后由用户回车执行)。"""
     if not _fake_ai():
-        pytest.skip("set ASH_FAKE_AI=1 for T11 fake-AI tests")
-    _submit_command(mcp, "? show git status 简述")
+        pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
+    _submit_command(mcp, "? propose release")
     ok = mcp.wait_until(
-        lambda c: "echo fake-ai:" in c.snapshot(), timeout=15, interval=0.5
+        lambda c: "build --check" in c.snapshot(), timeout=30, interval=1
     )
-    assert ok, (
-        f"suggestion card (fake echo cmd) did not render:\n{mcp.snapshot()[:400]}"
-    )
-    # 建议条:输入框上方渲染同一命令
-    ok = mcp.wait_until(
-        lambda c: c.snapshot().count("echo fake-ai:show git status") >= 2,
-        timeout=10, interval=0.5,
-    )
-    assert ok, "AI suggestion bar did not render above the prompt input"
-    # 编辑入口:点击 ✎ 编辑 → 命令填入输入框
+    assert ok, f"proposal bar did not render {mcp.snapshot()[:400]}"
     fill_btn = _find_button_by_label(mcp, r"✎ 编辑")
-    assert fill_btn, "edit (✎ 编辑) button not found on the suggestion bar"
+    assert fill_btn, "edit button not found on the proposal bar"
     mcp.click(fill_btn)
     ok = mcp.wait_until(
-        lambda c: "fake-ai" in c.state("input"), timeout=10, interval=0.5
+        lambda c: "build --check" in c.state("input"), timeout=10, interval=0.5
     )
-    assert ok, (
-        f"✎ 编辑 did not fill the prompt input:\n{mcp.state('input')[:300]}"
-    )
-    # 清场:关条 + 移除本建议块(避免 NL-03 按钮定位到旧卡片)
+    assert ok, f"✎ did not fill the input {mcp.state('input')[:300]}"
+    # 清场:清输入 + 关条
+    for _ in range(30):
+        mcp.call("autoui_type", element_id=_find_prompt_input_vnode(mcp), text="")
+        break
     dismiss = _find_button_by_label(mcp, r"✕")
     if dismiss:
         mcp.click(dismiss)
-        mcp.wait_until(
-            lambda c: "✎ 编辑" not in c.snapshot(), timeout=8, interval=0.5
-        )
-    cancel = _find_last_button_by_label(mcp, r"✕ 取消")
-    if cancel:
-        mcp.click(cancel)
-        mcp.wait_until(
-            lambda c: "show git status" not in c.snapshot(), timeout=8, interval=0.5
-        )
 
 
-def test_nl03_execute_and_cancel_buttons(mcp):
-    """块卡片 [▶ 执行] → 建议命令真跑出新块(Rerun 桥,深路径参数);
-    [✕ 取消] → 建议块移除(DeleteBlock 桥);建议条 [✕] → ClearAiPending
-    关条。用 "fake-ai:run nl03" 计数区分建议条/卡片/新块头/输出。"""
+def test_nl03_proposal_not_auto_executed(mcp):
+    """审批门:proposal 命令不被 agent 自动执行(块流里只有对话与建议,
+    没有命令执行产物)。"""
     if not _fake_ai():
-        pytest.skip("set ASH_FAKE_AI=1 for T11 fake-AI tests")
-    marker = "fake-ai:run nl03"
-    _submit_command(mcp, "? run nl03 marker")
-    # 条 + 卡片各渲染一次命令
+        pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
+    _submit_command(mcp, "? propose deploy")
     ok = mcp.wait_until(
-        lambda c: c.snapshot().count(marker) >= 2, timeout=15, interval=0.5
+        lambda c: "📋 建议命令" in c.snapshot(), timeout=30, interval=1
     )
-    assert ok, "suggestion bar + card did not render for the execute test"
-    run_btn = _find_last_button_by_label(mcp, r"▶ 执行")
-    assert run_btn, "execute (▶ 执行) button not found on the suggestion card"
-    mcp.click(run_btn)
-    # 执行后:新块头(echo …)+ 输出(marker 文本)→ 计数 ≥4(条1+卡片1+头1+输出1)
+    assert ok, f"proposal line missing {mcp.snapshot()[:400]}"
+    # 等回合收尾(fake-chat:propose deploy 第二轮纯文本)
     ok = mcp.wait_until(
-        lambda c: c.snapshot().count(marker) >= 4, timeout=20, interval=0.5
+        lambda c: "fake-chat:" in c.snapshot(), timeout=30, interval=1
     )
-    assert ok, (
-        f"execute did not run the suggested command (count stayed <4):\n"
-        f"{mcp.snapshot()[:400]}"
+    assert ok, "turn should finish after the proposal"
+    # 审批门:提案命令未被自动执行(块流里只有对话,无 build --check 的执行产物)
+    blocks = mcp.state("blocks")
+    assert "build --check" not in blocks or blocks.count("build --check") <= 1, (
+        f"proposal seems auto-executed {blocks[:400]}"
     )
-    # 建议条 ✕ 关闭(ClearAiPending;✎ 编辑 消失)→ 计数回落 1(剩卡片+头+输出=3)
-    dismiss_btn = _find_button_by_label(mcp, r"✕")
-    assert dismiss_btn, "dismiss (✕) button not found on the suggestion bar"
-    mcp.click(dismiss_btn)
-    ok = mcp.wait_until(
-        lambda c: c.snapshot().count(marker) == 3, timeout=10, interval=0.5
-    )
-    assert ok, "bar dismiss did not clear the suggestion bar (count != 3)"
-    # 块卡片 [✕ 取消] → 建议块移除(卡片 cmd 消失 → 头+输出=2)
-    cancel_btn = _find_last_button_by_label(mcp, r"✕ 取消")
-    assert cancel_btn, "cancel (✕ 取消) button not found on the suggestion card"
-    mcp.click(cancel_btn)
-    ok = mcp.wait_until(
-        lambda c: c.snapshot().count(marker) == 2, timeout=10, interval=0.5
-    )
-    assert ok, "cancel did not remove the suggestion block (count != 2)"
-
-
 # ── T15/B2: AI completion layer merge (fake AI) ─────────────────────────────
 
 def test_ac01_ai_completion_merges_nl_candidate(mcp):

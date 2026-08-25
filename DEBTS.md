@@ -799,12 +799,10 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 5. codegen 的 `API_FUNCTIONS` 硬编码旧 demo 名单(vue.rs),api.ts 端点
    生成缺位 —— auto-shell 侧已加 restore-vue-assets.py 同步脚本兜底,
    根治仍应 codegen 产出。
-6. **(Plan 066 发现,2026-08-25 晚)master codegen 对 `oninput` 绑定改为发
-   `($event.target as HTMLInputElement).value)` 实参**,与 0 参预置 handler
-   (HistorySearch 的 store OnQuery)签名冲突 → vue-tsc TS2554、vite build
-   挂。复现:主检出 auto.exe 重 gen 即现(与 066 改动无关,066 前已存在);
-   疑似 plan-448 在途改动。现行 workaround:gen 后手工回补该行(主仓与
-   worktree 已各补一次);根治在引擎侧(发参前查 handler 形参,或 .at 侧
+6. ~~master codegen 对 `oninput` 发 `$event.target.value` 实参致 TS2554~~
+   ✅ **已修**(auto-lang 4c9dc5516,plan-008 会话):文本实参按 handler
+   声明形参判定,0 参 handler 回退裸调用。Plan 068 复核:重 gen 后无需
+   手补,vue-tsc/build 直绿。
    handler 加参)。
 
 **测试侧(auto-shell)已修,不再计债:**

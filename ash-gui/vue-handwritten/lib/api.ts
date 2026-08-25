@@ -220,15 +220,6 @@ export async function kill_job(job_id: number): Promise<void> {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }
 
-export async function nl2cmd(nl: string): Promise<string> {
-    const response = await fetch(`/api/nl2cmd`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nl }),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
-}
 
 export async function ai_pending(): Promise<string> {
     const response = await fetch(`/api/ai_pending`, {

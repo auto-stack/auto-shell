@@ -18,12 +18,12 @@ Covers docs/plans/063-ash-gui-ai-parity.md §2 Phase 1 (zero-engine T1-T3):
              In a full default run (ASH_FAKE_AI=1, no ASH_SUGGEST_NEXT)
              SN-01/02 skip and SN-03 runs — same gating style as the 062
              fake-AI family.
-- ST-01..03  step execution (T2): a multi-step `?` suggestion renders one
-             row per step with per-step [▶] buttons + "▶▶ 全部执行";
-             running a single step leaves the others runnable (the executed
-             one gets the ✓ prefix); run-all dispatches every step in order.
-             Fake trigger: 多步/multi → "echo multi-a && echo multi-b &&
-             echo multi-c" (harmless — no rm anywhere near execution).
+- SP-01..02  Plan 068 统一 agent proposal 流:`? propose …` → agent 调非
+             只读命令(git push)→ ProposeTool → 建议条(✎ 填入回车执行)+
+             抽屉 📋 建议命令行;`? <消息>` 直达 agent(fake-chat 回声)。
+             (旧 ST 族的多步翻译卡随 nl 线程退役删除 —— `?` 不再一次性翻译。)
+- SN 族不变(suggest-next 独立通道)。
+
 Fake backend: ASH_FAKE_AI (same contract as plan 062 §5 — never touches
 the real aaid daemon). The danger trigger (危险/danger) now yields a
 2-step chain ("rm -rf / && echo cleaned") so NL-01 in test_cli_parity
@@ -141,127 +141,37 @@ def test_sn03_no_chips_when_disabled(mcp):
     )
 
 
-# ── T2: multi-step suggestion → per-step execution (ST) ─────────────────────
 
-def test_st01_multi_renders_step_rows(mcp):
-    """多步建议 → 卡片按步渲染:每步一行命令 + 独立 [▶] +
-    [▶▶ 全部执行];不再渲染整条 [▶ 执行](由 ▶▶ 替代)。"""
+# ── Plan 068: 统一 agent proposal(SP)───────────────────────────────────────
+
+def test_sp01_proposal_bar_and_drawer_line(mcp):
+    """`? propose …` → agent 调 git push(非只读)→ ProposeTool →
+    建议条显示命令 + 抽屉 📋 建议命令行(审批门:不执行,等用户决定)。"""
     if not _fake_ai():
         pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
-    _submit_command(mcp, "? 多步 deploy pipeline")
+    _submit_command(mcp, "? propose a release please")
     ok = mcp.wait_until(
-        lambda c: (
-            "multi-a" in c.snapshot()
-            and "multi-b" in c.snapshot()
-            and "multi-c" in c.snapshot()
-        ),
-        timeout=15,
-        interval=0.5,
+        lambda c: "📋 建议命令" in c.snapshot(), timeout=30, interval=1
     )
-    snap = mcp.snapshot()
-    assert ok, f"step rows did not render:\n{snap[:400]}"
-    assert "▶▶ 全部执行" in snap, "run-all button missing on the multi card"
-    # 命令全文(卡片顶部)+ 每步一行:multi-a 至少出现 2 次。
-    assert snap.count("multi-a") >= 2, (
-        f"expected full cmd + per-step rows:\n{snap[:400]}"
+    assert ok, f"proposal drawer line missing:\n{mcp.snapshot()[:500]}"
+    # 建议条:RefreshContext 拉 ai_pending → PromptBar 渲染同一命令
+    ok = mcp.wait_until(
+        lambda c: "build --check" in c.snapshot(), timeout=15, interval=0.5
     )
-    # 整条执行按钮让位给 ▶▶(分步范式)。
-    assert "▶ 执行" not in snap, "single-run button should be replaced by ▶▶ on multi cards"
-    # 清场:关建议条 + 移除建议块(ST-02 的按钮定位会打到残留块的 ▶)。
-    dismiss = _find_button_by_label(mcp, r"✕")
-    if dismiss:
-        mcp.click(dismiss)
-        mcp.wait_until(lambda c: "✎ 编辑" not in c.snapshot(), timeout=8, interval=0.5)
-    _clear_suggestion_cards(mcp)
+    assert ok, f"proposal suggestion bar missing:\n{mcp.snapshot()[:500]}"
+    # 审批门:命令未被自动执行(无 git push 的执行块/失败块)
+    blocks = mcp.state("blocks")
+    assert blocks.count("build --check") <= 1, "proposal must NOT auto-execute"
 
 
-def test_st02_single_step_run_leaves_others(mcp):
-    """单步执行:点第 2 步 [▶] → 新块只跑该步;已执行步标 ✓;其余步
-    按钮仍在(可继续执行)。"""
+def test_sp02_question_direct_to_agent(mcp):
+    """`? <消息>`(无旋钮)→ 统一 agent 直接回答(fake-chat 回声),
+    抽屉自动开(`?` 与 `??` 同为 AI 入口)。"""
     if not _fake_ai():
         pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
-    _submit_command(mcp, "? 多步 st2")
+    _submit_command(mcp, "? hello-unified-agent")
     ok = mcp.wait_until(
-        lambda c: "multi-b" in c.snapshot() and "multi-c" in c.snapshot(),
-        timeout=15,
-        interval=0.5,
+        lambda c: "fake-chat:hello-unified-agent" in c.snapshot(), timeout=30, interval=1
     )
-    assert ok, "step rows did not render before the single-step test"
-    # Plan 065:卡片头(译文含 multi-b/c 文本)先于步进按钮渲染 —— steps 由
-    # RefreshContext 拉取后的下一次 view 重建才落按钮。把「按钮出现」本身
-    # 作为等待条件,消除头部先行窗口的竞态。
-    mcp.wait_until(
-        lambda c: len(_find_buttons_exact(c, "▶")) >= 3, timeout=15, interval=0.5
-    )
-    step_btns = _find_buttons_exact(mcp, "▶")
-    assert len(step_btns) >= 3, (
-        f"expected ≥3 per-step buttons, got {len(step_btns)}:\n{mcp.snapshot()[:300]}"
-    )
-    mcp.click(step_btns[1])  # 第 2 步:echo multi-b
-    # 新块:头(echo multi-b)+ 输出(multi-b)→ 卡片全文1 + 步行1 + 头1 + 输出1 = 4。
-    ok = mcp.wait_until(
-        lambda c: c.snapshot().count("multi-b") >= 4, timeout=20, interval=0.5
-    )
-    snap = mcp.snapshot()
-    assert ok, f"single-step run did not execute:\n{snap[:400]}"
-    # 已执行步打标(✓ 前缀 + 灰样式)。
-    assert "✓ echo multi-b" in snap, f"executed step not marked ✓:\n{snap[:400]}"
-    # 其余步仍可执行:multi-a / multi-c 的 [▶] 按钮仍在。
-    remaining = _find_buttons_exact(mcp, "▶")
-    assert len(remaining) >= 2, (
-        f"other steps lost their run buttons:\n{snap[:400]}"
-    )
-    # 清场:移除建议块(避免影响后续测试的按钮定位)。
-    _clear_suggestion_cards(mcp)
-
-
-def test_st03_run_all_dispatches_in_order(mcp):
-    """[▶▶ 全部执行] → 3 步逐条派发、按序落块(worker 主循环串行)。"""
-    if not _fake_ai():
-        pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
-    _submit_command(mcp, "? 多步 st3")
-    ok = mcp.wait_until(
-        lambda c: "multi-a" in c.snapshot() and "multi-c" in c.snapshot(),
-        timeout=15,
-        interval=0.5,
-    )
-    assert ok, "step rows did not render before the run-all test"
-    # Plan 065:同 ST-02 —— 等按钮出现再取 id(卡片头先行,按钮随 steps 拉取
-    # 后的下一次 view 重建落位)。
-    ok = mcp.wait_until(
-        lambda c: bool(_find_button_by_label(c, r"▶▶ 全部执行")),
-        timeout=15,
-        interval=0.5,
-    )
-    assert ok, "run-all button not found"
-    run_all = _find_button_by_label(mcp, r"▶▶ 全部执行")
-    assert run_all, "run-all button not found"
-    mcp.click(run_all)
-    # 3 步全部执行完:每步 头+输出 → multi-a/b/c 各 ≥4 次(全文1+步行1+头1+输出1)。
-    ok = mcp.wait_until(
-        lambda c: (
-            c.snapshot().count("multi-a") >= 4
-            and c.snapshot().count("multi-b") >= 4
-            and c.snapshot().count("multi-c") >= 4
-        ),
-        timeout=30,
-        interval=0.5,
-    )
-    assert ok, f"run-all did not dispatch every step:\n{mcp.snapshot()[:400]}"
-    # 全部执行且标记:三个步都带 ✓(RunAllSteps 逐条标记)。
-    snap = mcp.snapshot()
-    assert "✓ echo multi-a" in snap and "✓ echo multi-b" in snap and "✓ echo multi-c" in snap, (
-        "not every step got the executed mark"
-    )
-    # Plan 065:恢复严格派发顺序断言(063 弱化为全 ✓ —— 残留块干扰)。根治
-    # 后已确定性:提交不再放大(_submit_command 耐心重发)+ 测试间彻底清场
-    # (_clear_suggestion_cards 闭环)。rfind 定位各步**执行块头**(最后一次
-    # 出现;步行/输出不含 "echo" 前缀),三块按 a→b→c 派发序落 vtree。
-    pa, pb, pc = snap.rfind("echo multi-a"), snap.rfind("echo multi-b"), snap.rfind("echo multi-c")
-    assert 0 <= pa < pb < pc, (
-        f"executed blocks out of dispatch order: a@{pa} b@{pb} c@{pc}"
-    )
-    # 清场。
-    _clear_suggestion_cards(mcp)
-
-
+    assert ok, f"agent reply did not arrive: {mcp.snapshot()[:400]}"
+    assert "AI 对话" in mcp.snapshot(), "drawer should auto-open on ? submit"

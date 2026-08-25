@@ -283,12 +283,6 @@ pub fn kill_job(job_id int) {
 /// Plan 062 T11:NL→命令翻译(同步;契约/测试用)。返回裸 JSON 字符串
 /// {"ok":true,"cmd":...,"notice":...,"multi":...} / {"ok":false,"error":...}。
 /// 交互流程走 `?` 前缀提交(run_command 拦截),不经此端点。
-/// POST /api/nl2cmd
-#[api(method = "POST", path = "/api/nl2cmd")]
-pub fn nl2cmd(nl str) str {
-    return shell.nl2cmd(nl)
-}
-
 /// Plan 062 T11:取最近一次翻译成功的命令(取后即清,空串 = 无)。
 /// RefreshContext 在每个 command_result 后拉取,把建议命令回填输入框
 /// (编辑入口,Pick 同语义)。

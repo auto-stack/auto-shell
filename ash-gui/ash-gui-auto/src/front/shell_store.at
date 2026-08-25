@@ -205,7 +205,7 @@ store ShellStore {
         .RunCommand(cmd) -> {
             // Plan 063 T4:`??` 提交自动开 chat 抽屉(块内形态保留 fallback,
             // 抽屉是结构化渲染主位)。
-            if cmd.trim().starts_with("??") {
+            if cmd.trim().starts_with("?") {
                 .chat_drawer_open = true
             }
             // Plan 054 M1:vue/HTTP 模式 store 自己 push Running block(无 renderer

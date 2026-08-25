@@ -53,7 +53,6 @@ pub fn create_router(shell: ShellHandle) -> Router {
         .route("/api/jobs", get(jobs))
         .route("/api/kill_job", post(kill_job))
         // Plan 062 T11: NL→命令翻译(同步契约)+ 待回填建议拉取。
-        .route("/api/nl2cmd", post(nl2cmd))
         .route("/api/ai_pending", get(ai_pending))
         // Plan 063 T1: suggest-next 建议列表(JSON 数组串,取后即清)。
         .route("/api/ai_next", get(ai_next))
@@ -155,17 +154,6 @@ async fn kill_job(
 #[derive(Deserialize)]
 struct Nl2CmdBody {
     nl: String,
-}
-
-/// 同步翻译(契约/测试用;返回裸 JSON 字符串)。
-async fn nl2cmd(
-    State(state): State<AppState>,
-    Json(body): Json<Nl2CmdBody>,
-) -> impl IntoResponse {
-    match state.shell.nl2cmd(body.nl).await {
-        Ok(payload) => Json(payload).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    }
 }
 
 /// 待回填的 AI 建议命令(取后即清;空串 = 无)。

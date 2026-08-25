@@ -282,6 +282,7 @@ fn register_ash_tools(
     agent: &mut Agent,
     signatures: &[crate::cmd::Signature],
     tx: std::sync::mpsc::Sender<crate::ash_command_tool::CmdRequest>,
+    proposals: Option<std::sync::mpsc::Sender<String>>,
 ) {
     for sig in signatures {
         // Skip commands with empty names defensively (shouldn't happen, but a
@@ -294,8 +295,42 @@ fn register_ash_tools(
         } else {
             sig.description.clone()
         };
+        // Plan 068(统一 agent):带 proposal sink 时非只读命令同名注册为
+        // 提案工具 —— agent 调用不执行,产建议卡等用户审批;只读命令保持
+        // 自主执行(探索能力)。None(CLI 旧路径)= 全部直接执行的旧行为。
+        if let Some(sink) = proposals.clone() {
+            if !is_readonly_command(&sig.name) {
+                agent.register_tool(crate::ash_command_tool::ProposeTool::new(
+                    sig.name.clone(),
+                    desc,
+                    sink,
+                ));
+                continue;
+            }
+        }
         agent.register_tool(AshCommandTool::new(sig.name.clone(), desc, tx.clone()));
     }
+}
+
+/// Plan 068: 只读命令白名单 —— 这些命令 agent 可自主执行(纯读,无副作用)。
+/// 白名单外的一切(含写盘的构建/测试命令)在统一 agent 模式下走提案审批。
+/// v1 硬编码表;配置化留待真实需求(DEBTS 记边角)。
+pub fn is_readonly_command(name: &str) -> bool {
+    const READONLY: &[&str] = &[
+        "ls", "cat", "head", "tail", "wc", "file", "which", "type", "pwd",
+        "echo", "date", "env", "whoami", "hostname", "uname", "stat", "du",
+        "df", "find", "grep", "rg", "tree", "basename", "dirname", "realpath",
+    ];
+    if READONLY.contains(&name) {
+        return true;
+    }
+    // git 只读子命令(status/log/diff/show/branch/remote/rev-parse/blame/shortlog)。
+    if name == "git" {
+        // 命令名粒度判不了子命令;git 整体按只读放行会漏 push/commit ——
+        // 保守起见 git 整体走提案(只读探索多数场景用 ls/cat/rg 可替代)。
+        return false;
+    }
+    false
 }
 
 /// A persistent, agent-backed chat conversation.
@@ -322,6 +357,9 @@ pub struct ChatSession {
     /// Cached command signatures (read once at construction). clear() reuses
     /// these instead of rebuilding a Shell (which can't run in a tokio ctx).
     command_signatures: Vec<crate::cmd::Signature>,
+    /// Plan 068: proposal sink(统一 agent 的审批门)。None = CLI 旧行为
+    /// (全部直接执行);clear() 重建 agent 时复用。
+    proposals: Option<std::sync::mpsc::Sender<String>>,
 }
 
 impl ChatSession {
@@ -338,9 +376,28 @@ impl ChatSession {
         Self::with_client_and_path(client, history_path())
     }
 
+    /// Plan 068(统一 agent):带 proposal sink 的构造 —— 非只读命令注册为
+    /// 提案工具(调用 → sink 收到命令串,由宿主渲染建议卡等审批)。
+    /// GUI 侧入口;CLI 走 with_client/with_client_and_path 保持旧行为。
+    pub fn with_client_and_proposals(
+        client: Arc<dyn AgentClient>,
+        path: PathBuf,
+        proposals: std::sync::mpsc::Sender<String>,
+    ) -> Self {
+        Self::build(client, path, Some(proposals))
+    }
+
     /// Construct from an explicit client + history file path. Builds the
     /// agent, registers tools, and preloads persisted text turns.
     pub fn with_client_and_path(client: Arc<dyn AgentClient>, path: PathBuf) -> Self {
+        Self::build(client, path, None)
+    }
+
+    fn build(
+        client: Arc<dyn AgentClient>,
+        path: PathBuf,
+        proposals: Option<std::sync::mpsc::Sender<String>>,
+    ) -> Self {
         let messages = load_messages(&path);
         let shell_thread = AshCommandShellThread::start();
         let tx = shell_thread.sender();
@@ -351,7 +408,7 @@ impl ChatSession {
         // the signatures here, not inside register_ash_tools.
         let command_signatures = crate::shell::Shell::new().registry().params();
         let mut agent = Agent::new(Assistant, client.clone());
-        register_ash_tools(&mut agent, &command_signatures, tx);
+        register_ash_tools(&mut agent, &command_signatures, tx, proposals.clone());
         // Replay persisted text turns into the agent's memory. preload skips
         // tool-role messages, so it's safe even with mixed histories.
         agent.preload_messages(messages);
@@ -362,6 +419,7 @@ impl ChatSession {
             history_path: path,
             shell_thread,
             command_signatures,
+            proposals,
         }
     }
 
@@ -419,7 +477,7 @@ impl ChatSession {
         // Reuse the cached signatures — rebuilding a Shell here would do
         // AutoLang VM init that can't run inside a tokio runtime (clear() may
         // be reached via an async test path).
-        register_ash_tools(&mut agent, &self.command_signatures, tx);
+        register_ash_tools(&mut agent, &self.command_signatures, tx, self.proposals.clone());
         self.agent = agent;
     }
 
