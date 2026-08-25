@@ -131,17 +131,10 @@ export interface ToolEntry {
     usage: string;
 }
 
-export interface SmartCommandEntry {
-    name: string;
-    description: string;
-    args: string[];
-}
-
 export interface BootSnapshot {
     cwd: string;
     home: string;
     commands: ToolEntry[];
-    smart_commands: SmartCommandEntry[];
 }
 
 // API Functions
@@ -190,16 +183,6 @@ export async function run_command(block_id: number, cmd: string, cwd: string): P
         body: JSON.stringify({ block_id, cmd, cwd }),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-}
-
-export async function run_smart(block_id: number, name: string, args: string[]): Promise<string> {
-    const response = await fetch(`/api/run_smart`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ block_id, name, args }),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
 }
 
 export async function cancel(): Promise<void> {

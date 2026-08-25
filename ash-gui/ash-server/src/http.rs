@@ -9,7 +9,6 @@
 //! | POST | `/api/complete` | `{line, cursor}` | `Vec<CompletionItem>` |
 //! | GET | `/api/prompt_context` | — | `PromptContext` |
 //! | POST | `/api/run_command` | `{block_id, cmd}` | `{}` (result via SSE) |
-//! | POST | `/api/run_smart` | `{block_id, name, args}` | `String` |
 //! | POST | `/api/cancel` | — | `{}` |
 //! | POST | `/api/open_path` | `{path}` | `{}` |
 //! | GET | `/api/stream` | — | SSE stream of `ShellEvent` |
@@ -48,7 +47,6 @@ pub fn create_router(shell: ShellHandle) -> Router {
         .route("/api/complete", post(complete))
         .route("/api/prompt_context", get(prompt_context))
         .route("/api/run_command", post(run_command))
-        .route("/api/run_smart", post(run_smart))
         .route("/api/cancel", post(cancel))
         .route("/api/open_path", post(open_path))
         // Plan 055 Phase A: 作业控制。
@@ -125,19 +123,6 @@ struct RunSmartBody {
     args: Vec<String>,
 }
 
-async fn run_smart(
-    State(state): State<AppState>,
-    Json(body): Json<RunSmartBody>,
-) -> impl IntoResponse {
-    match state.shell.run_smart(body.block_id, body.name, body.args).await {
-        Ok(result) => match result.error {
-            Some(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-            None => Json(result.output).into_response(),
-        },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    }
-}
-
 async fn cancel(State(state): State<AppState>) -> impl IntoResponse {
     state.shell.cancel();
     StatusCode::OK
@@ -172,7 +157,7 @@ struct Nl2CmdBody {
     nl: String,
 }
 
-/// 同步翻译(契约/测试用;返回裸 JSON 字符串,run_smart 同款口径)。
+/// 同步翻译(契约/测试用;返回裸 JSON 字符串)。
 async fn nl2cmd(
     State(state): State<AppState>,
     Json(body): Json<Nl2CmdBody>,

@@ -1,12 +1,14 @@
 // front/tool_sidebar.at — 左侧工具栏 widget
 // Plan 043 M4: 反向生成自 ToolSidebar.vue
 //
-// 列出所有可用命令 + SmartCommands,点击触发执行或注入。
+// 列出所有可用命令,点击注入输入框。
+// Plan 066(模式减法):SmartCommands 分区撤除 —— smart 不再是 GUI 的独立
+// 入口,未来以 AI 模式内的 skill 形态回归时另立设计(见 docs/plans/066)。
 
-use types: ToolEntry, SmartCommandEntry
+use types: ToolEntry
 
-widget ToolSidebar(commands: List<ToolEntry>, smart_commands: List<SmartCommandEntry>, on_pick: msg, on_run_smart: msg) {
-    msg Msg { Pick(str), RunSmart(str) }
+widget ToolSidebar(commands: List<ToolEntry>, on_pick: msg) {
+    msg Msg { Pick(str) }
 
     view {
         scroll {
@@ -32,32 +34,10 @@ widget ToolSidebar(commands: List<ToolEntry>, smart_commands: List<SmartCommandE
                     }
                 }
             }
-
-            // SmartCommands(如果有)
-            if .smart_commands.len() > 0 {
-                text "SmartCommands" {
-                    style: "px-3 pt-3 pb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide"
-                }
-                col {
-                    style: "px-1.5 gap-0.5"
-                    for s in .smart_commands {
-                        button .s.name {
-                            onclick: .RunSmart(.s.name)
-                            style: "w-full bg-transparent !justify-start !items-baseline text-left px-2 py-1 rounded text-xs font-mono-ash text-purple-300/90 hover:bg-white/10 hover:text-purple-200"
-                            if .s.description != "" {
-                                text .s.description {
-                                    style: "truncate text-[10px] text-muted-foreground/70"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 
     on {
         .Pick(name) -> { }
-        .RunSmart(name) -> { }
     }
 }

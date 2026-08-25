@@ -10,10 +10,10 @@ use tool_sidebar: ToolSidebar
 // BUG-A workaround (VM merged 模式):store handler body 链接到 App 作用域时,
 // store 的 `use back.api` 导入不透传。App 必须自己也 import 这些 fn
 // (015-notes 的 app.at 第 7 行同理)。列 app 经 store 间接用到的全部 back.api fn。
-use back.api: command_list, history, complete, run_command, run_smart, prompt_context, open_path, ai_pending, boot_script
+use back.api: command_list, history, complete, run_command, prompt_context, open_path, ai_pending, boot_script
 
 widget App {
-    msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
+    msg Msg { Init, Pick(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,
               ToggleSidebar, ToggleTheme, OpenPath(str), ClearScreen, DeleteBlock(int), ToggleCollapse(int), RefreshJobs,
               ToggleJobs, KillJob(int), PickNext(int), ToggleChat }
 
@@ -48,9 +48,7 @@ widget App {
             if .sidebar_open {
                 ToolSidebar(
                     commands: .store.commands,
-                    smart_commands: .store.smart_commands,
-                    on_pick: .Pick,
-                    on_run_smart: .RunSmart
+                    on_pick: .Pick
                 )
             }
 
@@ -285,11 +283,6 @@ widget App {
         // 自动置开)。
         .ToggleChat -> {
             store.ToggleChatDrawer()
-        }
-
-        .RunSmart(name) -> {
-            store.RunSmart(.store.next_id, name, [])
-            .store.next_id = .store.next_id + 1
         }
 
         .Rerun(cmd) -> {

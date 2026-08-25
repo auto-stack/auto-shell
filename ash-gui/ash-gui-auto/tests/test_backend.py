@@ -68,7 +68,7 @@ def test_back12_renderedoutput_text_variant(mcp):
 
 # ── BACK-01..04,06..08: 2026-08-24 复核(057 Phase 5 T-A)───────────────────
 # 原 skip 理由("returns mock")在 060 M3/061 真后端(cdylib→ash-core)后失效,
-# 逐项补写实作断言;smart/open_path 维持 skip(理由更新)。
+# 逐项补写实作断言;open_path 维持 skip(理由更新)。Plan 066:smart 契约随模式减法撤除(BACK-06 同撤)。
 
 
 def test_back01_command_list_returns_data(mcp):
@@ -120,10 +120,6 @@ def test_back04_prompt_context(mcp):
     assert "⎇" in label, f"git_label lacks branch marker: {label!r}"
 
 
-@pytest.mark.skip(reason="BACK-06: no smart commands registered in real backend (run_smart name-only; NL route deferred, DEBTS 062-T14)")
-def test_back06_run_smart(mcp):
-    pass
-
 
 def test_back07_cancel(mcp):
     """BACK-07: cancel stops a running command (Cancelled status; real kill
@@ -132,14 +128,19 @@ def test_back07_cancel(mcp):
     _submit_command(mcp, "ping -n 30 127.0.0.201")
     ok = mcp.wait_until(lambda c: "Running" in c.state("blocks"), timeout=10)
     assert ok, "ping never reached Running"
-    stop = None
-    for m in re.finditer(r"button #([A-Za-z0-9_]+)", mcp.snapshot()):
-        info = mcp.call("autoui_inspect", element_id=m.group(1))
-        if "Stop" in info:
-            stop = m.group(1)
-            break
-    assert stop, "stop button not found on running block"
-    mcp.click(stop)
+    # 耐心找 Stop 按钮:视图重建与 Running 态之间存在竞态,单次快照可能
+    # 赶在块头渲染前(CD-04 同款修法)。
+    holder = {}
+    def _find_stop(c):
+        for m in re.finditer(r"button #([A-Za-z0-9_]+)", c.snapshot()):
+            info = c.call("autoui_inspect", element_id=m.group(1))
+            if "Stop" in info:
+                holder["stop"] = m.group(1)
+                return True
+        return False
+    ok = mcp.wait_until(_find_stop, timeout=8, interval=0.3)
+    assert ok, "stop button not found on running block"
+    mcp.click(holder["stop"])
     ok = mcp.wait_until(
         lambda c: "Cancelled" in c.state("blocks"), timeout=15
     )

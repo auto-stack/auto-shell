@@ -19,17 +19,10 @@ pub struct BootSnapshot {
     /// Home directory, for the frontend to abbreviate paths with `~`.
     pub home: String,
     pub commands: Vec<ToolEntry>,
-    pub smart_commands: Vec<SmartCommandEntry>,
 }
 
 #[derive(Serialize, Clone)]
 pub struct ToolEntry {
-    pub name: String,
-    pub description: String,
-}
-
-#[derive(Serialize, Clone)]
-pub struct SmartCommandEntry {
     pub name: String,
     pub description: String,
 }
@@ -65,14 +58,6 @@ pub struct GitStatusInfo {
     pub conflicted: usize,
     pub ahead: usize,
     pub behind: usize,
-}
-
-// ── SmartCommand result ─────────────────────────────────────────────────────
-
-/// Reply to a SmartCommand execution request.
-pub struct SmartResult {
-    pub output: String,
-    pub error: Option<String>,
 }
 
 // ── Command result + streaming events ───────────────────────────────────────

@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use crate::worker::{self, ShellHandle};
-use crate::SmartResult;
 
 /// ABI 版本(与 auto_lang::vm::backend_abi::BACKEND_ABI_VERSION 对齐)。
 /// 通过导出符号 `auto_backend_abi_version` 供宿主装载期校验。
@@ -193,27 +192,6 @@ fn register_bridges(
         let cmd = v.get("cmd").and_then(|x| x.as_str()).unwrap_or("").to_string();
         s.run_command(block_id, cmd);
         Ok("{}".to_string())
-    }));
-
-    // POST /api/run_smart {block_id, name, args} → SmartResult
-    let s = shell.clone();
-    let rt5 = rt.clone();
-    host_call!("run_smart", Arc::new(move |args: &str| {
-        let v: serde_json::Value = serde_json::from_str(args)
-            .map_err(|e| format!("run_smart: bad args: {}", e))?;
-        let block_id = v.get("block_id").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-        let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let cmd_args: Vec<String> = v
-            .get("args")
-            .and_then(|x| x.as_array())
-            .map(|a| a.iter().filter_map(|i| i.as_str().map(String::from)).collect())
-            .unwrap_or_default();
-        let r: SmartResult = rt5.block_on(s.run_smart(block_id, name, cmd_args)).map_err(|e| e)?;
-        Ok(format!(
-            "{{\"output\":{},\"error\":{}}}",
-            serde_json::to_string(&r.output).unwrap_or_default(),
-            serde_json::to_string(&r.error).unwrap_or_default()
-        ))
     }));
 
     // POST /api/cancel → {}

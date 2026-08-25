@@ -24,21 +24,11 @@ Covers docs/plans/063-ash-gui-ai-parity.md §2 Phase 1 (zero-engine T1-T3):
              one gets the ✓ prefix); run-all dispatches every step in order.
              Fake trigger: 多步/multi → "echo multi-a && echo multi-b &&
              echo multi-c" (harmless — no rm anywhere near execution).
-- SM-01..02  smart NL routing (T3): `smart <nl>` routes to the registered
-             SmartCommand via the dedicated routing thread (fake NLU goes
-             through the real nlu::route chain); `smart run <miss>` falls
-             back to NL routing and fails with a hint listing the
-             available commands.
-
 Fake backend: ASH_FAKE_AI (same contract as plan 062 §5 — never touches
 the real aaid daemon). The danger trigger (危险/danger) now yields a
 2-step chain ("rm -rf / && echo cleaned") so NL-01 in test_cli_parity
 keeps asserting the danger notice on a step-rendered card; that chain is
 NEVER executed by these tests.
-
-The fake NLU picks the "zz"-prefixed SmartCommand injected by the zz_smart
-fixture into $CWD/smart/ (loader search path #1, rescanned per request —
-no restart needed) and routes "nomatch" to a non-existent command.
 
 Run:
     python -m pytest tests/test_ai_parity.py -v
@@ -63,7 +53,6 @@ from test_command_exec import _submit_command  # noqa: E402
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SMART_DIR = PROJECT_ROOT / "smart"
 
 
 def _suggest_on():
@@ -276,59 +265,3 @@ def test_st03_run_all_dispatches_in_order(mcp):
     _clear_suggestion_cards(mcp)
 
 
-# ── T3: smart NL routing (SM) ────────────────────────────────────────────────
-
-@pytest.fixture()
-def zz_smart():
-    """注入 zz.smoke 测试 SmartCommand($CWD/smart/ 是 loader 第一搜索路径,
-    每次路由现扫目录 —— VM 启动后写入即可见;teardown 删除,不留痕)。"""
-    SMART_DIR.mkdir(exist_ok=True)
-    (SMART_DIR / "zz-smoke.at").write_text(
-        "command \"zz.smoke\" {\n"
-        "    description : \"plan-063 SM test command (prints a marker)\"\n"
-        "    body        : \"zz-smoke.ash\"\n"
-        "}\n",
-        encoding="utf-8",
-    )
-    # body 用 `>` shell 行:输出走 print_or_emit → OutputHook → 块流式,
-    # 收尾带 Text 全量(AutoLang print() 只进进程 stdout,不落块)。
-    (SMART_DIR / "zz-smoke.ash").write_text(
-        "> echo zz-smoke-ok\n",
-        encoding="utf-8",
-    )
-    yield
-    (SMART_DIR / "zz-smoke.at").unlink(missing_ok=True)
-    (SMART_DIR / "zz-smoke.ash").unlink(missing_ok=True)
-    try:
-        SMART_DIR.rmdir()  # 只删测试建的空目录(用户自己的 smart/ 不动)
-    except OSError:
-        pass
-
-
-def test_sm01_nl_routes_to_smart(mcp, zz_smart):
-    """`smart <自然语言>` → 专用路由线程 → fake NLU 选 zz.smoke → 按名
-    执行,body 输出落块。"""
-    if not _fake_ai():
-        pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
-    _submit_command(mcp, "smart 部署到测试环境")
-    ok = mcp.wait_until(
-        lambda c: "zz-smoke-ok" in c.snapshot(), timeout=20, interval=0.5
-    )
-    assert ok, f"NL routing did not run the smart command:\n{mcp.snapshot()[:400]}"
-
-
-def test_sm02_unmatched_name_fails_with_hint(mcp, zz_smart):
-    """`smart run <未命中名>` → 回退 NL 路由 → fake 选不存在命令 →
-    Failed 块带可用命令建议(hint)。断言走 blocks state(DM-01 同款 ——
-    Failed message 的渲染层展示不在 snapshot 断言口径内)。"""
-    if not _fake_ai():
-        pytest.skip("set ASH_FAKE_AI=1 for fake-AI tests")
-    _submit_command(mcp, "smart run nomatch-xyz")
-    ok = mcp.wait_until(
-        lambda c: 'kind: "Failed"' in c.state("blocks"), timeout=20, interval=0.5
-    )
-    st = mcp.state("blocks")
-    assert ok, f"`smart run nomatch-xyz` did not reach Failed:\n{st[:600]}"
-    assert "路由失败" in st and "zz.smoke" in st, (
-        f"miss path did not fail with a hint:\n{st[:800]}"
-    )

@@ -676,9 +676,10 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
   steps。【063 Phase 2 注:块本地字段的引擎通道已开(Block.turn 经
   set_block_turn 落块本地成功)—— steps 归位到块本地字段从此可行,
   但本轮未做(分步渲染已验收,单活跃翻译块假设仍成立)。】
-- **smart NL 回退仅命令行路径**:`smart run <名>` 未命中转 nlu::route
-  (事件流收尾);侧栏 HTTP `/api/run_smart` 同步路径保持 not found 返回
-  (侧栏名字恒来自注册表,不命中只在手敲时发生)。
+- ~~**smart NL 回退仅命令行路径**~~(Plan 066 模式减法销案:smart 从 GUI
+  表面层整体撤除 —— 词法/路由线程/侧栏分区/run_smart 端点与契约字段全删;
+  CLI 与 auto-shell crate 保留。用户裁定:模式层面只留普通命令与 AI 两种,
+  未来 smartcommand 以 AI 模式内的轻量 skill 形态回归,不再是独立概念。)
 - **分步的"已执行步打灰"用 ✓ 前缀 + 预计算样式数组近似**:视图条件文法
   不支持索引读/contains,样式平行数组是 ●色点同款的既有模式。
 - **chat 抽屉(063 Phase 2)只回放本进程内的回合**:启动前落盘的
@@ -796,6 +797,13 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 5. codegen 的 `API_FUNCTIONS` 硬编码旧 demo 名单(vue.rs),api.ts 端点
    生成缺位 —— auto-shell 侧已加 restore-vue-assets.py 同步脚本兜底,
    根治仍应 codegen 产出。
+6. **(Plan 066 发现,2026-08-25 晚)master codegen 对 `oninput` 绑定改为发
+   `($event.target as HTMLInputElement).value)` 实参**,与 0 参预置 handler
+   (HistorySearch 的 store OnQuery)签名冲突 → vue-tsc TS2554、vite build
+   挂。复现:主检出 auto.exe 重 gen 即现(与 066 改动无关,066 前已存在);
+   疑似 plan-448 在途改动。现行 workaround:gen 后手工回补该行(主仓与
+   worktree 已各补一次);根治在引擎侧(发参前查 handler 形参,或 .at 侧
+   handler 加参)。
 
 **测试侧(auto-shell)已修,不再计债:**
 

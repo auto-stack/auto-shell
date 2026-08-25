@@ -1,6 +1,6 @@
 """Tool sidebar tests (TS-01..05).
 
-Tests the left sidebar: command list, SmartCommands section, descriptions.
+Tests the left sidebar: command list, descriptions. (Plan 066: SmartCommands section removed with the mode subtraction.)
 Mock backend has empty command lists, so most are structural/xfail.
 
 Run:
@@ -14,19 +14,6 @@ def test_ts01_sidebar_shows_commands_heading(mcp):
     """TS-01: sidebar shows 'Commands' heading."""
     snap = mcp.snapshot()
     assert "Commands" in snap
-
-
-def test_ts03_smartcommands_conditional(mcp):
-    """TS-03: SmartCommands section only shows when non-empty.
-
-    Mock has empty smart_commands, so the section should NOT appear.
-    """
-    snap = mcp.snapshot()
-    # "SmartCommands" heading appears only if smart_commands.len() > 0.
-    # With mock (empty), it should be absent.
-    # (If present, the conditional is broken; if absent, correct.)
-    # We accept either — the conditional logic is verified by codegen.
-    assert "ash" in snap.lower()  # app renders regardless
 
 
 def test_ts02_pick_injects_command(mcp):
@@ -44,11 +31,6 @@ def test_ts02_pick_injects_command(mcp):
     assert ok, f"Pick did not inject 'ls': {mcp.state('input')!r}"
     vnode = _find_prompt_input_vnode(mcp)
     mcp.call("autoui_type", text="", element_id=vnode, clear_first=True)
-
-
-@pytest.mark.skip(reason="TS-04: no smart commands registered in real backend (see BACK-06)")
-def test_ts04_runsmart_triggers(mcp):
-    pass
 
 
 @pytest.mark.skip(reason="TS-05: color styling is visual — snapshot carries no style classes")

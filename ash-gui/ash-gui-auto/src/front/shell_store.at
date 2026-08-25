@@ -6,8 +6,8 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job, ai_pending, ai_next, ai_steps, boot_script
-use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput, JobInfo
+use back.api: command_list, complete, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job, ai_pending, ai_next, ai_steps, boot_script
+use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, ShellEvent, RenderedOutput, JobInfo
 
 // format_git_label — APP-05/06:格式化 git 分支+状态标签。
 // 对齐 Vue App.vue:75-92:"⎇ main +2 !1 ?3 ✗0 ⇡1 ⇣0"。
@@ -64,7 +64,6 @@ store ShellStore {
 
         // ── Boot 数据 ──
         var commands List<ToolEntry> = List<ToolEntry>.new([])
-        var smart_commands List<SmartCommandEntry> = List<SmartCommandEntry>.new([])
         var command_names []str = []
 
         // ── 历史持久化 (Plan 040 M6) ──
@@ -149,7 +148,7 @@ store ShellStore {
     }
 
     msg Msg { Init, RunCommand(str), RunResult, RunOutput,
-              Cancel, RunSmart(int, str, []str), Complete(str, int),
+              Cancel, Complete(str, int),
               NavigateHistory(bool), OpenHistorySearch, CloseHistorySearch,
               SelectHistory(str), ToggleSidebar, PickTool(str), RefreshGit, RefreshContext, ClearScreen,
               OpenPath(str), DeleteBlock(int), ToggleCollapse(int), RefreshJobs, KillJob(int), JobStarted, JobDone,
@@ -176,7 +175,6 @@ store ShellStore {
             // 调 command_list() 拉取侧栏命令表(Plan 044 M2:79 命令,对齐 vue 版)。
             // 路径同 vue:store.Init → command_list → 侧栏 ToolSidebar。
             .commands = snap.commands
-            .smart_commands = snap.smart_commands
             var names List<str> = List<str>.new([])
             .command_names = names
             // 读真实历史文件(Plan 044 M4:对齐 vue 版 read_history)。
@@ -323,37 +321,6 @@ store ShellStore {
                     st.kind = "Cancelled"
                     st.message = ""
                     b.status = st
-                }
-            }
-        }
-
-        // ── SmartCommand ──
-        // 镜像手写 runSmartCommand:推一个 Running block,调用 run_smart(返回裸文本),
-        // 成功则 output = {Text: result},失败则 status = Failed(message)。
-        .RunSmart(block_id, name, args) -> {
-            var id int = .next_id
-            .next_id = .next_id + 1
-            var display str = "smart " + name
-            if args.len() > 0 {
-                display = display + " " + args.join(" ")
-            }
-            var block Block = Block{ id: 0, command: "", cwd: "",
-                status: BlockStatus{ kind: "Running", message: "" }, output: RenderedOutput{},
-                streamed_text: "", duration_ms: 0, exit_code: 0, collapsed: false,
-                table_sort_col: -1, table_sort_dir: 1, table_filter_q: "",
-                steps: [], step_styles: [], turn: 0 }
-            block.id = id
-            block.command = display
-            block.cwd = .cwd
-            .blocks.push(block)
-            var result str = run_smart(id, name, args)
-            for b in .blocks {
-                if b.id == id {
-                    var ok BlockStatus = BlockStatus{ kind: "Success", message: "" }
-                    b.status = ok
-                    var out RenderedOutput = RenderedOutput{ Text: result }
-                    b.output = out
-                    b.streamed_text = ""
                 }
             }
         }

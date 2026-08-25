@@ -152,12 +152,6 @@ pub type CompletionItem = {
     kind: str
 }
 
-// SmartCommand 结果:服务端 /api/run_smart 返回**裸 JSON 字符串**
-// (ash-server http.rs::run_smart → `Json(result.output)`,output 是 String),
-// 不是结构体。故 run_smart 返回类型直接用 str(无 SmartResult 类型别名——
-// lenient 提取对 `pub type X = str` 别名不生成 interface,会导致 run_smart 的
-// Promise<SmartResult> 引用未定义)。
-
 /// 命令最终结果(command-result 事件)。
 /// 服务端 CommandStatus 是 serde externally-tagged 枚举:
 ///   Success → "Success"(裸字符串),Failed(msg) → {"Failed": msg}(对象)。
@@ -211,24 +205,17 @@ pub type ToolEntry = {
     usage: str
 }
 
-pub type SmartCommandEntry = {
-    name: str
-    description: str
-    args: []str
-}
-
 pub type BootSnapshot = {
     cwd: str
     home: str
     commands []ToolEntry
-    smart_commands []SmartCommandEntry
 }
 
 // ═══════════════════════════════════════════════════════════
 // Request-Response 端点
 // ═══════════════════════════════════════════════════════════
 
-/// 启动数据:cwd + 命令列表 + SmartCommands
+/// 启动数据:cwd + 命令列表
 /// GET /api/command_list
 #[api(method = "GET", path = "/api/command_list")]
 pub fn command_list() BootSnapshot {
@@ -263,14 +250,6 @@ pub fn prompt_context() PromptContext {
 // 模式 ash-server 自管会话 cwd,body 里的该字段被忽略(serde 默认行为)。
 pub fn run_command(block_id int, cmd str, cwd str) {
     shell.run_command(block_id, cmd, cwd)
-}
-
-/// 执行 SmartCommand(同步返回结果)
-/// POST /api/run_smart
-/// 返回裸文本(Json(result.output)),前端 response.json() 得字符串。
-#[api(method = "POST", path = "/api/run_smart")]
-pub fn run_smart(block_id int, name str, args []str) str {
-    return shell.run_smart(block_id, name, args)
 }
 
 /// 取消当前运行的命令

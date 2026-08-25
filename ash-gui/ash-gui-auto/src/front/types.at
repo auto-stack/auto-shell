@@ -138,18 +138,11 @@ type ToolEntry {
     description str
 }
 
-/// SmartCommand 条目
-type SmartCommandEntry {
-    name str
-    description str
-}
-
 /// 启动快照(command_list 返回)
 type BootSnapshot {
     cwd str
     home str
     commands []ToolEntry
-    smart_commands []SmartCommandEntry
 }
 
 /// 补全候选
@@ -174,10 +167,4 @@ type GitStatusInfo {
 type PromptContext {
     git_branch str
     git_status GitStatusInfo
-}
-
-/// SmartCommand 执行结果
-type SmartResult {
-    output str
-    error str
 }

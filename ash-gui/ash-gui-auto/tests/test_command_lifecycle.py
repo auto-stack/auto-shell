@@ -122,21 +122,6 @@ def test_cmd06_cancel_stops_first_running(mcp):
     assert ok, f"cancel did not reach Cancelled: {mcp.state('blocks')[:300]}"
 
 
-@pytest.mark.skip(reason="CMD-09: no smart commands registered in real backend (see BACK-06)")
-def test_cmd09_smart_runs(mcp):
-    pass
-
-
-@pytest.mark.skip(reason="CMD-10: no smart commands registered in real backend (see BACK-06)")
-def test_cmd10_smart_success(mcp):
-    pass
-
-
-@pytest.mark.skip(reason="CMD-11: smart failure path needs try/catch in .at (engine syntax) — moot until smart commands exist")
-def test_cmd11_smart_failure(mcp):
-    pass
-
-
 @pytest.mark.skip(reason="CMD-12: openPath opens a real OS window — side effect unfit for automated suite (see BACK-08)")
 def test_cmd12_open_path(mcp):
     pass

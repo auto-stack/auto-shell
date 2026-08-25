@@ -30,17 +30,6 @@ enum CommandReq {
     /// interaction. Sent every 2s by a ticker task holding a Clone-able
     /// sender clone.
     Tick,
-    /// Run a SmartCommand body against the worker's live Shell.
-    /// Plan 063 T3: `reply` is `None` for the command-line `smart …` flow —
-    /// the outcome then arrives as a `CommandResult` event (block model),
-    /// exactly like the `?` NL flow. The HTTP `/api/run_smart` endpoint and
-    /// the sidebar keep the synchronous oneshot reply.
-    RunSmart {
-        block_id: usize,
-        name: String,
-        args: Vec<String>,
-        reply: Option<tokio::sync::oneshot::Sender<SmartResult>>,
-    },
     /// Get the prompt context (git branch/status) for the current cwd.
     PromptContext {
         reply: tokio::sync::oneshot::Sender<PromptContext>,
@@ -79,28 +68,6 @@ struct NlReq {
 struct ChatReq {
     block_id: usize,
     msg: String,
-}
-
-/// Plan 063 T3: load SmartCommands for the SHELL SESSION cwd. The VM host
-/// chdirs to `src/front` at boot, so `loader::load_all()`'s process-cwd scan
-/// finds nothing; the session cwd (`shell.pwd()`) is also the semantically
-/// right "project-local" root (follows `cd`, like the CLI).
-fn load_smart_specs(
-    cwd: &std::path::Path,
-) -> Vec<auto_shell::smart_command::config::SmartCommandSpec> {
-    let home = home_dir().unwrap_or_default();
-    let extra = auto_shell::plugin::loader::enabled_plugin_smart_dirs();
-    auto_shell::smart_command::loader::load_all_with_extra(cwd, &home, &extra)
-}
-
-/// Plan 063 T3: smart NL 路由请求(命令行 `smart …` 词法:`smart run <名>`
-/// 名字未命中时的回退,或裸自然语言)。路由在专用线程跑(Agent 整轮秒级,
-/// 主 worker 零等待);命中后发回 `CommandReq::RunSmart { reply: None }` 回
-/// 主循环按名执行(executor 需要 !Send 的 Shell,只有主线程有);未命中发
-/// Failed 事件带可用命令建议。
-struct SmartNlReq {
-    block_id: usize,
-    text: String,
 }
 
 /// Plan 062 T11: 最近一次翻译成功的命令。前端 RefreshContext(引擎在每个
@@ -238,25 +205,6 @@ impl ShellHandle {
         let _ = self.tx.send(CommandReq::Run { block_id, cmd });
     }
 
-    /// Run a SmartCommand by name on the worker's Shell.
-    pub async fn run_smart(
-        &self,
-        block_id: usize,
-        name: String,
-        args: Vec<String>,
-    ) -> Result<SmartResult, String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.tx
-            .send(CommandReq::RunSmart {
-                block_id,
-                name,
-                args,
-                reply: Some(reply_tx),
-            })
-            .map_err(|_| "worker channel closed".to_string())?;
-        reply_rx.await.map_err(|_| "worker dropped reply".to_string())
-    }
-
     /// Produce completions for `line` at `cursor`.
     pub async fn complete(
         &self,
@@ -345,9 +293,6 @@ pub fn spawn() -> ShellHandle {
     let (nl_tx, nl_rx) = mpsc::unbounded_channel::<NlReq>();
     // Plan 062 T12: dedicated AI-chat channel/thread.
     let (chat_tx, chat_rx) = mpsc::unbounded_channel::<ChatReq>();
-    // Plan 063 T3: dedicated smart NL-routing channel/thread (the multi-second
-    // routing Agent round must never block the main worker).
-    let (smart_nl_tx, smart_nl_rx) = mpsc::unbounded_channel::<SmartNlReq>();
     let cancel = Arc::new(AtomicBool::new(false));
     let (event_tx, _) = broadcast::channel::<ShellEvent>(256);
     let boot = Arc::new(tokio::sync::Mutex::new(None::<BootSnapshot>));
@@ -361,10 +306,6 @@ pub fn spawn() -> ShellHandle {
     // Plan 062 T12: chat worker shares the session snapshot (context) and the
     // event broadcast (streaming + result delivery).
     spawn_chat_worker(chat_rx, session.clone(), event_tx.clone());
-    // Plan 063 T3: smart routing worker — hits are sent back into the main
-    // CommandReq queue (the executor needs the main thread's !Send Shell).
-    spawn_smart_route_worker(smart_nl_rx, session.clone(), event_tx.clone(), tx.clone());
-
     let cancel_for_thread = cancel.clone();
     let event_tx_for_thread = event_tx.clone();
     let boot_for_thread = boot.clone();
@@ -373,16 +314,10 @@ pub fn spawn() -> ShellHandle {
     let session_for_thread = session.clone();
     // Plan 057: worker-side sender clone for the job-reaper ticker.
     let tick_tx = tx.clone();
-    // Plan 063 T3: main-loop self-addressed sender(`smart run <名>` 命中 →
-    // RunSmart{reply: None} 转发回本队列,tick_tx 同款 clone)。
-    let tx_for_loop = tx.clone();
     // Plan 062 T11: main-loop side of the nl channel (`?` interception).
     let nl_tx_for_loop = nl_tx.clone();
     // Plan 062 T12: main-loop side of the chat channel (`??` interception).
     let chat_tx_for_loop = chat_tx.clone();
-    // Plan 063 T3: main-loop side of the smart-nl channel(`smart …` 拦截)。
-    let smart_nl_tx_for_loop = smart_nl_tx.clone();
-
     std::thread::Builder::new()
         .name("ash-server-shell".into())
         .spawn(move || {
@@ -515,113 +450,6 @@ pub fn spawn() -> ShellHandle {
                                     chunk: "⤾ AI 翻译中…\n".to_string(),
                                 });
                                 let _ = nl_tx_for_loop.send(NlReq { block_id, nl, reply: None });
-                                let _ = append_history(trimmed_in);
-                                continue;
-                            }
-                            // Plan 063 T3: `smart …` 命令行(与 CLI `ash smart`
-                            // 同词法,worker 解析):`smart list` 列出;`smart run
-                            // <名> [args]` 按名执行、名字未命中转 NL 路由(计划
-                            // T3 的「run_smart 提交侧」语义);其余整体视为自然
-                            // 语言走 nlu::route 专用线程。块保持 Running 直到
-                            // 事件/转发收尾。
-                            if trimmed_in == "smart" || trimmed_in.starts_with("smart ") {
-                                if std::env::var("ASH_DEBUG_SMART").is_ok() {
-                                    let cd = std::env::current_dir();
-                                    eprintln!(
-                                        "[dbg063] smart hit; proc cwd={cd:?}; smart/ exists={}",
-                                        cd.as_ref().map(|c| c.join("smart").exists()).unwrap_or(false)
-                                    );
-                                }
-                                let rest = trimmed_in["smart".len()..].trim().to_string();
-                                let usage_err = |shell: &auto_shell::Shell, msg: &str| {
-                                    let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
-                                        CommandResult {
-                                            block_id,
-                                            cwd: shell.pwd().to_string_lossy().to_string(),
-                                            status: CommandStatus::Failed(msg.to_string()),
-                                            output: RenderedOutput::Empty,
-                                            duration_ms: 0,
-                                            exit_code: -1,
-                                        },
-                                    ));
-                                };
-                                if rest.is_empty() {
-                                    usage_err(
-                                        &shell,
-                                        "smart 用法:smart list | smart run <名> [args] | smart <自然语言>",
-                                    );
-                                    continue;
-                                }
-                                if rest == "list" {
-                                    let specs = load_smart_specs(&shell.pwd());
-                                    let mut body = String::from("SmartCommands:\n");
-                                    for s in &specs {
-                                        body.push_str(&format!("  {}\n    {}\n", s.name, s.description));
-                                    }
-                                    if specs.is_empty() {
-                                        body.push_str(
-                                            "没有 SmartCommand(在 ./smart/ 或 ~/.config/ash/smart/ 添加)",
-                                        );
-                                    }
-                                    let cwd_l = shell.pwd().to_string_lossy().to_string();
-                                    let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
-                                        CommandResult {
-                                            block_id,
-                                            cwd: cwd_l,
-                                            status: CommandStatus::Success,
-                                            output: RenderedOutput::Text(body),
-                                            duration_ms: 0,
-                                            exit_code: 0,
-                                        },
-                                    ));
-                                    let _ = append_history(trimmed_in);
-                                    continue;
-                                }
-                                if rest == "run" {
-                                    usage_err(&shell, "smart run 用法:smart run <名> [args]");
-                                    continue;
-                                }
-                                if let Some(run_rest) = rest.strip_prefix("run ") {
-                                    let run_rest = run_rest.trim();
-                                    if !run_rest.is_empty() {
-                                        // parse_command 处理引号词法(与流式外部
-                                        // 命令路径同源),CLI 的 argv 已分词等价。
-                                        let parts =
-                                            ash_core::cmd::external::parse_command(run_rest);
-                                        if let Some(name) = parts.first() {
-                                            let args = parts[1..].to_vec();
-                                            let specs = load_smart_specs(&shell.pwd());
-                                            if specs.iter().any(|s| s.name == *name) {
-                                                // 命中 → 按名执行(自回环队列,
-                                                // 事件流收尾)。
-                                                let _ = tx_for_loop.send(
-                                                    CommandReq::RunSmart {
-                                                        block_id,
-                                                        name: name.clone(),
-                                                        args,
-                                                        reply: None,
-                                                    },
-                                                );
-                                            } else {
-                                                // 未命中 → 整个 run_rest 作为
-                                                // 自然语言走路由线程。
-                                                let _ = smart_nl_tx_for_loop.send(SmartNlReq {
-                                                    block_id,
-                                                    text: run_rest.to_string(),
-                                                });
-                                            }
-                                            let _ = append_history(trimmed_in);
-                                            continue;
-                                        }
-                                    }
-                                    usage_err(&shell, "smart run 用法:smart run <名> [args]");
-                                    continue;
-                                }
-                                // 裸自然语言 → NL 路由。
-                                let _ = smart_nl_tx_for_loop.send(SmartNlReq {
-                                    block_id,
-                                    text: rest,
-                                });
                                 let _ = append_history(trimmed_in);
                                 continue;
                             }
@@ -958,71 +786,6 @@ pub fn spawn() -> ShellHandle {
                         CommandReq::KillJob { job_id } => {
                             if let Some(mut job) = job_mgr.remove(job_id) {
                                 let _ = job.child.kill();
-                            }
-                        }
-                        CommandReq::RunSmart { block_id, name, args, reply } => {
-                            if let Ok(mut slot) = smart_block.lock() {
-                                *slot = Some(block_id);
-                            }
-                            // Plan 063 T3: 本轮 smart 输出从零累计(事件收尾
-                            // 带全量 Text —— Empty 会清空块 streamed_text)。
-                            if let Ok(mut a) = smart_acc.lock() {
-                                a.clear();
-                            }
-                            let started = Instant::now();
-                            let specs = load_smart_specs(&shell.pwd());
-                            let result = match specs.iter().find(|s| s.name == name) {
-                                Some(spec) => match auto_shell::smart_command::executor::execute(
-                                    spec, &args, &mut shell,
-                                ) {
-                                    Ok(()) => SmartResult { output: String::new(), error: None },
-                                    Err(e) => SmartResult { output: String::new(), error: Some(format!("{e}")) },
-                                },
-                                None => SmartResult {
-                                    output: String::new(),
-                                    error: Some(format!("SmartCommand '{name}' not found")),
-                                },
-                            };
-                            if let Ok(mut slot) = smart_block.lock() {
-                                *slot = None;
-                            }
-                            match reply {
-                                Some(reply) => {
-                                    let _ = reply.send(result);
-                                }
-                                None => {
-                                    // Plan 063 T3: 命令行 smart 路径(reply
-                                    // None)以事件流收尾块。output 必须自带
-                                    // Text(全量累计)—— Empty 是裸字符串变体,
-                                    // 引擎 update_block_in_state 会清空
-                                    // streamed_text 且不回退(DEBTS 已知限制,
-                                    // chat 线程同款处理);失败也带已流出增量。
-                                    let cwd_now =
-                                        shell.pwd().to_string_lossy().to_string();
-                                    let acc_text = smart_acc
-                                        .lock()
-                                        .map(|a| a.clone())
-                                        .unwrap_or_default();
-                                    let (status, exit_code) = match &result.error {
-                                        Some(e) => {
-                                            (CommandStatus::Failed(e.clone()), -1)
-                                        }
-                                        None => (CommandStatus::Success, 0),
-                                    };
-                                    let _ = event_tx_for_thread
-                                        .send(ShellEvent::CommandResult(
-                                            CommandResult {
-                                                block_id,
-                                                cwd: cwd_now,
-                                                status,
-                                                output: RenderedOutput::Text(acc_text),
-                                                duration_ms: started
-                                                    .elapsed()
-                                                    .as_millis() as u64,
-                                                exit_code,
-                                            },
-                                        ));
-                                }
                             }
                         }
                         // Plan 062 T10:Complete 已移驻独立补全线程(见 spawn_completion_worker)。
@@ -1692,192 +1455,6 @@ impl auto_ai_agent::Client for FakeChatClient {
     }
 }
 
-// ── Plan 063 T3: smart NL routing worker ────────────────────────────────────
-
-/// Dedicated NL→SmartCommand routing worker (the T11 nl-thread pattern,
-/// minus the runtime): own OS thread so the multi-second routing Agent round
-/// never blocks the serialized main worker. `nlu::route` is fully synchronous
-/// (it drives its one-shot runtime internally via `ai::block_on_async`), so
-/// this thread needs no long-lived runtime. On a hit it sends
-/// `CommandReq::RunSmart { reply: None }` back into the main loop (the
-/// executor needs the main thread's !Send Shell); on a miss it emits the
-/// block's Failed CommandResult with a hint listing the available commands.
-fn spawn_smart_route_worker(
-    rx: mpsc::UnboundedReceiver<SmartNlReq>,
-    session: SharedSession,
-    event_tx: broadcast::Sender<ShellEvent>,
-    main_tx: mpsc::UnboundedSender<CommandReq>,
-) {
-    std::thread::Builder::new()
-        .name("ash-server-smart-nlu".into())
-        .spawn(move || {
-            let mut rx = rx;
-            while let Some(req) = rx.blocking_recv() {
-                let started = Instant::now();
-                let cwd = session
-                    .cwd
-                    .lock()
-                    .map(|c| c.clone())
-                    .unwrap_or_default();
-                let specs = load_smart_specs(std::path::Path::new(&cwd));
-                if specs.is_empty() {
-                    let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
-                        block_id: req.block_id,
-                        cwd,
-                        status: CommandStatus::Failed(
-                            "没有可用的 SmartCommand(在 ./smart/ 或 ~/.config/ash/smart/ 添加)".into(),
-                        ),
-                        output: RenderedOutput::Empty,
-                        duration_ms: started.elapsed().as_millis() as u64,
-                        exit_code: -1,
-                    }));
-                    continue;
-                }
-                let routed = if fake_ai_enabled() {
-                    // 测试假后端:走真 route 链(prompt 构建 + 输出解析 +
-                    // spec 校验),client 换确定性 fake(见 FakeNluClient)。
-                    let client: std::sync::Arc<dyn auto_ai_agent::Client> =
-                        std::sync::Arc::new(FakeNluClient);
-                    auto_shell::smart_command::nlu::route(&req.text, &specs, client)
-                } else {
-                    // Client per request(同步段构造,daemon 探测阻塞无妨 ——
-                    // 路由低频,不值得缓存失效逻辑;nl worker 的缓存是为高频
-                    // 翻译准备的)。
-                    match auto_ai_client::AiClient::new() {
-                        Ok(c) => {
-                            let client: std::sync::Arc<dyn auto_ai_agent::Client> =
-                                std::sync::Arc::new(c);
-                            auto_shell::smart_command::nlu::route(&req.text, &specs, client)
-                        }
-                        Err(e) => Err(format!(
-                            "AI client init: {e}(start the aaid daemon or set AAID_URL)"
-                        )),
-                    }
-                };
-                let duration_ms = started.elapsed().as_millis() as u64;
-                match routed {
-                    Ok(result) => {
-                        // 命中 → 回主循环按名执行(route 已校验名字在 specs
-                        // 里,必然命中),事件流收尾块。
-                        let _ = main_tx.send(CommandReq::RunSmart {
-                            block_id: req.block_id,
-                            name: result.command,
-                            args: result.args,
-                            reply: None,
-                        });
-                    }
-                    Err(msg) => {
-                        // 未命中/路由失败 → Failed 带可用命令建议。
-                        let names: Vec<&str> =
-                            specs.iter().map(|s| s.name.as_str()).take(5).collect();
-                        let hint = if specs.len() > 5 {
-                            format!(
-                                "可用命令(前 5/{}):{} … `smart list` 查看全部",
-                                specs.len(),
-                                names.join(", ")
-                            )
-                        } else {
-                            format!("可用命令:{}", names.join(", "))
-                        };
-                        let _ = event_tx.send(ShellEvent::CommandResult(CommandResult {
-                            block_id: req.block_id,
-                            cwd,
-                            status: CommandStatus::Failed(format!(
-                                "SmartCommand 路由失败:{msg}\n{hint}"
-                            )),
-                            output: RenderedOutput::Text(format!("🤔 {}\n{hint}", req.text)),
-                            duration_ms,
-                            exit_code: -1,
-                        }));
-                    }
-                }
-            }
-        })
-        .expect("failed to spawn ash-server smart-nlu worker thread");
-}
-
-/// Plan 063 T3: deterministic routing client for tests (ASH_FAKE_AI gate).
-/// Answers in the prescribed `COMMAND:`/`ARGS:` two-line format. It picks the
-/// menu entry whose name starts with "zz" from the system prompt (the
-/// test-injected SmartCommand `zz.smoke` in `$CWD/smart/`, falling back to the
-/// first entry); a user message containing "nomatch" picks a non-existent
-/// name to exercise the miss path.
-struct FakeNluClient;
-
-#[async_trait::async_trait]
-impl auto_ai_agent::Client for FakeNluClient {
-    async fn complete(
-        &self,
-        req: &auto_ai_client::CompletionRequest,
-    ) -> Result<auto_ai_client::CompletionResponse, auto_ai_client::ClientError> {
-        let user = req
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.role == "user")
-            .and_then(|m| {
-                Some(
-                    m.content
-                        .iter()
-                        .filter_map(|b| match b {
-                            auto_ai_client::ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join(""),
-                )
-            })
-            .unwrap_or_default();
-        // Agent 的 role prompt 走 CompletionRequest.system_prompt 字段
-        // (不在 messages 里),菜单行在其中。
-        let system = req.system_prompt.clone().unwrap_or_default();
-        if user.contains("nomatch") {
-            return Ok(auto_ai_client::CompletionResponse {
-                content: "COMMAND: no.such.command\nARGS: x".into(),
-                tool_calls: vec![],
-                stop_reason: Some("end_turn".into()),
-                usage: None,
-                model: "fake".into(),
-                error: None,
-                model_meta: None,
-            });
-        }
-        // 菜单行形如 "- <name> <args>: <desc>"(build_nlu_prompt;无 args
-        // 时名字直接带冒号,如 "- zz.smoke: desc",取词后剥尾冒号)。
-        let mut picked = String::new();
-        let mut first = String::new();
-        for line in system.lines() {
-            let t = line.trim();
-            if let Some(rest) = t.strip_prefix("- ") {
-                let name = rest.split_whitespace().next().unwrap_or("");
-                let name = name.trim_end_matches(':');
-                if name.is_empty() {
-                    continue;
-                }
-                if first.is_empty() {
-                    first = name.to_string();
-                }
-                if name.starts_with("zz") {
-                    picked = name.to_string();
-                    break;
-                }
-            }
-        }
-        if picked.is_empty() {
-            picked = first;
-        }
-        Ok(auto_ai_client::CompletionResponse {
-            content: format!("COMMAND: {picked}\nARGS: {user}"),
-            tool_calls: vec![],
-            stop_reason: Some("end_turn".into()),
-            usage: None,
-            model: "fake".into(),
-            error: None,
-            model_meta: None,
-        })
-    }
-}
-
 // ── Shell initialization (mirrors repl.rs:36-79) ────────────────────────────
 
 pub fn init_shell(shell: &mut auto_shell::Shell) {
@@ -1915,11 +1492,6 @@ fn harvest_boot(shell: &auto_shell::Shell) -> BootSnapshot {
             })
         })
         .collect();
-    let specs = load_smart_specs(&shell.pwd());
-    let smart_commands: Vec<SmartCommandEntry> = specs
-        .iter()
-        .map(|s| SmartCommandEntry { name: s.name.clone(), description: s.description.clone() })
-        .collect();
     let home = home_dir()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_default();
@@ -1927,7 +1499,6 @@ fn harvest_boot(shell: &auto_shell::Shell) -> BootSnapshot {
         cwd: shell.pwd().to_string_lossy().to_string(),
         home,
         commands,
-        smart_commands,
     }
 }
 
@@ -2203,11 +1774,12 @@ impl auto_shell::shell::RenderHook for CaptureHook {
     }
 }
 
-/// Forwards SmartCommand body output as `ShellEvent::CommandOutput`.
-/// Plan 063 T3: also accumulates the full text — the RunSmart event
-/// finalization must carry `Text(full)` (an `Empty` output makes the engine's
-/// update_block_in_state CLEAR the block's streamed_text without fallback;
-/// DEBTS known-limitation, chat worker already follows it).
+/// Forwards smart-block output (Plan 064 `script` command — the slots'
+/// remaining user; named for their 063 smart-command origin) as
+/// `ShellEvent::CommandOutput`. Also accumulates the full text — the
+/// command_result finalization must carry `Text(full)` (an `Empty` output
+/// makes the engine's update_block_in_state CLEAR the block's streamed_text
+/// without fallback; DEBTS known-limitation, chat worker already follows it).
 struct StreamingOutputHook {
     block: Arc<Mutex<Option<usize>>>,
     event_tx: broadcast::Sender<ShellEvent>,
