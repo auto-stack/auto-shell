@@ -319,6 +319,15 @@ pub fn ai_steps() str {
     return shell.ai_steps()
 }
 
+/// Plan 064 T2:开机脚本命令(`ASH_BOOT_SCRIPT` env 构造的完整
+/// `script <路径>[ args…]` 串,空 = 无)。前端 Init 拉取后整体提交,
+/// 脚本过程/结果落块展示 —— `ash-gui script.ash` 外部调用形态的接线件。
+/// GET /api/boot_script
+#[api(method = "GET", path = "/api/boot_script")]
+pub fn boot_script() str {
+    return shell.boot_script()
+}
+
 // ═══════════════════════════════════════════════════════════
 // 流式端点(SSE)
 // ═══════════════════════════════════════════════════════════

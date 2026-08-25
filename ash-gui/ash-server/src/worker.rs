@@ -124,6 +124,26 @@ pub fn read_ai_pending() -> String {
     }
 }
 
+/// Plan 064 T2: 开机脚本命令(静态读 env,无 worker 队列开销)。
+/// `ASH_BOOT_SCRIPT` 非空 → 返回完整 `script <路径>[ args…]` 命令串
+/// (`ASH_BOOT_ARGS` 空格分词透传,脚本 `$1/$@` 可见);空 = 无开机脚本。
+/// 前端 Init 拉取后整体提交(.RunCommand),不经用户输入。
+pub fn boot_script_cmd() -> String {
+    let path = match std::env::var("ASH_BOOT_SCRIPT") {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => return String::new(),
+    };
+    let mut cmd = format!("script {path}");
+    if let Ok(a) = std::env::var("ASH_BOOT_ARGS") {
+        let a = a.trim();
+        if !a.is_empty() {
+            cmd.push(' ');
+            cmd.push_str(a);
+        }
+    }
+    cmd
+}
+
 /// Plan 063 T2: 取走最近一次翻译的拆步结果(空串 = 无)。api `ai_steps` 的
 /// worker 侧实现(取后即清)。
 pub fn read_ai_steps() -> String {
@@ -150,6 +170,9 @@ pub fn read_ai_next() -> String {
     }
     out
 }
+
+/// Plan 064: worker 启动时刻(boot 窗口判定 —— 开机脚本的延迟执行)。
+static WORKER_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 /// Session snapshot shared with the completion thread (its own Shell can't
 /// see the main session's cd / last command). Completions never mutate the
@@ -298,6 +321,7 @@ impl ShellHandle {
 /// the Tokio runtime (Shell::new calls `blocking_lock` internally, which panics
 /// inside a runtime context — see Plan 041 bugfix).
 pub fn spawn() -> ShellHandle {
+    let _ = WORKER_START.set(Instant::now());
     let (tx, mut rx) = mpsc::unbounded_channel::<CommandReq>();
     // Plan 062 T10: dedicated completion channel/thread.
     let (complete_tx, complete_rx) = mpsc::unbounded_channel::<CompleteReq>();
@@ -582,6 +606,130 @@ pub fn spawn() -> ShellHandle {
                                     block_id,
                                     text: rest,
                                 });
+                                let _ = append_history(trimmed_in);
+                                continue;
+                            }
+                            // Plan 064 T1: `script <路径> [args…]` —— 运行
+                            // .ash/.at 脚本文件,过程与结果落块(与 smart 执行
+                            // 同一输出通道:smart_block 槽 + smart_acc 全量)。
+                            // GUI 里手输跑脚本的正式入口(输入框直跑路径会被
+                            // 流式外部命令的 not-found 预检错杀 —— 进程 cwd
+                            // 是 src/front 而非会话 cwd;source 则输出哑)。
+                            // 路径相对 shell 会话 cwd 解析;引号词法走
+                            // parse_command;args 注入 $1/$@/#。
+                            if trimmed_in == "script" || trimmed_in.starts_with("script ") {
+                                let rest_s = trimmed_in["script".len()..].trim().to_string();
+                                let usage_err_s = |shell: &auto_shell::Shell, msg: &str| {
+                                    let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
+                                        CommandResult {
+                                            block_id,
+                                            cwd: shell.pwd().to_string_lossy().to_string(),
+                                            status: CommandStatus::Failed(msg.to_string()),
+                                            output: RenderedOutput::Empty,
+                                            duration_ms: 0,
+                                            exit_code: -1,
+                                        },
+                                    ));
+                                };
+                                if rest_s.is_empty() {
+                                    usage_err_s(
+                                        &shell,
+                                        "script 用法:script <脚本路径> [args…](支持 .ash/.at)",
+                                    );
+                                    continue;
+                                }
+                                let parts_s = ash_core::cmd::external::parse_command(&rest_s);
+                                let path_s = match parts_s.first() {
+                                    Some(p) => p.clone(),
+                                    None => {
+                                        usage_err_s(&shell, "script 用法:script <脚本路径> [args…]");
+                                        continue;
+                                    }
+                                };
+                                // 相对路径相对会话 cwd(063 load_smart_specs 同因)。
+                                let path_pb = std::path::Path::new(&path_s);
+                                let resolved_s = if path_pb.is_absolute() {
+                                    path_pb.to_path_buf()
+                                } else {
+                                    shell.pwd().join(path_pb)
+                                };
+                                if std::env::var("ASH_DEBUG_SMART").is_ok() {
+                                    eprintln!(
+                                        "[dbg064] script hit; path={path_s} resolved={resolved_s:?}"
+                                    );
+                                }
+                                // Plan 064: 开机脚本延迟 —— Init 的 boot 提交
+                                // 发生在 UI mount 前后(initial Task),worker
+                                // 毫秒级完成的事件会在块链稳态前被消费丢弃
+                                // (块卡 Running,实测)。开机窗口(15s)内识别
+                                // 为 boot 命令(trimmed == boot_script_cmd 同源
+                                // 构造)时延迟 1.5s 执行,等渲染器执行器/事件
+                                // 泵进入稳态(ST-02 的稳态链已验证)。
+                                if let Some(t0) = WORKER_START.get() {
+                                    if t0.elapsed().as_secs() < 15
+                                        && trimmed_in == boot_script_cmd()
+                                    {
+                                        std::thread::sleep(
+                                            std::time::Duration::from_millis(1500),
+                                        );
+                                    }
+                                }
+                                let content_s = match std::fs::read_to_string(&resolved_s) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        usage_err_s(
+                                            &shell,
+                                            &format!(
+                                                "script: 无法读取 {}: {e}",
+                                                resolved_s.display()
+                                            ),
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let args_s: Vec<String> = parts_s[1..].to_vec();
+                                shell.set_script_args(args_s.clone());
+                                // 复用 SmartCommand 的输出通道:槽 + 全量累计
+                                // (事件收尾带 Text,Empty 会清空 streamed_text)。
+                                if let Ok(mut slot) = smart_block.lock() {
+                                    *slot = Some(block_id);
+                                }
+                                if let Ok(mut a) = smart_acc.lock() {
+                                    a.clear();
+                                }
+                                let started_s = Instant::now();
+                                if std::env::var("ASH_DEBUG_SMART").is_ok() {
+                                    eprintln!("[dbg064] script executing ({} bytes)", content_s.len());
+                                }
+                                let exec_result =
+                                    shell.execute_script_content(&content_s);
+                                if std::env::var("ASH_DEBUG_SMART").is_ok() {
+                                    eprintln!("[dbg064] script done: {:?}", exec_result.is_ok());
+                                }
+                                if let Ok(mut slot) = smart_block.lock() {
+                                    *slot = None;
+                                }
+                                let acc_text_s = smart_acc
+                                    .lock()
+                                    .map(|a| a.clone())
+                                    .unwrap_or_default();
+                                let (status_s, exit_s) = match exec_result {
+                                    Ok(()) => (CommandStatus::Success, 0),
+                                    Err(e) => {
+                                        (CommandStatus::Failed(format!("{e}")), -1)
+                                    }
+                                };
+                                let cwd_s = shell.pwd().to_string_lossy().to_string();
+                                let _ = event_tx_for_thread.send(ShellEvent::CommandResult(
+                                    CommandResult {
+                                        block_id,
+                                        cwd: cwd_s,
+                                        status: status_s,
+                                        output: RenderedOutput::Text(acc_text_s),
+                                        duration_ms: started_s.elapsed().as_millis() as u64,
+                                        exit_code: exit_s,
+                                    },
+                                ));
                                 let _ = append_history(trimmed_in);
                                 continue;
                             }

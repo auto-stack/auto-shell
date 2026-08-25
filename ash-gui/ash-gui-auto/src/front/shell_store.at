@@ -6,7 +6,7 @@
 // (axum → HTTP fetch,tauri → invoke/listen)。这与 015-notes 的模式一致:
 // 同一份 api.at,生成不同 transport 的代码。
 
-use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job, ai_pending, ai_next, ai_steps
+use back.api: command_list, complete, run_smart, prompt_context, history, open_path, stream, run_command, cancel, jobs, kill_job, ai_pending, ai_next, ai_steps, boot_script
 use types: Block, BlockStatus, BootSnapshot, CompletionItem, PromptContext, ToolEntry, SmartCommandEntry, ShellEvent, RenderedOutput, JobInfo
 
 // format_git_label — APP-05/06:格式化 git 分支+状态标签。
@@ -173,6 +173,15 @@ store ShellStore {
             .git_label = compute_git_label(.git_info)
             // Plan 055 Phase A: 拉取后台作业列表。
             .job_list = jobs()
+            // Plan 064 T2: 开机脚本(`ASH_BOOT_SCRIPT` env 构造的完整命令串,
+            // worker 静态读 env;空 = 无)。Init 末尾整体提交(.RunCommand
+            // sibling 调用,063 RunAiStep 同款)—— 开窗即跑,过程/结果落块。
+            // 块收尾依赖引擎侧 update_block_in_state 对 store 内部提交块
+            // (VM 堆引用)的兼容(auto-lang 064 修复)。
+            var boot_cmd str = boot_script()
+            if boot_cmd != "" {
+                .RunCommand(boot_cmd)
+            }
         }
 
         // ── 命令执行 ──

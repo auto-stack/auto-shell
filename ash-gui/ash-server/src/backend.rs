@@ -95,7 +95,25 @@ pub fn assemble(
                                 eprintln!("[dbg062] pump recv {tag}: {json}");
                             }
                             if !reg_pump.inject_event(&tag, &json) {
-                                reg_pump.log(&format!("event inject dropped: {tag}"));
+                                // Plan 064: UI 事件泵(SHELL_EVENT_TX)在首帧
+                                // 前尚未就绪 —— boot 期事件(如开机脚本的
+                                // CommandResult)会在此静默丢失,块卡 Running。
+                                // 有限重试补投(200ms × 25 = 5s 窗口),泵就绪
+                                // 后恢复直投;重试阻塞本线程,后续事件在
+                                // broadcast ring(256)排队,可接受。
+                                let mut tries = 0;
+                                while tries < 25 {
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                    if reg_pump.inject_event(&tag, &json) {
+                                        break;
+                                    }
+                                    tries += 1;
+                                }
+                                if tries >= 25 {
+                                    reg_pump.log(&format!(
+                                        "event inject dropped after retries: {tag}"
+                                    ));
+                                }
                             } else if std::env::var("ASH_DEBUG_JOBS").is_ok() && tag.starts_with("job") {
                                 eprintln!("[dbg062] pump inject ok: {tag}");
                             }
@@ -270,6 +288,12 @@ fn register_bridges(
     // 取后即清;ai_pending 同款序列化)。
     host_call!("ai_steps", Arc::new(move |_args: &str| {
         serde_json::to_string(&worker::read_ai_steps()).map_err(|e| e.to_string())
+    }));
+
+    // Plan 064 T2: GET /api/boot_script → 开机脚本命令(str,ai_pending
+    // 同款序列化;worker 静态读 env,不走队列)。
+    host_call!("boot_script", Arc::new(move |_args: &str| {
+        serde_json::to_string(&worker::boot_script_cmd()).map_err(|e| e.to_string())
     }));
 
     // GET /api/stream —— 事件已由事件泵注入,HTTP SSE 语义不适用。

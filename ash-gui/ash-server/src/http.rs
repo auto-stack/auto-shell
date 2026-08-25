@@ -61,6 +61,8 @@ pub fn create_router(shell: ShellHandle) -> Router {
         .route("/api/ai_next", get(ai_next))
         // Plan 063 T2: 最近一次翻译的拆步结果(\n 连接 str,取后即清)。
         .route("/api/ai_steps", get(ai_steps))
+        // Plan 064 T2: 开机脚本命令(静态 env 读,空串 = 无)。
+        .route("/api/boot_script", get(boot_script))
         .route("/api/stream", get(stream_sse))
         .with_state(state)
 }
@@ -194,6 +196,11 @@ async fn ai_next(State(_state): State<AppState>) -> impl IntoResponse {
 /// Plan 063 T2: 最近一次翻译的拆步结果(\n 连接 str,空 = 无,取后即清)。
 async fn ai_steps(State(_state): State<AppState>) -> impl IntoResponse {
     Json(crate::worker::read_ai_steps()).into_response()
+}
+
+/// Plan 064 T2: 开机脚本命令(空串 = 无;前端 Init 拉取后整体提交)。
+async fn boot_script(State(_state): State<AppState>) -> impl IntoResponse {
+    Json(crate::worker::boot_script_cmd()).into_response()
 }
 
 #[derive(Deserialize)]

@@ -10,7 +10,7 @@ use tool_sidebar: ToolSidebar
 // BUG-A workaround (VM merged 模式):store handler body 链接到 App 作用域时,
 // store 的 `use back.api` 导入不透传。App 必须自己也 import 这些 fn
 // (015-notes 的 app.at 第 7 行同理)。列 app 经 store 间接用到的全部 back.api fn。
-use back.api: command_list, history, complete, run_command, run_smart, prompt_context, open_path, ai_pending
+use back.api: command_list, history, complete, run_command, run_smart, prompt_context, open_path, ai_pending, boot_script
 
 widget App {
     msg Msg { Init, Pick(str), RunSmart(str), RunCommand(str), Rerun(str), Stop, Clear, Exit,

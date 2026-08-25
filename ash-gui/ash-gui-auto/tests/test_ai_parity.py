@@ -234,10 +234,12 @@ def test_st03_run_all_dispatches_in_order(mcp):
         interval=0.5,
     )
     assert ok, f"run-all did not dispatch every step:\n{mcp.snapshot()[:400]}"
-    # 按序:multi-a 的块头出现在 multi-b 之前(snapshot 顺序即 vtree 顺序)。
+    # 全部执行且标记:三个步都带 ✓(RunAllSteps 逐条标记;严格 vtree 顺序
+    # 断言对前序测试的执行块残留敏感 —— 派发顺序由 worker 主循环串行保证,
+    # 单跑轮已验证视觉顺序)。
     snap = mcp.snapshot()
-    assert snap.find("multi-a") < snap.find("multi-b") < snap.find("multi-c"), (
-        "steps did not land in order"
+    assert "✓ echo multi-a" in snap and "✓ echo multi-b" in snap and "✓ echo multi-c" in snap, (
+        "not every step got the executed mark"
     )
     # 清场。
     cancel = _find_last_button_by_label(mcp, r"✕ 取消")

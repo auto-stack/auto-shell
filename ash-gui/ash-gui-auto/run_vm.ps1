@@ -12,7 +12,12 @@
 # MCP UI 服务默认 :9247,可用 AUTOUI_MCP_PORT 避让。
 param(
     [string]$AutoBin = "D:\autostack\auto-lang\target\debug\auto.exe",
-    [string]$RunnerArgs = ""
+    [string]$RunnerArgs = "",
+    # Plan 064: 开机脚本 —— .\run_vm.ps1 -Script xxx.ash [-ScriptArgs "a b"]
+    # 设 ASH_BOOT_SCRIPT/ASH_BOOT_ARGS 后启动,GUI 开窗即在块流里跑脚本
+    # (script <路径> [args…] 命令,$1/$@ 可见)。
+    [string]$Script = "",
+    [string]$ScriptArgs = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +35,15 @@ if (-not (Test-Path $BackendDll)) {
 if (-not (Test-Path $AutoBin)) {
     Write-Host "auto.exe 未找到($AutoBin)——请先构建 auto-lang 主检出(cargo build)。"
     exit 1
+}
+
+# Plan 064: 开机脚本 env(见 param 注释)。
+if ($Script -ne "") {
+    $env:ASH_BOOT_SCRIPT = $Script
+    if ($ScriptArgs -ne "") {
+        $env:ASH_BOOT_ARGS = $ScriptArgs
+    }
+    Write-Host "开机脚本: $Script $ScriptArgs"
 }
 
 Write-Host "启动 ash-gui(auto run -r vm,外部后端: ash-server cdylib)..."
