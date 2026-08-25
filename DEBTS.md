@@ -676,10 +676,12 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
   steps。【063 Phase 2 注:块本地字段的引擎通道已开(Block.turn 经
   set_block_turn 落块本地成功)—— steps 归位到块本地字段从此可行,
   但本轮未做(分步渲染已验收,单活跃翻译块假设仍成立)。】
-- ~~**smart NL 回退仅命令行路径**~~(Plan 066 模式减法销案:smart 从 GUI
-  表面层整体撤除 —— 词法/路由线程/侧栏分区/run_smart 端点与契约字段全删;
-  CLI 与 auto-shell crate 保留。用户裁定:模式层面只留普通命令与 AI 两种,
-  未来 smartcommand 以 AI 模式内的轻量 skill 形态回归,不再是独立概念。)
+- ~~**smart NL 回退仅命令行路径**~~(Plan 066/067 模式减法销案:smart 从
+  GUI 表面层(词法/路由线程/侧栏分区/run_smart 端点与契约字段)与 CLI
+  (`ash smart` 分派臂 + smart_command/cli.rs)整体撤除;ash-tui 本无入口。
+  用户裁定:模式层面只留普通命令与 AI 两种,未来 smartcommand 以 AI 模式
+  内的轻量 skill 形态回归,不再是独立概念;crate 的 config/loader/
+  executor/nlu/role 与 plugin 集成作为 skill 底件保留,暂无调用方。)
 - **分步的"已执行步打灰"用 ✓ 前缀 + 预计算样式数组近似**:视图条件文法
   不支持索引读/contains,样式平行数组是 ●色点同款的既有模式。
 - **chat 抽屉(063 Phase 2)只回放本进程内的回合**:启动前落盘的

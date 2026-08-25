@@ -65,12 +65,6 @@ fn main() -> Result<()> {
     while i < args.len() {
         let arg = &args[i];
         match arg.as_str() {
-            // Plan 029: `ash smart <subcommand>` — SmartCommand handler.
-            // Consumes all remaining args (e.g. `ash smart run git.x main`).
-            "smart" => {
-                let smart_args: Vec<String> = args[i + 1..].to_vec();
-                return auto_shell::smart_command::cli::run(&smart_args);
-            }
             // Plan 033: `ash plugin <subcommand>` — plugin manager
             // (install/list/enable/disable/remove/update/show). Consumes all
             // remaining args.
