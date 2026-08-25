@@ -755,3 +755,44 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
 
 另:**表格列宽拖拽(Vue)延期** —— 需 vue.rs 按标记类注入拖拽脚本或生成物后
 处理(Plan 059 §4.2;hover/吸顶已于 2026-08-24 以纯 CSS 类落地)。
+
+### Plan 065 新增(2026-08-25:测试 flake 排查 + HTTP 层验证)
+
+**引擎侧(auto-lang)——下次引擎窗口的候选清单,事实均已实测钉死:**
+
+1. **submit 动作在请求时携带滞后 view 值**(mcp_server.rs `execute_action_vnode`
+   的 Submit 分支:从 `shared.view` 的 Input/Textarea `value` 抓文本嵌入
+   ActionMessage)。排队的重复 submit 各自带旧文本 → 同一命令被执行 N 次
+   (实测一次 echo 执行 4 次 → 4×command_result → 4×RefreshContext,063 SN
+   空拉清 chips 的放大源;重复块也是 ST-03「残留块」的实体)。测试侧已以
+   耐心重发绕过(_submit_command),引擎侧正确修法是 submit 在**投递时**
+   读当前值(空则 no-op)。
+2. **VM 会话中途干净自退 = iced 窗口被关闭**(非崩溃):`run()` 返回
+   Ok("UI closed") → main 打印 `------------- end --------------` →
+   exit 0(死亡现场已抓:pytest-capture 日志 + teardown 打印 code=0)。
+   与 renderer.rs 2026-08-22 注释的「心跳周期 view 重建在大 Code 块下
+   静默退出」同一族;iced 0.14.0。同机多轮起停后恶化(单轮/单族稳定),
+   疑似与窗口/GPU 状态累积有关 —— 根因未明,需引擎侧在 window close
+   路径加打点。
+3. **MCP bind 失败静默 return**(mcp_server.rs `run()`):占口失败只
+   eprintln,VM 无头继续跑,测试表现为 startup 超时 skip。测试侧已用
+   ephemeral 端口绕开;引擎侧可加 SO_REUSEADDR/失败重试或可观测信号。
+4. `shell_event_subscription` 里有一段**不可达的重复 `Ok(ev)` 匹配臂**
+   (renderer.rs,手改残留,无害但应清)。
+5. codegen 的 `API_FUNCTIONS` 硬编码旧 demo 名单(vue.rs),api.ts 端点
+   生成缺位 —— auto-shell 侧已加 restore-vue-assets.py 同步脚本兜底,
+   根治仍应 codegen 产出。
+
+**测试侧(auto-shell)已修,不再计债:**
+
+- conftest:ephemeral MCP 端口(跨会话 bind 竞争/TIME_WAIT 一类消失)+
+  teardown/startup 打印 VM 退出码(自退免费拿到死因信号)。
+- _submit_command:耐心重发(3s 轮询清空才重发)—— 放大源关闭。
+- ST-01/02/03:清场闭环 helper + 按钮出现本身作为等待条件(卡片头先行
+  竞态)+ 恢复严格 a→b→c 派发顺序断言。
+
+**HTTP 形态(ash-server.exe :3000)API 层已验,SSE 流式/script/ai_next/
+ai_steps/boot_script 契约全通(diag 实测);vue 视觉层(chips 渲染/分步卡/
+Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可用,待有
+浏览器时按 web-gui-tester 流程补。旧条「Vue 端 ai_pending 编辑回填链
+未验证」范围因此进一步扩大到上述视觉层。**

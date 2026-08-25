@@ -53,7 +53,26 @@ _IS_RUNNER = "ash-runner" in AUTO_BIN
 # ash-gui-auto project root (pac.at lives here).
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-MCP_PORT = os.environ.get("AUTOUI_MCP_PORT", "9247")
+
+def _pick_free_port() -> str:
+    """Plan 065: ephemeral MCP port per session.
+
+    Consecutive pytest rounds sharing fixed 9247 hit two bind flake classes:
+    orphans from a killed tree still holding the port, and TIME_WAIT
+    accumulation after many short-lived HTTP connections — either makes the
+    next VM's listener bind fail SILENTLY (mcp_server just eprintln+return,
+    the VM keeps running headless) and the session skips on startup timeout.
+    A per-session free port removes the shared-resource contention entirely.
+    Pin the old behavior with AUTOUI_MCP_PORT=<port>.
+    """
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return str(s.getsockname()[1])
+
+
+MCP_PORT = os.environ.get("AUTOUI_MCP_PORT") or _pick_free_port()
 STARTUP_TIMEOUT = int(os.environ.get("AUTO_RUN_TIMEOUT", "30"))
 
 
@@ -71,15 +90,32 @@ def vm_process():
     # Plan 057: set ASH_TEST_VM_LOG=<path> to capture VM stdout/stderr for
     # crash triage (default: DEVNULL, as before).
     vm_log = os.environ.get("ASH_TEST_VM_LOG")
+    # Plan 065: child env — ephemeral port (see _pick_free_port). NOTE: the
+    # MCP heartbeat must stay ON for tests: it is the only thing cycling
+    # update()→bounds collection on an idle app, so the styled VTree the
+    # vtree/action tools address would stay None without it (verified:
+    # AUTOUI_MCP_DISABLE=1 → "Could not find PromptBar input vnode"). The
+    # heartbeat's periodic view rebuild is documented (renderer.rs, 2026-08-22)
+    # to trigger a silent process exit on large Code blocks — engine-side
+    # debt; if that flake resurfaces, fix it in auto-lang, not here.
+    child_env = os.environ.copy()
+    child_env["AUTOUI_MCP_PORT"] = MCP_PORT
     proc = subprocess.Popen(
         [AUTO_BIN] + ([] if _IS_RUNNER else ["run", "-r", "vm"]),
         cwd=str(PROJECT_ROOT),
         stdout=open(vm_log, "w") if vm_log else subprocess.DEVNULL,
         stderr=subprocess.STDOUT if vm_log else subprocess.DEVNULL,
+        env=child_env,
     )
     try:
         yield proc
     finally:
+        # Plan 065: surface the VM's exit code at teardown — a mid-run death
+        # (heartbeat silent-exit class) shows up as a non-None poll here long
+        # before tests time out on ConnectionError.
+        exit_code = proc.poll()
+        if exit_code is not None:
+            print(f"\n[teardown] WARNING: VM already exited, code={exit_code}")
         print("\n[teardown] killing VM process")
         _kill(proc)
 
@@ -115,8 +151,14 @@ def mcp(vm_process):
     url = f"http://127.0.0.1:{MCP_PORT}/mcp"
     print(f"[startup] waiting for MCP server on port {MCP_PORT}...")
     if not wait_for_server(url, timeout=STARTUP_TIMEOUT):
+        # Plan 065: distinguish "bind failed, VM alive but headless" from
+        # "VM process already exited" — the exit code is the main free signal
+        # for the intermittent mid-run silent-exit flake (renderer.rs notes a
+        # heartbeat-triggered exit(0) class; pin it down before assuming).
         pytest.skip(
             f"MCP server did not start within {STARTUP_TIMEOUT}s. "
+            f"VM alive={vm_process.poll() is None}"
+            f"{f', exited code={vm_process.poll()}' if vm_process.poll() is not None else ''}. "
             f"Is the auto binary built with --features ui-iced? Binary: {AUTO_BIN}"
         )
     print("[startup] MCP server ready")
