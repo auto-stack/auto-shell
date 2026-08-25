@@ -286,14 +286,6 @@ impl BlockTui {
                 continue;
             }
 
-            // M4-6: F3 / Alt+3 — AI NL→command (translate natural language to
-            // an ash command, then offer execute/edit/cancel). Synchronous flow
-            // (blocks the event loop while the AI thinks, same as reedline REPL).
-            if is_ai_suggest_key(&event) {
-                handle_ai_suggest(&mut editor, &mut shell, &mut terminal)?;
-                continue;
-            }
-
             // M4-7: F4 / Alt+4 — persistent AI chat (ReAct loop with tool use).
             // Also synchronous (the chat blocks the event loop per turn).
             if is_ai_chat_key(&event) {
@@ -553,198 +545,22 @@ impl BlockTui {
     }
 }
 
-/// Ask the AI to translate a natural-language question into a single ash
-/// command. Ported from `repl.rs::Repl::ask_ai` (line 388) as a free function
-/// (the original was `&self`, using `self.shell`; here we pass `&Shell`).
-///
-/// Returns the suggested command string, or an error message. Uses `tier:mid`
-/// (the daemon resolves it to a concrete model). Must be called in a sync
-/// context (it builds a blocking tokio runtime internally).
-fn ask_ai(shell: &auto_shell::Shell, question: &str) -> Result<String, String> {
-    use auto_ai_client::{AiClient, CompletionRequest};
 
-    let context = auto_shell::ai::context::build_context_block(shell);
-    let system = format!(
-        "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
-         {context}\n\
-         The user will describe what they want to do in natural language.\n\
-         Translate it into a SINGLE ash shell command (or pipeline).\n\
-         Rules:\n\
-         - Respond with ONLY the command, no explanation, no markdown.\n\
-         - Use standard Unix commands (ls, grep, find, etc.).\n\
-         - For Ash-specific features, use: ls | .size > 10.mb | sort .name\n\
-         - If multiple steps are needed, use && to chain them.\n\
-         - If you're unsure, give your best single-command guess."
-    );
-
-    let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
-    let model = "tier:mid".to_string();
-    let req = CompletionRequest::single(&model, question)
-        .with_system(&system)
-        .with_max_tokens(256)
-        .with_temperature(0.3);
-
-    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {}", e))?;
-    let response = rt.block_on(async { client.complete(&req).await });
-
-    match response {
-        Ok(resp) if resp.is_ok() => {
-            let cmd = resp.content.trim().to_string();
-            let cmd = cmd
-                .trim_start_matches("```bash\n")
-                .trim_start_matches("```sh\n")
-                .trim_start_matches("```\n")
-                .trim_end_matches("\n```")
-                .trim()
-                .to_string();
-            Ok(cmd)
-        }
-        Ok(resp) => Err(format!("AI returned error: {:?}", resp.error)),
-        Err(e) => Err(format!("{e}")),
-    }
-}
-
-/// Is the event F3 or Alt+3 (AI NL→command)?
-fn is_ai_suggest_key(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
-    use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-    if let Event::Key(ke) = event {
-        matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            && (ke.code == KeyCode::F(3)
-                || (ke.code == KeyCode::Char('3') && ke.modifiers.contains(KeyModifiers::ALT)))
-    } else {
-        false
-    }
-}
-
-/// Is the event F4 or Alt+4 (AI chat)?
+/// Is the event F3/F4 or Alt+3/Alt+4 (AI chat)? Plan 069: F3 (old NL translate)
+/// now enters the same unified AI chat — the CLI has ONE AI mode.
 fn is_ai_chat_key(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
     use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
     if let Event::Key(ke) = event {
         matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            && (ke.code == KeyCode::F(4)
+            && (ke.code == KeyCode::F(3)
+                || ke.code == KeyCode::F(4)
+                || (ke.code == KeyCode::Char('3') && ke.modifiers.contains(KeyModifiers::ALT))
                 || (ke.code == KeyCode::Char('4') && ke.modifiers.contains(KeyModifiers::ALT)))
     } else {
         false
     }
 }
 
-/// F3: translate the current input (or a prompted question) into an ash
-/// command via the AI, then offer execute / step-by-step / edit / cancel.
-///
-/// Synchronous — blocks the event loop while the AI thinks. The viewport is
-/// not redrawn during the AI call (the terminal shows the last frame). The
-/// result + decision prompt are pushed as blocks into the scrollback.
-fn handle_ai_suggest(
-    editor: &mut Editor,
-    shell: &mut auto_shell::Shell,
-    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
-) -> io::Result<()> {
-    // The question: use the current editor text, or prompt for one.
-    let question = {
-        let text = editor.text().trim().to_string();
-        if text.is_empty() {
-            // Read a question line directly (no editor — simple blocking read).
-            push_block(terminal, &["AI: type your question, then Enter:", ""], Color::Cyan)?;
-            let mut buf = String::new();
-            read_raw_line(terminal, &mut buf)?;
-            if buf.trim().is_empty() {
-                return Ok(()); // cancelled
-            }
-            buf.trim().to_string()
-        } else {
-            editor.take_line();
-            text
-        }
-    };
-
-    // Ask the AI (blocking).
-    push_block(terminal, &["  ⏳ asking AI..."], Color::DarkGray)?;
-    let suggestion = match ask_ai(shell, &question) {
-        Ok(cmd) => cmd,
-        Err(e) => {
-            push_block(
-                terminal,
-                &[&format!("  AI error: {e}"), "  (set ZHIPU_API_KEY / start aaid daemon)"],
-                Color::Red,
-            )?;
-            return Ok(());
-        }
-    };
-
-    // Validate (danger/warning detection).
-    let findings = auto_shell::ai::validate_suggestion(&suggestion);
-    let steps = auto_shell::ai::split_steps(&suggestion);
-    let multi = steps.len() > 1;
-
-    let mut lines: Vec<String> = vec![format!("  AI: {suggestion}")];
-    for f in &findings {
-        match f {
-            auto_shell::ai::ValidationFinding::Danger(msg) => {
-                lines.push(format!("  ⚠ DANGER: {msg}"));
-            }
-            auto_shell::ai::ValidationFinding::Warning(msg) => {
-                lines.push(format!("  ⚠ warning: {msg}"));
-            }
-        }
-    }
-    if multi {
-        lines.push(format!(
-            "  [Enter] 全部执行  [s] 分步执行({}步)  [e] 编辑  [Esc/其他] 取消",
-            steps.len()
-        ));
-    } else {
-        lines.push("  [Enter] 执行  [e] 编辑  [Esc/其他] 取消".to_string());
-    }
-    let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-    push_block(terminal, &refs, Color::Cyan)?;
-
-    // Read the decision key.
-    let event = event::read()?;
-    if is_enter(&event) {
-        execute_and_render(shell, terminal, &suggestion)?;
-    } else if let Some(KeyCode::Char(c)) = key_code(&event) {
-        match c {
-            's' if multi => {
-                for (i, step) in steps.iter().enumerate() {
-                    push_block(
-                        terminal,
-                        &[&format!("  [{}/{}] {}", i + 1, steps.len(), step)],
-                        Color::DarkGray,
-                    )?;
-                    let ev = event::read()?;
-                    if !is_enter(&ev) {
-                        push_block(
-                            terminal,
-                            &[&format!("  已中止 (剩余 {} 步)", steps.len() - i - 1)],
-                            Color::DarkGray,
-                        )?;
-                        return Ok(());
-                    }
-                    execute_and_render(shell, terminal, step)?;
-                    if shell.last_exit_code() != 0 {
-                        return Ok(()); // abort on failure (&& semantics)
-                    }
-                }
-            }
-            'e' => {
-                push_block(
-                    terminal,
-                    &[&format!("  编辑命令 (当前: {suggestion})")],
-                    Color::DarkGray,
-                )?;
-                let mut edited = String::new();
-                read_raw_line(terminal, &mut edited)?;
-                if !edited.trim().is_empty() {
-                    execute_and_render(shell, terminal, edited.trim())?;
-                }
-            }
-            _ => {} // cancel
-        }
-    }
-    Ok(())
-}
-
-// ── F4 AI chat: worker thread + streaming channel (Gap 7) ─────────────
 
 /// Commands sent from the main thread to the chat worker thread.
 enum ChatCmd {

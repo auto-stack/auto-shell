@@ -383,65 +383,6 @@ impl Repl {
         self.prompt.set_character_symbol(&symbol);
     }
 
-    /// Plan 325 P3: Ask the AI to translate natural language → ash command.
-    /// Returns the suggested command string.
-    fn ask_ai(&self, question: &str) -> Result<String, String> {
-        use auto_ai_client::{AiClient, CompletionRequest};
-
-        // Plan 029 §2.3/§7.2: inject the live shell context (OS/cwd/last
-        // command/aliases) so the model knows the user's environment.
-        let context = auto_shell::ai::context::build_context_block(&self.shell);
-        let system = format!(
-            "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
-             {context}\n\
-             The user will describe what they want to do in natural language.\n\
-             Translate it into a SINGLE ash shell command (or pipeline).\n\
-             Rules:\n\
-             - Respond with ONLY the command, no explanation, no markdown.\n\
-             - Use standard Unix commands (ls, grep, find, etc.).\n\
-             - For Ash-specific features, use: ls | .size > 10.mb | sort .name\n\
-             - If multiple steps are needed, use && to chain them.\n\
-             - If you're unsure, give your best single-command guess."
-        );
-
-        let client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
-
-        // The client is daemon-only and carries no provider/model knowledge;
-        // emit a tier token ("tier:mid") that the daemon resolves to a concrete
-        // model from its config.
-        let model = "tier:mid".to_string();
-
-        let req = CompletionRequest::single(&model, question)
-            .with_system(&system)
-            .with_max_tokens(256)
-            .with_temperature(0.3);
-
-        // Run the async completion in a blocking runtime (REPL is sync).
-        // Multi-thread runtime: the current-thread one panics on shutdown
-        // under tokio >=1.52 ("Cannot drop a runtime in a context where
-        // blocking is not allowed"). See `frontend::ai::block_on_async`.
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("runtime: {}", e))?;
-
-        let response = rt.block_on(async { client.complete(&req).await });
-
-        match response {
-            Ok(resp) if resp.is_ok() => {
-                let cmd = resp.content.trim().to_string();
-                // Strip markdown code fences if present.
-                let cmd = cmd
-                    .trim_start_matches("```bash\n")
-                    .trim_start_matches("```sh\n")
-                    .trim_start_matches("```\n")
-                    .trim_end_matches("\n```")
-                    .trim()
-                    .to_string();
-                Ok(cmd)
-            }
-            Ok(resp) => Err(format!("AI returned error: {:?}", resp.error)),
-            Err(e) => Err(format!("{}", e)),
-        }
-    }
 
     /// Plan 027: the standalone AI chat loop. Owns the reedline editor until
     /// the user exits via Esc, F4 (toggle-off), F1/F2/F3 (mode switch), or
@@ -665,28 +606,6 @@ impl Repl {
         (snippet, exit_code)
     }
 
-    /// Plan 029 §5: run a multi-step `&&` chain one step at a time. Before
-    /// each step, prompt the user (Enter = run, anything else = skip-and-abort).
-    /// If a step fails (non-zero exit), abort the rest of the chain — matching
-    /// `&&` semantics.
-    fn run_steps_interactively(&mut self, steps: &[String]) {
-        for (i, step) in steps.iter().enumerate() {
-            println!("\n  [{}/{}] {}", i + 1, steps.len(), step);
-            println!("  [Enter] 执行此步  [其他] 中止");
-            let s_sig = self.line_editor.read_line(&self.prompt);
-            let go = matches!(&s_sig, Ok(Signal::Success(s)) if s.trim().is_empty());
-            if !go {
-                println!("  已中止 (剩余 {} 步未执行)", steps.len() - i);
-                return;
-            }
-            // Plan 037 M3: execute_with_header prints the block header + output.
-            // A non-zero exit aborts the rest of the chain (&& semantics).
-            let (_snippet, exit_code) = self.execute_with_header(step);
-            if exit_code != 0 {
-                return;
-            }
-        }
-    }
 
     /// Open the current input line in $EDITOR (or vim/notepad) and return the result.
     /// Plan 304: Multi-line edit via Ctrl+E.
@@ -782,101 +701,13 @@ impl Repl {
                         continue;
                     }
                     // F3 = AI mode: natural language → command suggestion.
-                    if line.starts_with('\x13') {
-                        self.mode_state.enter_ai();
-                        self.update_prompt();
-                        let extra = line[1..].trim().to_string();
-
-                        let question = if extra.is_empty() {
-                            // Read a full question line.
-                            let q_sig = self.line_editor.read_line(&self.prompt);
-                            match q_sig {
-                                Ok(Signal::Success(q)) if !q.trim().is_empty() => q.trim().to_string(),
-                                _ => {
-                                    // Empty or cancelled — return to previous mode.
-                                    self.mode_state.locked = None;
-                                    self.update_prompt();
-                                    continue;
-                                }
-                            }
-                        } else {
-                            extra
-                        };
-
-                        // Call AI client to translate NL → ash command.
-                        match self.ask_ai(&question) {
-                            Ok(suggestion) => {
-                                println!("\n  AI: {}", suggestion);
-
-                                // Plan 029 §5: validate the suggestion before
-                                // running it. Warn about destructive patterns
-                                // and unbalanced quotes/brackets.
-                                let findings = auto_shell::ai::validate_suggestion(&suggestion);
-                                for finding in &findings {
-                                    match finding {
-                                        auto_shell::ai::ValidationFinding::Danger(msg) => {
-                                            println!("  \x1b[1;31m\u{26a0} DANGER: {}\x1b[0m", msg);
-                                        }
-                                        auto_shell::ai::ValidationFinding::Warning(msg) => {
-                                            println!("  \x1b[33m\u{26a0} warning: {}\x1b[0m", msg);
-                                        }
-                                    }
-                                }
-
-                                // Plan 029 §5: if the suggestion is a multi-step
-                                // && chain, offer step-by-step execution.
-                                let steps = auto_shell::ai::split_steps(&suggestion);
-                                let multi = steps.len() > 1;
-                                if multi {
-                                    println!(
-                                        "  [Enter] 全部执行  [s] 分步执行({}步)  [e] 编辑  [Esc/Enter空] 取消\n",
-                                        steps.len()
-                                    );
-                                } else {
-                                    println!("  [Enter] 执行  [e] 编辑  [Esc/Enter空] 取消\n");
-                                }
-
-                                // Read user's decision.
-                                let d_sig = self.line_editor.read_line(&self.prompt);
-                                if let Ok(Signal::Success(decision)) = &d_sig {
-                                    let cmd = decision.trim();
-                                    if cmd.is_empty() {
-                                        // Empty Enter → execute the suggestion as-is.
-                                        // Plan 037 M3: prints block header + output.
-                                        self.execute_with_header(&suggestion);
-                                    } else if cmd == "s" && multi {
-                                        // Step-by-step: run each step, prompting
-                                        // before each, aborting on failure or skip.
-                                        self.run_steps_interactively(&steps);
-                                    } else if cmd == "e" || cmd == "edit" {
-                                        // Edit mode: let user type the final command.
-                                        println!("  编辑命令 (当前: {})", suggestion);
-                                        let e_sig = self.line_editor.read_line(&self.prompt);
-                                        if let Ok(Signal::Success(edited)) = &e_sig {
-                                            let edited = edited.trim();
-                                            if !edited.is_empty() {
-                                                // Plan 037 M3: block header + output.
-                                                self.execute_with_header(edited);
-                                            }
-                                        }
-                                    }
-                                    // Anything else → cancel (do nothing).
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("  AI error: {}", e);
-                                eprintln!("  (set ZHIPU_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY or start aaid daemon)");
-                            }
-                        }
-
-                        // AI is transient — return to previous mode.
-                        self.mode_state.locked = None;
-                        self.update_prompt();
+                    // Plan 069 (unified agent): F3 now enters the SAME persistent
+                    // AI chat as F4 — the CLI has ONE AI mode; the one-shot NL
+                    // translate flow (ask_ai + approval card) is retired.
+                    if line.starts_with('') {
+                        self.run_chat_loop()?;
                         continue;
                     }
-
-                    // Plan 027: F4 = persistent AI chat mode. Enter a
-                    // standalone loop that owns the editor until exit.
                     if line.starts_with('\x15') {
                         // Any text typed after F4 is ignored for now
                         // (chat reads full lines in its own loop).
