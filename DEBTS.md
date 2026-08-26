@@ -837,5 +837,6 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
   `docs/plans/070-multiline-editor-overlay.md` §3 Phase 4。
 - **连带绕道**(有意识接受,详见计划复审记录):进入擦除仅清 1 行(折行输入
   残留)、viewport 固定 12 行(ratatui Inline 不可变高)、CJK 复制带续接空格
-  (cell 网格固有)、IME 默认关硬件光标(`ASH_HARDWARE_CURSOR=1` 显式开启——
-  该路径定位尚偏 gutter 宽,见复审发现③)。
+  (cell 网格固有)、IME 默认关硬件光标(`ASH_HARDWARE_CURSOR=1` 显式开启;
+  其 gutter 偏移已修,横向滚动场景为已知近似)、Ctrl+O 内按 F2 转开脚本
+  编辑器时缓冲内容不保留(与内联 F 键丢弃尾随文本的 v1 行为一致)。
