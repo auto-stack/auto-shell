@@ -1349,7 +1349,6 @@ impl auto_ai_agent::Client for FakeChatClient {
                 usage: None,
                 model: "fake".into(),
                 error: None,
-                model_meta: None,
             });
         }
         if last_is_user && last_user.contains("use tool") {
@@ -1364,7 +1363,6 @@ impl auto_ai_agent::Client for FakeChatClient {
                 usage: None,
                 model: "fake".into(),
                 error: None,
-                model_meta: None,
             });
         }
         Ok(auto_ai_client::CompletionResponse {
@@ -1374,7 +1372,6 @@ impl auto_ai_agent::Client for FakeChatClient {
             usage: None,
             model: "fake".into(),
             error: None,
-            model_meta: None,
         })
     }
 }

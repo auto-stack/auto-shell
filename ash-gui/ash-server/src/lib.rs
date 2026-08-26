@@ -31,7 +31,9 @@
 //! `shell_worker.rs`, now frontend-independent.
 
 pub mod backend;
+pub mod guard;
 pub mod http;
+pub mod sysopen;
 pub mod types;
 pub mod worker;
 

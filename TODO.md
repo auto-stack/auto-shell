@@ -2,6 +2,36 @@
 
 > 这些事项**不是当前 ash-gui-vue 计划的一部分**(当前计划见 `docs/plans/old/039-041-*.md`),而是等完整 ash-gui 跑通后再评估的方向。按领域分组,不承诺时间。
 
+## 工程审核整改(来源:REVIEW-2026-08-26.md)
+
+> 2026-08-26 全工程审核出的 P1/P2/P3 项。**P0 安全项见 `docs/plans/070-security-hardening.md`(已立项)**;此处登记其余各项,逐个另立计划实施,编号顺延 071+。
+
+### P1(结构止血,建议紧随 070)
+
+- [ ] **CI 修复与全量化**:ash workspace `cargo test --workspace`(ash-tui 138 单测与 examples e2e 回归网入 CI);ci.yml:79 parity 选择器指向改名前的包,疑似失效需修;rustfmt/clippy 从 continue-on-error 转硬门槛。(候选 Plan 071,半天量,可与文档止血合并)
+- [ ] **文档止血**:README/for-agents/SKILL 删除代码中不存在的 `ash agent` 子命令族与已退役 F3 流程;README 项目结构图修正(auto-shell/ash 角色写反、漏 ash-tui);补一个"文档冒烟"脚本(校验文档中 `ash xxx` 子命令真实存在)。
+- [ ] **合并根 workspace**:统一 Cargo.lock/target,消 axum 0.7+0.8 双版本与 windows 0.58/0.61/0.62 三版本共存(双 target 实测 ~6.9GB)。
+- [ ] **shell.rs 第一刀拆分**:内联 builtins(cmd_* 19 个)迁入既有 registry 抽象 + expansion 抽独立模块,调用点不动。
+- [ ] **前后端契约 codegen**:serde 结构体为源生成 TS 类型,删 ash-server/src/types.rs 与 vue 侧 api.ts 两处手工镜像。
+- [ ] **外部命令 fallback 引号注入修复**(external.rs 3+3 处 PS/sh 拼接不转义)+ **中文控制台编码**(全仓 UTF-8 硬编码,cp936 下必乱码)。
+- [ ] **子进程超时与上限**:cmd.output() 无超时、捕获 stdout 无内存上限、每 spawn 泄漏 wait 线程;按 DEBTS 既定务实补丁路线(sleep/http 上限)起步。
+
+### P2(内核偿债,一个月)
+
+- [ ] PipelineData→AtomPipeline 迁移定截止日期,桥接层(pipeline_convert.rs)限期拆除。
+- [ ] 错误类型分域:thiserror 枚举替代 miette 即时字符串(现全仓仅 1 处 derive),denial 可编程识别;清理 157 处 `let _ =`/`.ok()` 吞错聚集。
+- [ ] 解析器诊断化:未闭合引号报错而非静默吞到 EOF;lexer 与 external.rs parse_command 两套 tokenizer 合一。
+- [ ] lazy operator 全覆盖(FilterAll/Map/Reverse 等中途 collect)与 cat/grep 大文件分块(现 17 命令全量 read_to_string)。
+- [ ] 安全集成测试套件:REVIEW §二每条发现一个红→绿用例。
+- [ ] host.rs 重入死锁风险:锁外调用 + debug 断言(unsafe Send/Sync 担保机制化)。
+
+### P3(季度)
+
+- [ ] 平台抽象层:cfg 分支散落 11 文件、进程控制三套机制(external_stream/job.rs WinAPI/libc)语义不对称,收敛合一。
+- [ ] ash-server/GUI 测试建设(现 ash-server 0 测试)与前端测试选型(vitest vs 依赖 .at 侧校验)。
+- [ ] plugin 供应链:域名白名单/签名/lockfile,capabilities 强制化(现仅 stderr 警告);`.ashrc` 与插件加载先于 set_policy 的时序问题。
+- [ ] 文档体系补全:ARCHITECTURE.md、THREAT-MODEL 一页纸、TESTING.md、ADR 索引(plans/archive 重编排)。
+
 ## 真终端专属能力(ash-gui-vue 范围外)
 
 这些是 TUI/CLI ash 有、但一个 webview GUI 天然做不了的——需要**嵌入式终端模拟器**方案才能支持。参考 `ash-core/src/cmd/interactive.rs:10-52` 的交互命令清单。

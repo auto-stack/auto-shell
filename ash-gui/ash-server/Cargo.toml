@@ -55,10 +55,14 @@ tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "m
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# HTTP server (M2 — axum + tower for CORS)
+# HTTP server (M2 — axum;Plan 070 M1 删除了从未用到的 tower-http:
+# 原 http.rs 注释自称 "+ CORS" 但没有实现,防护由 guard.rs 中间件承担)
 axum = "0.7"
-tower-http = { version = "0.5", features = ["cors"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+
+[dev-dependencies]
+# Plan 070 M1: guard 路由级测试(oneshot 直接打 Router)。
+tower = { version = "0.4", features = ["util"] }
 
 # This crate is its OWN workspace (like ash-gui-vue/ash-gui-bin) so its
 # dependency graph does not unify into the shell's workspace.

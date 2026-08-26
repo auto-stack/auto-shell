@@ -202,18 +202,14 @@ fn register_bridges(
     }));
 
     // POST /api/open_path {path} → {}
+    // Plan 070 M1 (S-2): resolve + argv spawn via sysopen — the old
+    // `cmd /C start "" <path>` concat allowed metacharacter injection.
     host_call!("open_path", Arc::new(|args: &str| {
         let v: serde_json::Value = serde_json::from_str(args)
             .map_err(|e| format!("open_path: bad args: {}", e))?;
         let path = v.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string();
         if !path.is_empty() {
-            let _ = if cfg!(target_os = "windows") {
-                std::process::Command::new("cmd").args(["/C", "start", "", &path]).spawn()
-            } else if cfg!(target_os = "macos") {
-                std::process::Command::new("open").arg(&path).spawn()
-            } else {
-                std::process::Command::new("xdg-open").arg(&path).spawn()
-            };
+            crate::sysopen::open_in_os(&path)?;
         }
         Ok("{}".to_string())
     }));

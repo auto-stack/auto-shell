@@ -21,6 +21,7 @@ use std::convert::Infallible;
 use axum::{
     extract::State,
     http::StatusCode,
+    middleware as axum_middleware,
     response::{sse::{Event as SseEvent, KeepAlive, Sse}, IntoResponse, Json},
     routing::{get, post},
     Router,
@@ -29,6 +30,7 @@ use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
+use crate::guard::{guard_middleware, GuardConfig};
 use crate::worker::ShellHandle;
 
 /// Shared state for all handlers — the Shell handle (Clone + Send).
@@ -37,8 +39,14 @@ pub struct AppState {
     pub shell: ShellHandle,
 }
 
-/// Build the axum router with all API routes + CORS.
+/// Build the axum router with all API routes + the request guard
+/// (Plan 070 M1: token/Origin/Host checks; see `guard.rs`).
 pub fn create_router(shell: ShellHandle) -> Router {
+    create_router_with_guard(shell, GuardConfig::from_env())
+}
+
+/// Testable entry: router with an explicit guard configuration.
+pub fn create_router_with_guard(shell: ShellHandle, guard: GuardConfig) -> Router {
     let state = AppState { shell };
 
     Router::new()
@@ -62,6 +70,10 @@ pub fn create_router(shell: ShellHandle) -> Router {
         .route("/api/boot_script", get(boot_script))
         .route("/api/stream", get(stream_sse))
         .with_state(state)
+        .layer(axum_middleware::from_fn_with_state(
+            guard,
+            guard_middleware,
+        ))
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────
@@ -182,16 +194,20 @@ struct OpenPathBody {
 }
 
 async fn open_path(Json(body): Json<OpenPathBody>) -> impl IntoResponse {
-    let _ = if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &body.path])
-            .spawn()
-    } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(&body.path).spawn()
-    } else {
-        std::process::Command::new("xdg-open").arg(&body.path).spawn()
-    };
-    StatusCode::OK
+    // Plan 070 M1 (S-2): resolve + argv spawn via sysopen — the old
+    // `cmd /C start "" <path>` concat allowed metacharacter injection.
+    match crate::sysopen::open_in_os(&body.path) {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => {
+            // Unresolvable path = client error; spawn failure = server error.
+            let code = if e.starts_with("open_path: cannot resolve") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (code, e).into_response()
+        }
+    }
 }
 
 // ── SSE streaming ───────────────────────────────────────────────────────────

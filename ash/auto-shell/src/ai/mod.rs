@@ -371,6 +371,18 @@ impl ChatSession {
         Ok(Self::with_client_and_path(client, history_path()))
     }
 
+    /// Plan 070 M2(S-3/S-5):CLI 审批门入口 —— 交互会话的 SecurityPolicy
+    /// 透传(`--read-only`/`--sandbox` 对 AI 发起的命令同样生效)+ proposal
+    /// sink(非只读命令产建议卡等审批)。`proposals=None` 为旧行为。
+    pub fn load_secured(
+        policy: ash_core::security::SecurityPolicy,
+        proposals: Option<std::sync::mpsc::Sender<String>>,
+    ) -> Result<Self, String> {
+        let ai_client = AiClient::new().map_err(|e| format!("AI client init: {}", e))?;
+        let client: Arc<dyn AgentClient> = Arc::new(ai_client);
+        Ok(Self::build(client, history_path(), proposals, policy))
+    }
+
     /// Construct with an explicit client and the default history path.
     pub fn with_client(client: Arc<dyn AgentClient>) -> Self {
         Self::with_client_and_path(client, history_path())
@@ -384,22 +396,30 @@ impl ChatSession {
         path: PathBuf,
         proposals: std::sync::mpsc::Sender<String>,
     ) -> Self {
-        Self::build(client, path, Some(proposals))
+        Self::build(
+            client,
+            path,
+            Some(proposals),
+            ash_core::security::SecurityPolicy::default(),
+        )
     }
 
     /// Construct from an explicit client + history file path. Builds the
     /// agent, registers tools, and preloads persisted text turns.
     pub fn with_client_and_path(client: Arc<dyn AgentClient>, path: PathBuf) -> Self {
-        Self::build(client, path, None)
+        Self::build(client, path, None, ash_core::security::SecurityPolicy::default())
     }
 
     fn build(
         client: Arc<dyn AgentClient>,
         path: PathBuf,
         proposals: Option<std::sync::mpsc::Sender<String>>,
+        policy: ash_core::security::SecurityPolicy,
     ) -> Self {
         let messages = load_messages(&path);
-        let shell_thread = AshCommandShellThread::start();
+        // Plan 070 M2 (S-5): the agent's shell runs under the interactive
+        // session's policy — previously a fresh default-policy Shell.
+        let shell_thread = AshCommandShellThread::start_with_policy(policy);
         let tx = shell_thread.sender();
 
         // Read the full command set from a fresh Shell. This is a synchronous

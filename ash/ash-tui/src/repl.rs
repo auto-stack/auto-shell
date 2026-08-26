@@ -28,6 +28,10 @@ pub struct Repl {
     mode_state: auto_shell::repl_mode::ModeState,
     /// Plan 027: Lazy-initialized persistent AI chat session.
     chat: Option<auto_shell::ai::ChatSession>,
+    /// Plan 070 M2 (S-3): receiving end of the chat approval gate — the
+    /// agent queues non-readonly commands here; each turn drains them for a
+    /// user verdict ([Enter] run / [e] replace / anything else cancel).
+    ai_proposals: Option<std::sync::mpsc::Receiver<String>>,
 }
 
 impl Repl {
@@ -187,7 +191,7 @@ impl Repl {
             line_editor = line_editor.with_hinter(h);
         }
 
-        Ok(Self { shell, line_editor, prompt, completion_state, mode_state: Default::default(), chat: None })
+        Ok(Self { shell, line_editor, prompt, completion_state, mode_state: Default::default(), chat: None, ai_proposals: None })
     }
 
     /// Get the path to the history file
@@ -382,9 +386,21 @@ impl Repl {
         // `load()` builds the AiClient here, in a SYNCHRONOUS context — it
         // runs the blocking daemon probe, which must NOT happen inside the
         // async turn (see `frontend::ai::ChatSession` docs).
+        //
+        // Plan 070 M2 (S-3/S-5): the CLI session now carries the approval
+        // gate (non-readonly commands become proposals, drained for a user
+        // verdict after each turn) and runs under the interactive session's
+        // security policy (`--read-only`/`--sandbox` constrain AI commands).
         if self.chat.is_none() {
-            match auto_shell::ai::ChatSession::load() {
-                Ok(session) => self.chat = Some(session),
+            let (ptx, prx) = std::sync::mpsc::channel::<String>();
+            match auto_shell::ai::ChatSession::load_secured(
+                self.shell.policy.clone(),
+                Some(ptx),
+            ) {
+                Ok(session) => {
+                    self.chat = Some(session);
+                    self.ai_proposals = Some(prx);
+                }
                 Err(e) => {
                     eprintln!(
                         "  AI error: {}\n  (set ZHIPU_API_KEY / ANTHROPIC_API_KEY / \
@@ -497,10 +513,6 @@ impl Repl {
                 auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
                     println!("\n  [cancelled]");
                 }
-                // auto-ai 新增的回合边界事件(2026-08-23 漂移,ask.rs 同款
-                // 兜底):CLI 内联展示无需呈现。
-                auto_ai_agent::agent::StreamEvent::TurnStart { .. }
-                | auto_ai_agent::agent::StreamEvent::TurnEnd { .. } => {}
             },
         );
         let session = self.chat.as_mut().expect("chat session initialized in run_chat_loop");
@@ -523,7 +535,59 @@ impl Repl {
                 );
             }
         }
+        // Plan 070 M2 (S-3): approval gate — anything the agent proposed
+        // (non-readonly commands) waits for the user's verdict here.
+        self.drain_ai_proposals();
         Ok(())
+    }
+
+    /// Plan 070 M2 (S-3): present each AI-proposed command for approval.
+    /// `[Enter]` executes it (through the normal command path, under the
+    /// session's security policy), `e` replaces it with an edited line,
+    /// anything else (incl. Ctrl-C/Ctrl-D) cancels.
+    fn drain_ai_proposals(&mut self) {
+        // Drain first, then act — the verdict handling needs `&mut self`
+        // (execute_with_header) which conflicts with the receiver borrow.
+        let mut queued: Vec<String> = Vec::new();
+        if let Some(rx) = self.ai_proposals.as_mut() {
+            while let Ok(cmd) = rx.try_recv() {
+                queued.push(cmd);
+            }
+        }
+        for cmd in queued {
+            println!("\n  \x1b[1m📋 建议命令\x1b[0m {cmd}");
+            print!("  \x1b[2m[Enter] 执行 · [e] 输入替代命令 · 其他 取消\x1b[0m › ");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            let verdict = match self.line_editor.read_line(&self.prompt) {
+                Ok(Signal::Success(l)) => l.trim().to_string(),
+                // Ctrl-C / Ctrl-D / EOF all cancel — never execute on abort.
+                _ => {
+                    println!("  已取消");
+                    continue;
+                }
+            };
+            match verdict.as_str() {
+                "" => {
+                    let _ = self.execute_with_header(&cmd);
+                }
+                "e" => {
+                    print!("  \x1b[2m替代命令(空=取消):\x1b[0m ");
+                    let _ = std::io::stdout().flush();
+                    if let Ok(Signal::Success(edited)) = self.line_editor.read_line(&self.prompt) {
+                        let edited = edited.trim();
+                        if edited.is_empty() {
+                            println!("  已取消");
+                        } else {
+                            let _ = self.execute_with_header(edited);
+                        }
+                    } else {
+                        println!("  已取消");
+                    }
+                }
+                _ => println!("  已取消"),
+            }
+        }
     }
 
     /// Plan 037 M3: execute a command and print its output, prefixed by a

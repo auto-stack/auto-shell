@@ -70,13 +70,30 @@ fn main() -> Result<()> {
             // remaining args.
             "plugin" => {
                 let plugin_args: Vec<String> = args[i + 1..].to_vec();
+                // Plan 070 M2: plugin management mutates disk and installs
+                // executable code — mutating subcommands honor the security
+                // flags (previously this early-return bypassed them entirely).
+                let sub = plugin_args.first().map(String::as_str).unwrap_or("");
+                let mutating = matches!(
+                    sub,
+                    "install" | "update" | "remove" | "enable" | "disable"
+                );
+                if mutating && (policy.read_only || policy.no_exec || policy.dry_run) {
+                    eprintln!(
+                        "security: 'ash plugin {sub}' is disabled under \
+                         --read-only/--no-exec/--dry-run"
+                    );
+                    std::process::exit(1);
+                }
                 return auto_shell::plugin::cli::run(&plugin_args);
             }
             // Plan 029 §6: `ash ask "<nl>"` — NL→AutoLang. Generates and runs
             // an AutoLang script via the cloud model + eval_auto tool.
             "ask" => {
                 let ask_args: Vec<String> = args[i + 1..].to_vec();
-                return auto_shell::ai::ask::run(&ask_args);
+                // Plan 070 M2 (S-5): the agent's shell runs under the CLI
+                // security policy.
+                return auto_shell::ai::ask::run(&ask_args, policy);
             }
             "--json" => {
                 // Already handled by the global pre-scan; skip here.

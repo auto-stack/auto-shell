@@ -22,7 +22,7 @@
 
 use std::sync::mpsc;
 
-use auto_ai_agent::tool::{Tool, ToolOutput};
+use auto_ai_agent::tool::Tool;
 use auto_ai_agent::ToolError;
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -43,6 +43,14 @@ const DANGER_PATTERNS: &[&str] = &[
     "shutdown",
     "reboot",
 ];
+
+/// Shell control characters that turn a single argument into multiple
+/// commands when spliced into a CLI string (Plan 070 M4 / S-7).
+const METACHARS: &[char] = &[';', '|', '&', '>', '<'];
+
+/// Characters double quotes cannot neutralize (expansion happens inside
+/// quotes), so tokens containing them are refused outright.
+const EXPANSION_CHARS: &[char] = &['$', '`'];
 
 /// A request sent to the dedicated shell thread. Public so callers that hold
 /// an [`AshCommandShellThread`] sender can name the type. Both variants are
@@ -75,12 +83,22 @@ pub struct AshCommandShellThread {
 }
 
 impl AshCommandShellThread {
-    /// Start a dedicated shell thread. Returns a sender you pass to
-    /// [`AshCommandTool::new`] / [`EvalAutoTool::new`].
+    /// Start a dedicated shell thread with NO security policy (historic
+    /// behavior). See [`Self::start_with_policy`] — callers that live inside
+    /// an interactive session with CLI security flags should prefer it.
     pub fn start() -> Self {
+        Self::start_with_policy(ash_core::security::SecurityPolicy::default())
+    }
+
+    /// Plan 070 M2 (S-5): start the dedicated shell thread under the
+    /// **interactive session's** security policy. Without this the agent's
+    /// Shell was a fresh default-policy one — `ash --read-only` / `--sandbox`
+    /// did not constrain AI-initiated commands.
+    pub fn start_with_policy(policy: ash_core::security::SecurityPolicy) -> Self {
         let (tx, rx) = mpsc::channel::<CmdRequest>();
         std::thread::spawn(move || {
             let mut shell = Shell::new();
+            shell.set_policy(policy);
             // Loop until all senders are dropped (recv returns None).
             while let Ok(req) = rx.recv() {
                 match req {
@@ -93,11 +111,17 @@ impl AshCommandShellThread {
                         let _ = respond.send(r);
                     }
                     CmdRequest::AutoEval { code, respond } => {
-                        let r = match shell.eval_auto(&code) {
+                        let mut r = match shell.eval_auto(&code) {
                             Ok(Some(out)) => Ok(out),
                             Ok(None) => Ok(String::new()),
                             Err(e) => Err(ToolError::Exec(format!("{e}"))),
                         };
+                        // Plan 070 M2 (S-5): a system() call inside the script
+                        // may have been denied by policy — the interactive
+                        // path only prints it. Surface it to the model.
+                        if let Some(reason) = shell.take_denial() {
+                            r = r.map(|out| format!("{out}\n[security] command denied: {reason}"));
+                        }
                         let _ = respond.send(r);
                     }
                 }
@@ -152,7 +176,7 @@ impl Tool for AshCommandTool {
         &self.description
     }
 
-    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
         let cmd_str = json_args_to_cli(&self.name, args)?;
 
         // Refuse known-dangerous patterns before they reach the shell.
@@ -178,7 +202,6 @@ impl Tool for AshCommandTool {
             .map_err(|_| ToolError::Exec("shell thread has exited".into()))?;
         orx.await
             .map_err(|_| ToolError::Exec("shell thread dropped the response".into()))?
-            .map(ToolOutput::text)
     }
 }
 
@@ -217,27 +240,38 @@ impl Tool for ProposeTool {
         &self.description
     }
 
-    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
-        let cmd_str = json_args_to_cli(&self.name, args)?;
+    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
+        // Lenient conversion: the proposal card is human-reviewed in full, so
+        // metacharacters are shown to the user instead of being refused.
+        let cmd_str = json_args_to_cli_lenient(&self.name, args)?;
         self.sink
             .send(cmd_str.clone())
             .map_err(|_| ToolError::Exec("proposal channel closed".into()))?;
-        Ok(ToolOutput::text(format!(
+        Ok(format!(
             "已提交审批:建议命令 `{cmd_str}` 已展示给用户,等待用户决定是否执行。
 \"
             用户执行后,命令与结果会在下一轮对话的上下文中可见。请基于这一点继续回答
 \"
             (给出操作指引/说明这条命令做什么),不要假设它已执行。"
-        )))
+        ))
     }
 }
 
-/// Rebuild a CLI string from the model's JSON arguments.
+/// Rebuild a CLI string from the model's JSON arguments — **strict** form for
+/// commands that will be executed directly (Plan 070 M4 / S-7).
+///
+/// A malicious or confused model could pass `{"args": ["hi", ";", "touch",
+/// "pwn"]}`; splicing that raw produced `echo hi ; touch pwn`, riding the
+/// read-only whitelist into arbitrary execution. The strict form neutralizes
+/// this: tokens carrying control characters get shell-quoted (a quoted `;` is
+/// a literal argument, harmless), and characters double quotes cannot
+/// neutralize (`$`, backtick) are refused outright with a hint to use the
+/// proposal tool instead.
 ///
 /// Supports:
-/// - `{"args": ["-l", "src"]}` — explicit arg list (most precise); each token
-///   is shell-quoted if it contains whitespace.
-/// - a bare string (`"-l src"`) — space-joined after the command name.
+/// - `{"args": ["-l", "src"]}` — explicit arg list (most precise).
+/// - a bare string (`"-l src"`) — space-joined; refused if it contains any
+///   metacharacter (it names multiple tokens, so quoting can't help).
 /// - an object of named values — flattened positionally as a best-effort.
 /// - null / empty — just the command name.
 fn json_args_to_cli(name: &str, args: &Value) -> Result<String, ToolError> {
@@ -247,17 +281,21 @@ fn json_args_to_cli(name: &str, args: &Value) -> Result<String, ToolError> {
 
     // Explicit args list: {"args": ["-l", "src"]}.
     if let Some(arr) = args.get("args").and_then(|a| a.as_array()) {
-        let parts: Vec<String> = arr.iter().map(value_to_cli_token).collect();
-        return Ok(format!("{} {}", name, parts.join(" ")));
+        let parts: Result<Vec<String>, ToolError> =
+            arr.iter().map(|v| strict_token(name, v)).collect();
+        return Ok(format!("{} {}", name, parts?.join(" ")));
     }
 
-    // Bare string args.
+    // Bare string args: multiple intended tokens — any metacharacter here is
+    // ambiguous at best, injectable at worst. Refuse and point at proposals.
     if let Some(s) = args.as_str() {
-        return Ok(if s.is_empty() {
-            name.to_string()
-        } else {
-            format!("{name} {s}")
-        });
+        if s.is_empty() {
+            return Ok(name.to_string());
+        }
+        if s.chars().any(|c| METACHARS.contains(&c) || EXPANSION_CHARS.contains(&c)) {
+            return Err(metachar_error(name, s));
+        }
+        return Ok(format!("{name} {s}"));
     }
 
     // Object of named flags/args: flatten values positionally.
@@ -265,13 +303,66 @@ fn json_args_to_cli(name: &str, args: &Value) -> Result<String, ToolError> {
         if obj.is_empty() {
             return Ok(name.to_string());
         }
-        let parts: Vec<String> = obj.values().map(value_to_cli_token).collect();
-        return Ok(format!("{} {}", name, parts.join(" ")));
+        let parts: Result<Vec<String>, ToolError> =
+            obj.values().map(|v| strict_token(name, v)).collect();
+        return Ok(format!("{} {}", name, parts?.join(" ")));
     }
 
     Err(ToolError::Args(format!(
         "unsupported args shape for '{name}': {args}"
     )))
+}
+
+/// Lenient form for the proposal path — the command string goes to a
+/// human-reviewed approval card, so it is shown verbatim, quoting only for
+/// whitespace (pre-M4 behavior).
+fn json_args_to_cli_lenient(name: &str, args: &Value) -> Result<String, ToolError> {
+    if args.is_null() {
+        return Ok(name.to_string());
+    }
+    if let Some(arr) = args.get("args").and_then(|a| a.as_array()) {
+        let parts: Vec<String> = arr.iter().map(value_to_cli_token).collect();
+        return Ok(format!("{} {}", name, parts.join(" ")));
+    }
+    if let Some(s) = args.as_str() {
+        return Ok(if s.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name} {s}")
+        });
+    }
+    if let Some(obj) = args.as_object() {
+        if obj.is_empty() {
+            return Ok(name.to_string());
+        }
+        let parts: Vec<String> = obj.values().map(value_to_cli_token).collect();
+        return Ok(format!("{} {}", name, parts.join(" ")));
+    }
+    Err(ToolError::Args(format!(
+        "unsupported args shape for '{name}': {args}"
+    )))
+}
+
+fn metachar_error(name: &str, token: &str) -> ToolError {
+    ToolError::Exec(format!(
+        "refused: argument '{token}' for '{name}' contains shell control \
+         characters ($ ; | & > < `). Pass arguments as separate array items \
+         without control characters, or use the proposal flow so the user \
+         can review the full command."
+    ))
+}
+
+/// One strict-mode token: expansion chars refused, control chars quoted.
+fn strict_token(name: &str, v: &Value) -> Result<String, ToolError> {
+    match v {
+        Value::String(s) => {
+            if s.chars().any(|c| EXPANSION_CHARS.contains(&c)) {
+                return Err(metachar_error(name, s));
+            }
+            Ok(quote_strict(s))
+        }
+        other => Ok(other.to_string()),
+    }
 }
 
 /// Convert a single JSON value into a shell CLI token, quoting if needed.
@@ -282,9 +373,21 @@ fn value_to_cli_token(v: &Value) -> String {
     }
 }
 
-/// Quote a token with double quotes if it contains whitespace or is empty.
+/// Quote a token with double quotes if it contains whitespace or is empty
+/// (historic lenient behavior, used for proposal-card text).
 fn quote_if_needed(s: &str) -> String {
     if s.is_empty() || s.chars().any(|c| c.is_whitespace()) {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Strict-path quoting: also quote tokens carrying shell control characters —
+/// a quoted `;`/`|` is a literal argument, neutralizing token-splitting
+/// injection (Plan 070 M4 / S-7).
+fn quote_strict(s: &str) -> String {
+    if s.is_empty() || s.chars().any(|c| c.is_whitespace() || METACHARS.contains(&c)) {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
         s.to_string()
@@ -322,8 +425,10 @@ impl Tool for EvalAutoTool {
     fn description(&self) -> &str {
         "Evaluate AutoLang source code and return the result. Use this to run \
          multi-step scripts with fn/while/try-catch/if. The code persists \
-         across calls (definitions survive). Call system(\"cmd\") to run shell \
-         commands from within the code. Pass the source as {\"code\": \"...\"}."
+         across calls (definitions survive). Prefer the ash command tools for \
+         shell work — system(\"cmd\") inside code runs under the session's \
+         security policy and known-dangerous commands are refused. Pass the \
+         source as {\"code\": \"...\"}."
     }
 
     fn parameters(&self) -> Value {
@@ -339,11 +444,24 @@ impl Tool for EvalAutoTool {
         })
     }
 
-    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
         let code = args
             .get("code")
             .and_then(|c| c.as_str())
             .ok_or_else(|| ToolError::Args("missing 'code' field".into()))?;
+
+        // Plan 070 M2 (S-4): danger-check the source itself — this also
+        // covers system("...") call strings nested inside it, which used to
+        // bypass every tool-layer safeguard.
+        let lower = code.to_lowercase();
+        for pat in DANGER_PATTERNS {
+            if lower.contains(pat) {
+                return Err(ToolError::Exec(format!(
+                    "refused: code matches danger pattern '{pat}'. Restructure \
+                     the script without it, or have the user run it directly."
+                )));
+            }
+        }
 
         let (otx, orx) = oneshot::channel();
         self.tx
@@ -354,7 +472,6 @@ impl Tool for EvalAutoTool {
             .map_err(|_| ToolError::Exec("shell thread has exited".into()))?;
         orx.await
             .map_err(|_| ToolError::Exec("shell thread dropped the response".into()))?
-            .map(ToolOutput::text)
     }
 }
 
@@ -418,6 +535,59 @@ mod tests {
         assert_eq!(json_args_to_cli("echo", &args).unwrap(), "echo 42");
     }
 
+    // ── Plan 070 M4 (S-7): metacharacter neutralization ────────────────
+
+    #[test]
+    fn injection_separator_tokens_get_quoted_not_spliced() {
+        // The S-7 payload: used to splice into `echo hi ; touch pwn` and ride
+        // the read-only whitelist into executing a write command.
+        let args = json!({"args": ["hi", ";", "touch", "pwn"]});
+        let cli = json_args_to_cli("echo", &args).unwrap();
+        assert_eq!(cli, "echo hi \";\" touch pwn");
+        // Pipe/redirection separators are neutralized the same way.
+        let args = json!({"args": ["a", "|", "b"]});
+        assert_eq!(json_args_to_cli("echo", &args).unwrap(), "echo a \"|\" b");
+    }
+
+    #[test]
+    fn regex_pipe_arg_is_quoted_preserving_intent() {
+        // Legitimate `grep "foo|bar"`: quoting keeps the pipe inside the
+        // pattern instead of rejecting the call.
+        let args = json!({"args": ["foo|bar", "file.txt"]});
+        assert_eq!(
+            json_args_to_cli("grep", &args).unwrap(),
+            "grep \"foo|bar\" file.txt"
+        );
+    }
+
+    #[test]
+    fn expansion_chars_are_refused() {
+        for bad in ["$HOME", "a`b"] {
+            let args = json!({"args": [bad]});
+            let err = json_args_to_cli("echo", &args).unwrap_err();
+            assert!(
+                err.to_string().contains("control"),
+                "refuse {bad}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_string_with_metachar_is_refused() {
+        let args = json!("hi ; touch pwn");
+        assert!(json_args_to_cli("echo", &args).is_err());
+    }
+
+    #[test]
+    fn lenient_path_keeps_raw_string_for_proposal_card() {
+        // The proposal card is human-reviewed in full — show verbatim.
+        let args = json!({"args": ["hi", ";", "touch", "pwn"]});
+        assert_eq!(
+            json_args_to_cli_lenient("echo", &args).unwrap(),
+            "echo hi ; touch pwn"
+        );
+    }
+
     // ── Tool execution via the dedicated thread ────────────────────────
 
     /// Helper: start a thread + build a tool on it.
@@ -431,7 +601,7 @@ mod tests {
     async fn runs_command_through_shell() {
         let (_thread, tool) = tool("echo", "print text");
         let out = tool.execute(&json!({"args": ["hello-agent"]})).await.unwrap();
-        assert!(out.content.contains("hello-agent"), "got: {}", out.content);
+        assert!(out.contains("hello-agent"), "got: {out}");
     }
 
     /// The core reason for the dedicated-thread design: session state (cwd,
@@ -459,10 +629,8 @@ mod tests {
                 .to_string()
         };
         assert!(
-            norm(&pwd.content) == norm(&tmp_str),
-            "pwd '{}' should reflect cd into '{}'",
-            pwd.content,
-            tmp_str
+            norm(&pwd) == norm(&tmp_str),
+            "pwd '{pwd}' should reflect cd into '{tmp_str}'"
         );
     }
 
@@ -495,7 +663,7 @@ mod tests {
         let t: &dyn Tool = &tool;
         assert_eq!(t.name(), "pwd");
         let out = t.execute(&Value::Null).await.unwrap();
-        assert!(!out.content.trim().is_empty(), "pwd should return a path");
+        assert!(!out.trim().is_empty(), "pwd should return a path");
     }
 
     // ── EvalAutoTool (Plan 029 §6) ─────────────────────────────────────
@@ -506,7 +674,7 @@ mod tests {
         // Drive the async tool call on a one-shot runtime (Shell::new inside
         // the thread does AutoLang VM init that can't run in a tokio ctx, but
         // the thread itself is a plain std::thread so this is fine).
-        tool.execute(&json!({"code": code})).await.map(|o| o.content)
+        tool.execute(&json!({"code": code})).await
     }
 
     #[tokio::test]
@@ -544,6 +712,32 @@ mod tests {
         let tool = EvalAutoTool::new(thread.sender());
         let result = tool.execute(&json!({"not_code": "x"})).await;
         assert!(result.is_err());
+    }
+
+    /// Plan 070 M2 (S-4): `system("rm -rf /")` inside generated code used to
+    /// bypass every tool-layer safeguard.
+    #[tokio::test]
+    async fn eval_auto_refuses_embedded_dangerous_system_call() {
+        let result = eval_auto_run("system(\"rm -rf /\")").await;
+        assert!(result.is_err(), "danger pattern inside system() must be refused");
+    }
+
+    /// Plan 070 M2 (S-5): the agent's shell thread must run under the
+    /// interactive session's policy, not a fresh default one.
+    #[tokio::test]
+    async fn shell_thread_runs_under_passed_policy() {
+        let thread = AshCommandShellThread::start_with_policy(
+            ash_core::security::SecurityPolicy {
+                deny: vec!["pwd".into()],
+                ..Default::default()
+            },
+        );
+        let tool = AshCommandTool::new("pwd", "print cwd", thread.sender());
+        let result = tool.execute(&Value::Null).await;
+        assert!(
+            result.is_err(),
+            "--deny'd command must be refused on the agent shell thread"
+        );
     }
 }
 

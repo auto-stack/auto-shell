@@ -90,6 +90,7 @@ impl SecurityPolicy {
             || self.read_only
             || self.dry_run
             || self.audit_file.is_some()
+            || self.sandbox_dir.is_some()
     }
 
     /// Check a command against the policy **before** it runs.
@@ -373,6 +374,18 @@ mod tests {
         assert!(!p.active(), "default policy must be inactive");
         // A check on an inactive policy still returns Allow.
         assert_eq!(p.check("ls", &[], false).unwrap(), Decision::Allow);
+    }
+
+    // Plan 070 M3 (S-6): `ash --sandbox <dir>` alone used to be silently
+    // dropped by the interactive REPL because `active()` ignored sandbox_dir
+    // and main.rs only applies the policy when `active()`.
+    #[test]
+    fn sandbox_only_policy_is_active() {
+        let p = SecurityPolicy {
+            sandbox_dir: Some(PathBuf::from("/tmp/box")),
+            ..Default::default()
+        };
+        assert!(p.active(), "sandbox-only policy must count as active");
     }
 
     // ---- allow / deny ----

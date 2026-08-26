@@ -648,12 +648,6 @@ fn spawn_chat_worker(
                                     // Done is handled by the send_turn_streaming return.
                                     return;
                                 }
-                                // auto-ai 新增的回合边界事件(2026-08-23 漂移,
-                                // ask.rs 同款兜底):CLI 内联展示无需呈现。
-                                auto_ai_agent::agent::StreamEvent::TurnStart { .. }
-                                | auto_ai_agent::agent::StreamEvent::TurnEnd { .. } => {
-                                    return;
-                                }
                             };
                             let _ = tx.send(chat_ev);
                         });
@@ -689,7 +683,14 @@ fn handle_ai_chat(
     terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
 ) -> io::Result<()> {
     // Load the session on the main thread (sync daemon probe).
-    let session = match auto_shell::ai::ChatSession::load() {
+    // Plan 070 M2 (S-3/S-5): approval gate + policy passthrough — the agent's
+    // shell runs under this session's security policy, and non-readonly
+    // commands queue as proposals awaiting a user verdict after each turn.
+    let (ptx, prx) = std::sync::mpsc::channel::<String>();
+    let session = match auto_shell::ai::ChatSession::load_secured(
+        shell.policy.clone(),
+        Some(ptx),
+    ) {
         Ok(s) => s,
         Err(e) => {
             push_block(
@@ -876,6 +877,18 @@ fn handle_ai_chat(
                         let refs: Vec<&str> = block_lines.iter().map(|s| s.as_str()).collect();
                         push_block(terminal, &refs, Color::DarkGray)?;
                     }
+                    // Plan 070 M2 (S-3): approval gate — drain everything the
+                    // agent proposed this turn for a user verdict.
+                    while let Ok(cmd) = prx.try_recv() {
+                        match prompt_approval(terminal, &cmd)? {
+                            Some(final_cmd) => {
+                                execute_and_render(shell, terminal, &final_cmd)?;
+                            }
+                            None => {
+                                push_block(terminal, &["  已取消建议命令"], Color::DarkGray)?;
+                            }
+                        }
+                    }
                     break; // break the while-recv loop, go back to polling
                 }
                 ChatEv::Cleared => {
@@ -907,6 +920,38 @@ fn push_block(
             }
         }
     })
+}
+
+/// Plan 070 M2 (S-3): present an AI-proposed command for approval. Returns
+/// `Some(command)` — approved as-is ([Enter]) or replaced (`e` + typed line) —
+/// or `None` when cancelled (any other key; an empty replacement cancels too).
+fn prompt_approval(
+    terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
+    cmd: &str,
+) -> io::Result<Option<String>> {
+    push_block(
+        terminal,
+        &[
+            &format!("  📋 建议命令: {cmd}"),
+            "  [Enter] 执行 · [e] 输入替代命令 · 其他键 取消",
+        ],
+        Color::Yellow,
+    )?;
+    loop {
+        let event = event::read()?;
+        if let Some(code) = key_code(&event) {
+            match code {
+                KeyCode::Enter => return Ok(Some(cmd.to_string())),
+                KeyCode::Char('e') => {
+                    let mut buf = String::new();
+                    read_raw_line(terminal, &mut buf)?;
+                    let trimmed = buf.trim().to_string();
+                    return Ok(if trimmed.is_empty() { None } else { Some(trimmed) });
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
 }
 
 /// Read a line of input in raw mode, character by character, until Enter.

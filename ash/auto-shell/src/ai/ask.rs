@@ -39,14 +39,17 @@ AutoLang is a small typed language. You write it to solve multi-step tasks.\n\
 ## Calling the shell from AutoLang\n\
 - `system(\"git status\")` runs a shell command, returns its stdout (string).\n\
 - `system_status()` returns the last command's exit code (int).\n\
-- Use `system(...)` to interact with files, git, etc.\n\
+- `system(...)` runs under the session's security policy; dangerous commands\n\
+ (rm -rf /, mkfs, shutdown, ...) are refused. Do not try to work around it.\n\
+- Prefer the dedicated ash command tools (ls/cat/grep/...) for shell work —\n\
+ they are safer and give structured results; use system() only when a task\n\
+ has no matching tool.\n\
 \n\
 ## How to work\n\
 Use the `eval_auto` tool to run your code. If it errors, read the error,\n\
 fix the code, and call `eval_auto` again. Iterate until it works, then give\n\
 the user a one-line summary of the result.\n\
-Keep scripts short and focused. Prefer calling shell commands via system() for\n\
-file operations rather than reimplementing them in AutoLang.";
+Keep scripts short and focused.";
 
 impl Role for AutoLangCoder {
     fn name(&self) -> &str {
@@ -67,8 +70,10 @@ impl Role for AutoLangCoder {
 }
 
 /// Entry point for `ash ask`. `args` is everything after `ask`
-/// (e.g. `["count", "the", ".rs", "files"]`).
-pub fn run(args: &[String]) -> Result<()> {
+/// (e.g. `["count", "the", ".rs", "files"]`). `policy` is the CLI security
+/// policy (Plan 070 M2/S-5: the agent's shell runs under it — `ash
+/// --read-only ask ...` stays read-only).
+pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Result<()> {
     if args.is_empty() {
         eprintln!("usage: ash ask \"<what you want to do>\"");
         std::process::exit(2);
@@ -86,7 +91,7 @@ pub fn run(args: &[String]) -> Result<()> {
 
     // Dedicated shell thread backs both the eval_auto tool and the shell
     // command tools, sharing one session (cwd, definitions persist).
-    let shell_thread = AshCommandShellThread::start();
+    let shell_thread = AshCommandShellThread::start_with_policy(policy);
     let tx = shell_thread.sender();
 
     let mut agent = Agent::new(AutoLangCoder, client);
@@ -128,8 +133,6 @@ pub fn run(args: &[String]) -> Result<()> {
         StreamEvent::Thinking { .. } => {}
         StreamEvent::Error { message } => println!("\n  [error] {message}"),
         StreamEvent::Cancelled { .. } => println!("\n  [cancelled]"),
-        // auto-ai 新增的回合边界事件(2026-08-23 漂移):CLI 内联展示无需呈现。
-        StreamEvent::TurnStart { .. } | StreamEvent::TurnEnd { .. } => {}
     });
 
     let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
