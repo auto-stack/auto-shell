@@ -22,6 +22,8 @@ pub mod subprocess;
 // moved verbatim; `commands` re-exports it and adds `color`.
 mod commands_less;
 pub mod completions_reedline;
+/// Plan 070: the bottom-dynamic script editor modal (ratatui Inline viewport).
+pub mod editor_overlay;
 pub mod menu;
 pub mod prompt;
 pub mod renderer;

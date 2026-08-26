@@ -37,6 +37,10 @@ pub struct AshPrompt {
     character: Box<dyn PromptModule>,
     /// Prompt configuration
     config: AshConfig,
+    /// Plan 070: continuation indicator matching the current symbol's display
+    /// width (`▌# ` → `·· `), so wrapped/continuation lines align with the
+    /// first input line. Updated by `set_character_symbol`.
+    multiline_indicator: String,
 }
 
 impl AshPrompt {
@@ -46,6 +50,9 @@ impl AshPrompt {
             modules: Vec::new(),
             right_modules: Vec::new(),
             character: Box::new(CharacterModule::new(&config)),
+            multiline_indicator: Self::indicator_for(&config.module_string(
+                "character", "success", "❯",
+            )),
             config,
         };
 
@@ -81,7 +88,18 @@ impl AshPrompt {
     pub fn set_character_symbol(&mut self, symbol: &str) {
         let locked = symbol.starts_with("▌");
         let clean = symbol.trim_start_matches("▌");
+        self.multiline_indicator = Self::indicator_for(symbol);
         self.character = Box::new(CharacterModule::with_symbol_locked(clean, locked));
+    }
+
+    /// Plan 070: build a continuation indicator with the SAME display width as
+    /// `{symbol} ` — `·` per symbol column plus the trailing space — so
+    /// reedline's continuation lines line up under the first input line.
+    fn indicator_for(symbol: &str) -> String {
+        use unicode_width::UnicodeWidthStr;
+        let width = UnicodeWidthStr::width(symbol);
+        let dots = "·".repeat(width);
+        format!("{dots} ")
     }
 
     /// Render left prompt (parallel module computation)
@@ -164,7 +182,9 @@ impl reedline::Prompt for AshPrompt {
     }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
-        Cow::Borrowed("..> ")
+        // Plan 070: width-matched to the current symbol so continuation lines
+        // align with the first input line (was hardcoded "..> ").
+        Cow::Borrowed(&self.multiline_indicator)
     }
 
     fn render_prompt_history_search_indicator(
@@ -218,5 +238,25 @@ mod tests {
         let _right = prompt.render_prompt_right();
         let indicator = prompt.render_prompt_indicator(reedline::PromptEditMode::Default);
         assert!(indicator.contains("❯"));
+    }
+
+    /// Plan 070: the continuation indicator must be exactly as wide as
+    /// `{symbol} ` so continuation lines align under the first input line.
+    #[test]
+    fn test_multiline_indicator_matches_symbol_width() {
+        use reedline::Prompt;
+        use unicode_width::UnicodeWidthStr;
+
+        let mut prompt = AshPrompt::new(AshConfig::default());
+        for symbol in [">", "▌#", "?", "·", "▌>"] {
+            prompt.set_character_symbol(symbol);
+            let indicator = prompt.render_prompt_multiline_indicator();
+            let expected = UnicodeWidthStr::width(symbol) + 1; // symbol + one space
+            assert_eq!(
+                UnicodeWidthStr::width(indicator.as_ref()),
+                expected,
+                "symbol {symbol:?}: indicator {indicator:?}"
+            );
+        }
     }
 }
