@@ -16,6 +16,13 @@
     reedline 残留的 `>` 输入行(MoveUp+Clear;F2 锁定路径因此不再打 banner,
     防止垫行导致擦错);③ Run/Cancelled/Exit 任一出口都回普通模式(单次语义,
     worksheet 重开循环取消),提示文案"双击退出"→"Esc 取消退出"。
+  - **冒烟迭代 #2(用户反馈,df0a585)**:① 双光标(块光标+偏移硬件下划线)——
+    硬件光标默认隐藏,`ASH_HARDWARE_CURSOR=1` 显式开启(IME);② 提交后 12 行空白
+    ——exit_modal 改为框顶 Clear(FromCursorDown) 原地清除;③ 回显改为框式
+    (render_script_block:Rounded 边框+行号+暗色,与输入框同款;取消态黄色底标题);
+    ④ 模式 banner 全部退役——右提示符时间戳左侧暗色标签 auto/Shell/AI(符号推导,
+    · 续行保持前值),按键图例(F1/F2/F3/Ctrl+O/Tab/Ctrl+R)只在启动打一行。
+    已知特性:cell 网格下 CJK 复制带续接空格(与 ratatui Buffer 渲染一致)。
   - 过程依赖事件:auto-lang master plan-451 合并回归(ui_gen/vue.rs 引用门控
     crate::ui 断非 ui 构建),已在 auto-lang 侧修复入库(fd7d1e3b5)。
 - 决策背景(用户裁定,2026-08-26):AutoScript 锁定的内联多行(Enter=换行)语义正确但
