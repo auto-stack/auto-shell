@@ -819,3 +819,23 @@ ai_steps/boot_script 契约全通(diag 实测);vue 视觉层(chips 渲染/分步
 Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可用,待有
 浏览器时按 web-gui-tester 流程补。旧条「Vue 端 ai_pending 编辑回填链
 未验证」范围因此进一步扩大到上述视觉层。**
+
+## ash CLI 脚本编辑器(Plan 070 延期项,2026-08-26 finish-plan 复审入账)
+
+### Phase 4:编辑器内 syntect 实时语法高亮
+
+- **现状**:`editor_overlay` 的输入框为纯文本 + 行号(无高亮);提交/取消回显
+  (render_script_block)同为纯暗色。高亮管线(syntect→CodeSpan→ANSI)已存在且
+  `show` 在用(2026-08-26 已修 CLI 侧缺口),但编辑态用不上。
+- **根因**(上游限制):`ratatui-textarea` 0.9 公开 API 为纯文本
+  (insert_str/set_line 等),无逐行彩色 spans 渲染接口(内部 highlight.rs 只管
+  光标/选区样式)。要高亮须转"状态机用法"——`Input` trait 驱动 textarea 存态,
+  渲染自管 Paragraph + 行号 gutter + 自绘反色光标块,等于重写渲染层。
+- **接受理由**:M1 纯文本+行号完全可用;自渲染是已知工作量(计划 §3 Phase 4
+  标注"可缓"),收益(编辑态着色)不抵当前优先级。
+- **参考**:`ash/ash-tui/src/editor_overlay/view.rs`;计划
+  `docs/plans/070-multiline-editor-overlay.md` §3 Phase 4。
+- **连带绕道**(有意识接受,详见计划复审记录):进入擦除仅清 1 行(折行输入
+  残留)、viewport 固定 12 行(ratatui Inline 不可变高)、CJK 复制带续接空格
+  (cell 网格固有)、IME 默认关硬件光标(`ASH_HARDWARE_CURSOR=1` 显式开启——
+  该路径定位尚偏 gutter 宽,见复审发现③)。
