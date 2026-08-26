@@ -58,6 +58,12 @@ pub enum EditorOutcome {
     Cancelled(String),
     /// Esc (or Ctrl+C) on an empty buffer — plain exit.
     Exit,
+    /// An F-key / Alt-digit pressed inside the editor: exit, then let the
+    /// caller apply the mode-switch prefix ('\x11' F1 / '\x12' F2 /
+    /// '\x13' F3 / '\x15' F4) exactly as if typed at the inline prompt.
+    /// (Plan 070 §2.1: the editor doesn't interpret mode keys; the
+    /// finish-plan review found them dead — now they exit instead.)
+    ExitThen(char),
 }
 
 /// Pure key routing for the modal loop (unit-testable without a terminal).
@@ -67,6 +73,8 @@ enum KeyAction {
     Submit,
     /// Esc / Ctrl+C — cancel if non-empty, exit if empty.
     Escape,
+    /// F1-F4 / Alt+1-4 — exit and hand the mode prefix to the caller.
+    ExitThen(char),
     /// Plain Enter — insert a newline.
     Newline,
     /// Everything else — hand to the textarea (movement, editing, undo…).
@@ -74,6 +82,26 @@ enum KeyAction {
 }
 
 fn route_key(code: KeyCode, modifiers: KeyModifiers) -> KeyAction {
+    // Mode keys — same prefixes the inline keybindings submit: F1-F4 and
+    // their laptop-friendly Alt+1-4 aliases. Exit and let the caller switch.
+    let mode_prefix = match (code, modifiers) {
+        (KeyCode::F(1), KeyModifiers::NONE) | (KeyCode::Char('1'), KeyModifiers::ALT) => {
+            Some('\x11')
+        }
+        (KeyCode::F(2), KeyModifiers::NONE) | (KeyCode::Char('2'), KeyModifiers::ALT) => {
+            Some('\x12')
+        }
+        (KeyCode::F(3), KeyModifiers::NONE) | (KeyCode::Char('3'), KeyModifiers::ALT) => {
+            Some('\x13')
+        }
+        (KeyCode::F(4), KeyModifiers::NONE) | (KeyCode::Char('4'), KeyModifiers::ALT) => {
+            Some('\x15')
+        }
+        _ => None,
+    };
+    if let Some(prefix) = mode_prefix {
+        return KeyAction::ExitThen(prefix);
+    }
     if code == KeyCode::Enter && modifiers.contains(KeyModifiers::CONTROL) {
         KeyAction::Submit
     } else if code == KeyCode::Enter && modifiers.is_empty() {
@@ -133,9 +161,17 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
         // ASH_HARDWARE_CURSOR=1 when IME anchoring is needed.
         if hardware_cursor() {
             let sc = textarea.screen_cursor();
+            // `screen_cursor().col` is text-relative and does NOT include the
+            // line-number gutter (textarea's own scroll math compensates the
+            // same way — widget.rs `scroll_top_col` adds `digits + 2`).
+            // Horizontal-scroll of over-wide lines is a known approximation.
+            let gutter = textarea.lines().len().to_string().len() as u16 + 2;
             let _ = execute!(
                 io::stdout(),
-                cursor::MoveTo(chunk.x + sc.col as u16, chunk.y + sc.row as u16),
+                cursor::MoveTo(
+                    chunk.x + gutter + sc.col as u16,
+                    chunk.y + sc.row as u16,
+                ),
                 cursor::Show
             );
         }
@@ -149,8 +185,15 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
         match route_key(key.code, key.modifiers) {
             KeyAction::Submit => {
                 let text = textarea.lines().join("\n");
-                break EditorOutcome::Run(text);
+                // Empty buffer + Ctrl+Enter: nothing to run — plain exit,
+                // no empty box echo, no empty command (finish-plan finding ②).
+                break if text.trim().is_empty() {
+                    EditorOutcome::Exit
+                } else {
+                    EditorOutcome::Run(text)
+                };
             }
+            KeyAction::ExitThen(prefix) => break EditorOutcome::ExitThen(prefix),
             KeyAction::Escape => {
                 let text = textarea.lines().join("\n");
                 break if text.trim().is_empty() {
@@ -204,11 +247,37 @@ mod tests {
             KeyAction::Edit
         );
         assert_eq!(route_key(KeyCode::Left, KeyModifiers::NONE), KeyAction::Edit);
-        assert_eq!(route_key(KeyCode::F(1), KeyModifiers::NONE), KeyAction::Edit);
+        // Plain digits are text (only the Alt aliases are mode keys).
+        assert_eq!(
+            route_key(KeyCode::Char('1'), KeyModifiers::NONE),
+            KeyAction::Edit
+        );
         // Shift/Alt+Enter stays an edit (textarea's own newline bindings).
         assert_eq!(
             route_key(KeyCode::Enter, KeyModifiers::SHIFT),
             KeyAction::Edit
         );
+    }
+
+    /// finish-plan finding ①: F1-F4 and Alt+1-4 used to be dead keys; they
+    /// now exit and hand the mode prefix to the caller.
+    #[test]
+    fn mode_keys_exit_with_prefix() {
+        for (code, modifiers, prefix) in [
+            (KeyCode::F(1), KeyModifiers::NONE, '\x11'),
+            (KeyCode::F(2), KeyModifiers::NONE, '\x12'),
+            (KeyCode::F(3), KeyModifiers::NONE, '\x13'),
+            (KeyCode::F(4), KeyModifiers::NONE, '\x15'),
+            (KeyCode::Char('1'), KeyModifiers::ALT, '\x11'),
+            (KeyCode::Char('2'), KeyModifiers::ALT, '\x12'),
+            (KeyCode::Char('3'), KeyModifiers::ALT, '\x13'),
+            (KeyCode::Char('4'), KeyModifiers::ALT, '\x15'),
+        ] {
+            assert_eq!(
+                route_key(code, modifiers),
+                KeyAction::ExitThen(prefix),
+                "{code:?} + {modifiers:?}"
+            );
+        }
     }
 }

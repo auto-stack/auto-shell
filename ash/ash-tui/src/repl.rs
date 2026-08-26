@@ -292,8 +292,10 @@ impl Repl {
 
     /// Plan 070: the AutoScript lock opens the editor box (single-shot). Any
     /// outcome — run (boxed echo + execute), cancel (boxed echo), or plain
-    /// exit — returns to the normal inline mode afterwards.
+    /// exit — returns to the normal inline mode afterwards. Mode keys pressed
+    /// inside (F1-F4/Alt+1-4) exit and then switch modes like at the prompt.
     fn open_script_editor(&mut self) {
+        let mut pending_prefix = None;
         match crate::editor_overlay::run_editor("", "▌# AutoScript") {
             crate::editor_overlay::EditorOutcome::Run(text) => {
                 self.commit_script_echo("▌# AutoScript", &text, false);
@@ -304,14 +306,23 @@ impl Repl {
                 self.commit_script_echo("▌# AutoScript", &text, true);
             }
             crate::editor_overlay::EditorOutcome::Exit => {}
+            // F2 inside the AutoScript editor means "leave" (we're already
+            // there — unlock below, no reopen); other prefixes switch after.
+            crate::editor_overlay::EditorOutcome::ExitThen('\x12') => {}
+            crate::editor_overlay::EditorOutcome::ExitThen(p) => pending_prefix = Some(p),
         }
         self.mode_state.unlock();
         self.update_prompt();
+        if let Some(p) = pending_prefix {
+            self.dispatch_mode_prefix(p);
+        }
     }
 
     /// Plan 070: Ctrl+O — one-shot editor box from any inline mode, seeded
     /// with the current line. Runs through the normal execution path (routing
     /// follows the current lock / auto-detect), then returns to the prompt.
+    /// Mode keys pressed inside exit and then switch (F2 here re-enters the
+    /// script editor via the lock, since Ctrl+O started outside it).
     fn run_editor_once(&mut self, prefill: &str) {
         match crate::editor_overlay::run_editor(prefill, "> 命令") {
             crate::editor_overlay::EditorOutcome::Run(text) => {
@@ -323,6 +334,20 @@ impl Repl {
                 self.commit_script_echo("> 命令", &text, true);
             }
             crate::editor_overlay::EditorOutcome::Exit => {}
+            crate::editor_overlay::EditorOutcome::ExitThen(p) => self.dispatch_mode_prefix(p),
+        }
+    }
+
+    /// Apply a mode-switch prefix exactly like the run() keybinding branches
+    /// do: F1/F2 toggle locks, F3/F4 open the AI chat. Shared by the editor's
+    /// ExitThen outcomes (finish-plan finding ①).
+    fn dispatch_mode_prefix(&mut self, prefix: char) {
+        match prefix {
+            '\x11' | '\x12' => self.apply_mode_switch(prefix),
+            '\x13' | '\x15' => {
+                let _ = self.run_chat_loop();
+            }
+            _ => {}
         }
     }
 
