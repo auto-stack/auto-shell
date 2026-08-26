@@ -28,6 +28,11 @@ pub struct Repl {
     mode_state: auto_shell::repl_mode::ModeState,
     /// Plan 027: Lazy-initialized persistent AI chat session.
     chat: Option<auto_shell::ai::ChatSession>,
+    /// Edit mode flavor the editor was built with (rebuilt on multiline swap).
+    use_vi: bool,
+    /// Whether the editor's Enter key currently inserts a newline (AutoScript
+    /// lock) — tracked so the edit mode is only rebuilt on actual changes.
+    editor_multiline: bool,
 }
 
 impl Repl {
@@ -135,122 +140,10 @@ impl Repl {
             false
         });
 
-        // Helper to add common keybindings to any keybindings object
-        fn add_common_keybindings(keybindings: &mut reedline::Keybindings) {
-            keybindings.add_binding(
-                KeyModifiers::NONE,
-                KeyCode::Tab,
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::UntilFound(vec![
-                        ReedlineEvent::Menu("completion_menu".to_string()),
-                        ReedlineEvent::MenuNext,
-                        ReedlineEvent::Edit(vec![EditCommand::Complete]),
-                    ]),
-                    ReedlineEvent::Repaint,
-                ]),
-            );
-            // Plan 302: Ctrl+F accepts the full autosuggestion hint (Fish-style).
-            // NOTE: must be `HistoryHintComplete`, NOT `EditCommand::Complete` —
-            // the latter triggers the completion *menu* and never accepts a hint.
-            keybindings.add_binding(
-                KeyModifiers::CONTROL,
-                KeyCode::Char('f'),
-                ReedlineEvent::HistoryHintComplete,
-            );
-            // Plan 302 Step 3.4: Ctrl+→ accepts next word of autosuggestion
-            keybindings.add_binding(
-                KeyModifiers::CONTROL,
-                KeyCode::Right,
-                ReedlineEvent::HistoryHintWordComplete,
-            );
-            // Ctrl+R — pop up the history candidate menu (fzf-history style).
-            // Separate from Tab (command-based) completions: this lists matching
-            // entries from shell history. Supersedes the old inline SearchHistory.
-            keybindings.add_binding(
-                KeyModifiers::CONTROL,
-                KeyCode::Char('r'),
-                ReedlineEvent::Menu("history_menu".to_string()),
-            );
-            // Ctrl+S — forward history search (legacy inline search retained as a
-            // non-popup fallback alongside the Ctrl+R menu).
-            keybindings.add_binding(
-                KeyModifiers::CONTROL,
-                KeyCode::Char('s'),
-                ReedlineEvent::SearchHistory,
-            );
-            // Plan 304: Ctrl+E — edit in $EDITOR (sends \x05 prefix)
-            keybindings.add_binding(
-                KeyModifiers::CONTROL,
-                KeyCode::Char('e'),
-                ReedlineEvent::Edit(vec![EditCommand::InsertString("\x05".to_string())]),
-            );
-            // Plan 322: F1/F2/F3 mode switching. Insert a prefix char + submit
-            // immediately (no Enter needed). The run loop detects the prefix.
-            keybindings.add_binding(
-                KeyModifiers::NONE,
-                KeyCode::F(1),
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::Edit(vec![EditCommand::InsertString("\x11".to_string())]),
-                    ReedlineEvent::Submit,
-                ]),
-            );
-            keybindings.add_binding(
-                KeyModifiers::NONE,
-                KeyCode::F(2),
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::Edit(vec![EditCommand::InsertString("\x12".to_string())]),
-                    ReedlineEvent::Submit,
-                ]),
-            );
-            keybindings.add_binding(
-                KeyModifiers::NONE,
-                KeyCode::F(3),
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::Edit(vec![EditCommand::InsertString("\x13".to_string())]),
-                    ReedlineEvent::Submit,
-                ]),
-            );
-            // Plan 027: F4 — enter persistent AI chat mode (insert \x15 + submit).
-            keybindings.add_binding(
-                KeyModifiers::NONE,
-                KeyCode::F(4),
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::Edit(vec![EditCommand::InsertString("\x15".to_string())]),
-                    ReedlineEvent::Submit,
-                ]),
-            );
-            // Esc — unlock mode (insert \x14 + submit).
-            keybindings.add_binding(
-                KeyModifiers::NONE,
-                KeyCode::Esc,
-                ReedlineEvent::Multiple(vec![
-                    ReedlineEvent::Edit(vec![EditCommand::InsertString("\x14".to_string())]),
-                    ReedlineEvent::Submit,
-                ]),
-            );
-            // Plan 322 #4: Alt+1/2/3 as laptop-friendly F1/F2/F3 aliases.
-            for (key, prefix) in [('1', "\x11"), ('2', "\x12"), ('3', "\x13"), ('4', "\x15")] {
-                keybindings.add_binding(
-                    KeyModifiers::ALT,
-                    KeyCode::Char(key),
-                    ReedlineEvent::Multiple(vec![
-                        ReedlineEvent::Edit(vec![EditCommand::InsertString(prefix.to_string())]),
-                        ReedlineEvent::Submit,
-                    ]),
-                );
-            }
-        }
-
-        let edit_mode: Box<dyn reedline::EditMode> = if use_vi {
-            let mut insert_kb = default_vi_insert_keybindings();
-            let normal_kb = default_vi_normal_keybindings();
-            add_common_keybindings(&mut insert_kb);
-            Box::new(Vi::new(insert_kb, normal_kb))
-        } else {
-            let mut keybindings = default_emacs_keybindings();
-            add_common_keybindings(&mut keybindings);
-            Box::new(Emacs::new(keybindings))
-        };
+        // The editor's edit mode (Emacs/Vi + ash keybindings + the optional
+        // multiline Enter reroute) is built by `build_edit_mode` — see it
+        // for the mode-dependent Enter/Ctrl+Enter behavior.
+        let edit_mode = build_edit_mode(use_vi, false);
 
         // Create modular prompt (AshPrompt)
         let prompt = AshPrompt::new(auto_shell::prompt::AshConfig::load());
@@ -299,7 +192,7 @@ impl Repl {
             line_editor = line_editor.with_hinter(h);
         }
 
-        Ok(Self { shell, line_editor, prompt, completion_state, mode_state: Default::default(), chat: None })
+        Ok(Self { shell, line_editor, prompt, completion_state, mode_state: Default::default(), chat: None, use_vi, editor_multiline: false })
     }
 
     /// Get the path to the history file
@@ -377,10 +270,54 @@ impl Repl {
     }
 
     /// Plan 322: Update the AshPrompt character symbol based on ModeState.
-    /// Also handles continuation prompt for multiline.
+    /// Also handles continuation prompt for multiline, swaps the editor's
+    /// Enter behavior (Enter=newline / Ctrl+Enter=submit) when entering or
+    /// leaving the AutoScript lock, and mirrors the lock into the Shell —
+    /// the Shell owns the Auto/Shell dispatch (`locked_mode`), so without
+    /// this the F2 lock only changed the prompt symbol and input still went
+    /// through auto-detect.
     fn update_prompt(&mut self) {
         let symbol = self.mode_state.prompt();
         self.prompt.set_character_symbol(&symbol);
+        self.shell.set_locked_mode(self.mode_state.locked);
+        // Multi-line editing only for the AutoScript LOCK — auto-detect can't
+        // know the mode before the line is complete. Disabled during
+        // syntax-driven continuation, where Enter must submit each `·` line.
+        let multiline = self.mode_state.locked
+            == Some(auto_shell::repl_mode::InputMode::AutoScript)
+            && !self.mode_state.in_continuation;
+        if multiline != self.editor_multiline {
+            self.set_editor_multiline(multiline);
+        }
+    }
+
+    /// Swap the line editor's edit mode for one with the opposite Enter
+    /// behavior. reedline 0.44 cannot mutate keybindings in place, so the
+    /// whole edit mode is rebuilt and installed via `with_edit_mode` — a pure
+    /// field swap, so history/completer/menus/hinter all survive (they live
+    /// on the `Reedline` instance, which is only moved out and back).
+    fn set_editor_multiline(&mut self, multiline: bool) {
+        let mut editor = Reedline::create();
+        std::mem::swap(&mut self.line_editor, &mut editor);
+        editor = editor.with_edit_mode(build_edit_mode(self.use_vi, multiline));
+        std::mem::swap(&mut self.line_editor, &mut editor);
+        self.editor_multiline = multiline;
+    }
+
+    /// Plan 322: apply a mode-switch prefix — toggle the lock (F1=\x11 Shell,
+    /// F2=\x12 AutoScript) or unlock (Esc/F3/F4 prefixes), refresh the prompt,
+    /// and print a one-line mode banner. The symbol alone (`▌>`/`▌#`) is not
+    /// self-explanatory, so every switch announces what the mode does and how
+    /// to leave it.
+    fn apply_mode_switch(&mut self, prefix: char) {
+        use auto_shell::repl_mode::InputMode;
+        match prefix {
+            '\x11' => self.mode_state.toggle_lock(InputMode::Shell),
+            '\x12' => self.mode_state.toggle_lock(InputMode::AutoScript),
+            _ => self.mode_state.unlock(),
+        }
+        self.update_prompt();
+        println!("{}", mode_banner(&self.mode_state));
     }
 
 
@@ -429,27 +366,14 @@ impl Repl {
             };
 
             // Exit prefixes: F4 toggle-off (\x15), Esc (\x14), F1/F2/F3
-            // (\x11/\x12/\x13). Save, unlock AI, then hand the prefix back to
-            // run() by re-running the same mode-switch logic.
+            // (\x11/\x12/\x13). Save, then hand the prefix to the shared
+            // mode-switch helper (toggle/unlock + prompt refresh + banner).
             if let Some(prefix) = line.chars().next() {
                 if matches!(prefix, '\x11' | '\x12' | '\x13' | '\x14' | '\x15') {
                     if let Some(session) = self.chat.as_mut() {
                         let _ = session.save();
                     }
-                    // Re-dispatch the prefix through the normal mode machinery.
-                    match prefix {
-                        '\x11' => self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::Shell),
-                        '\x12' => self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::AutoScript),
-                        '\x13' => {
-                            // F3 one-shot NL→command: leave chat unlocked; the
-                            // outer run() F3 branch handles the actual flow on
-                            // the *next* read. For simplicity we just unlock.
-                            self.mode_state.locked = None;
-                        }
-                        // \x14 (Esc) and \x15 (F4): unlock back to shell.
-                        _ => self.mode_state.locked = None,
-                    }
-                    self.update_prompt();
+                    self.apply_mode_switch(prefix);
                     // If it was F1/F2/F3 with trailing text, we dropped it
                     // (chat doesn't interpret those). Acceptable for v1.
                     break;
@@ -553,9 +477,11 @@ impl Repl {
         Ok(())
     }
 
-    /// Plan 037 M3: execute a command and print a colored block header +
-    /// the command's output. Used by every execution site that captures and
-    /// prints output (main command, AI multi-step, AI suggestion accept/edit).
+    /// Plan 037 M3: execute a command and print its output, prefixed by a
+    /// red right-aligned `✗` marker ONLY when the command failed. Success is
+    /// silent — in the reedline CLI the typed input line sits directly above
+    /// the result, and a "Nms ✓" line would carry no information (slow
+    /// commands surface via the prompt's `$cmd_duration` module instead).
     ///
     /// Returns `(output_snippet, exit_code)`:
     /// - `output_snippet` — first 200 chars of output (for the suggest-next
@@ -564,9 +490,9 @@ impl Repl {
     ///   error; for an `Err` from `execute` we report 1 since no code was set).
     ///
     /// reedline 0.44.0 cannot pin a header while output scrolls, so this is
-    /// the plan's documented fallback: a single header line printed before the
-    /// output. Non-interactive paths (`-c`/`-s`/script) do NOT go through here,
-    /// keeping their machine-readable output free of decoration.
+    /// the plan's documented fallback. Non-interactive paths (`-c`/`-s`/script)
+    /// do NOT go through here, keeping their machine-readable output free of
+    /// decoration.
     fn execute_with_header(&mut self, command: &str) -> (String, i32) {
         let start = std::time::Instant::now();
         let result = self.shell.execute(command);
@@ -579,17 +505,17 @@ impl Repl {
             if code != 0 { code } else { 1 }
         });
 
-        // Terminal width for right-aligning the status (0 = unknown).
+        // Terminal width for right-aligning the marker (0 = unknown).
         let term_width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(0);
 
-        // Print the header, then the output/error.
-        let header = crate::block_header::render_block_header(
-            command,
+        // Print the failure marker (nothing on success), then the output.
+        if let Some(status) = crate::block_header::render_failure_status(
             exit_code,
             elapsed,
             term_width,
-        );
-        println!("{}", header);
+        ) {
+            println!("{}", status);
+        }
 
         let snippet = match result {
             Ok(Some(s)) => {
@@ -659,6 +585,11 @@ impl Repl {
         // One-time Ctrl+C handler init (protects ASH during commands)
         auto_shell::signal::init();
 
+        // Plan 322: start with the mode-aware symbol (`>`) instead of the
+        // pre-322 config default (`❯`), so the prompt looks the same before
+        // and after the first F1/F2 switch.
+        self.update_prompt();
+
         // Initial git cache: sync refresh + start filesystem watcher for cwd
         auto_shell::prompt::context::on_directory_changed(self.shell.pwd());
 
@@ -684,20 +615,17 @@ impl Repl {
 
                     // Plan 322: Mode-switching prefix chars (from F1/F2/F3/Esc keybindings).
                     // \x11=F1 (toggle Shell lock), \x12=F2 (toggle Auto lock),
-                    // \x13=F3 (AI mode), \x14=Esc (unlock).
+                    // \x14=Esc (unlock). Each switch prints a one-line mode banner.
                     if line.starts_with('\x11') {
-                        self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::Shell);
-                        self.update_prompt();
+                        self.apply_mode_switch('\x11');
                         continue;
                     }
                     if line.starts_with('\x12') {
-                        self.mode_state.toggle_lock(auto_shell::repl_mode::InputMode::AutoScript);
-                        self.update_prompt();
+                        self.apply_mode_switch('\x12');
                         continue;
                     }
                     if line.starts_with('\x14') {
-                        self.mode_state.unlock();
-                        self.update_prompt();
+                        self.apply_mode_switch('\x14');
                         continue;
                     }
                     // F3 = AI mode: natural language → command suggestion.
@@ -826,8 +754,8 @@ impl Repl {
                     }
 
                     // Evaluate the line. Plan 037 M3: execute_with_header
-                    // prints the block header (command + duration + status)
-                    // before the output, and returns the snippet for the
+                    // prints a red ✗ marker before the output on failure
+                    // (silent on success) and returns the snippet for the
                     // suggest-next context (§7.3).
                     let (output_snippet, _exit_code) = self.execute_with_header(&line);
                     // After command execution, async-refresh git cache (most
@@ -944,6 +872,281 @@ pub fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
 // them without the frontend-tui feature. This file re-exports them for its own
 // StreamEvent rendering below.
 use auto_shell::ai::brief::{brief_args, brief_result};
+
+/// Common ash keybindings added to every edit-mode keybinding set (Tab
+/// completion, Ctrl+F hint accept, Ctrl+R history menu, F1-F4 mode switches,
+/// Esc unlock, Alt+1/2/3/4 aliases). Module-scope so both the initial editor
+/// build and runtime multiline rebuilds share one source of truth.
+fn add_common_keybindings(keybindings: &mut reedline::Keybindings) {
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::Tab,
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::UntilFound(vec![
+                ReedlineEvent::Menu("completion_menu".to_string()),
+                ReedlineEvent::MenuNext,
+                ReedlineEvent::Edit(vec![EditCommand::Complete]),
+            ]),
+            ReedlineEvent::Repaint,
+        ]),
+    );
+    // Plan 302: Ctrl+F accepts the full autosuggestion hint (Fish-style).
+    // NOTE: must be `HistoryHintComplete`, NOT `EditCommand::Complete` —
+    // the latter triggers the completion *menu* and never accepts a hint.
+    keybindings.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('f'),
+        ReedlineEvent::HistoryHintComplete,
+    );
+    // Plan 302 Step 3.4: Ctrl+→ accepts next word of autosuggestion
+    keybindings.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Right,
+        ReedlineEvent::HistoryHintWordComplete,
+    );
+    // Ctrl+R — pop up the history candidate menu (fzf-history style).
+    // Separate from Tab (command-based) completions: this lists matching
+    // entries from shell history. Supersedes the old inline SearchHistory.
+    keybindings.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('r'),
+        ReedlineEvent::Menu("history_menu".to_string()),
+    );
+    // Ctrl+S — forward history search (legacy inline search retained as a
+    // non-popup fallback alongside the Ctrl+R menu).
+    keybindings.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('s'),
+        ReedlineEvent::SearchHistory,
+    );
+    // Plan 304: Ctrl+E — edit in $EDITOR (sends \x05 prefix)
+    keybindings.add_binding(
+        KeyModifiers::CONTROL,
+        KeyCode::Char('e'),
+        ReedlineEvent::Edit(vec![EditCommand::InsertString("\x05".to_string())]),
+    );
+    // Plan 322: F1/F2/F3 mode switching. Insert a prefix char + submit
+    // immediately (no Enter needed). The run loop detects the prefix.
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::F(1),
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::InsertString("\x11".to_string())]),
+            ReedlineEvent::Submit,
+        ]),
+    );
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::F(2),
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::InsertString("\x12".to_string())]),
+            ReedlineEvent::Submit,
+        ]),
+    );
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::F(3),
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::InsertString("\x13".to_string())]),
+            ReedlineEvent::Submit,
+        ]),
+    );
+    // Plan 027: F4 — enter persistent AI chat mode (insert \x15 + submit).
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::F(4),
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::InsertString("\x15".to_string())]),
+            ReedlineEvent::Submit,
+        ]),
+    );
+    // Esc — unlock mode (insert \x14 + submit).
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::Esc,
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::InsertString("\x14".to_string())]),
+            ReedlineEvent::Submit,
+        ]),
+    );
+    // Plan 322 #4: Alt+1/2/3 as laptop-friendly F1/F2/F3 aliases.
+    for (key, prefix) in [('1', "\x11"), ('2', "\x12"), ('3', "\x13"), ('4', "\x15")] {
+        keybindings.add_binding(
+            KeyModifiers::ALT,
+            KeyCode::Char(key),
+            ReedlineEvent::Multiple(vec![
+                ReedlineEvent::Edit(vec![EditCommand::InsertString(prefix.to_string())]),
+                ReedlineEvent::Submit,
+            ]),
+        );
+    }
+}
+
+/// Build the line editor's edit mode (Emacs or Vi + ash keybindings).
+///
+/// `multiline` reroutes Enter for the AutoScript lock: scripts are naturally
+/// multi-line, so Enter inserts a newline and **Ctrl+Enter** submits. In the
+/// default (non-multiline) build, Enter submits as usual. Ctrl+Enter submits
+/// in BOTH builds so the muscle memory carries across modes. Alt/Shift+Enter
+/// insert newlines in either build via reedline's own default bindings.
+///
+/// Known limitation: in Vi mode plain Enter still submits even when
+/// `multiline` — reedline's Vi parser hardcodes `(NONE, Enter) → Enter`
+/// before consulting the keybinding table (vi/mod.rs), and `EventStatus`
+/// isn't exported, so the parser can't be wrapped. Vi users submit explicit
+/// lines with Ctrl+Enter (which does honor the bindings).
+fn build_edit_mode(use_vi: bool, multiline: bool) -> Box<dyn reedline::EditMode> {
+    let apply_enter_mode = |kb: &mut reedline::Keybindings| {
+        if multiline {
+            kb.add_binding(
+                KeyModifiers::NONE,
+                KeyCode::Enter,
+                ReedlineEvent::Edit(vec![EditCommand::InsertNewline]),
+            );
+        }
+        kb.add_binding(KeyModifiers::CONTROL, KeyCode::Enter, ReedlineEvent::Submit);
+    };
+    if use_vi {
+        let mut insert_kb = default_vi_insert_keybindings();
+        let normal_kb = default_vi_normal_keybindings();
+        add_common_keybindings(&mut insert_kb);
+        apply_enter_mode(&mut insert_kb);
+        Box::new(Vi::new(insert_kb, normal_kb))
+    } else {
+        let mut keybindings = default_emacs_keybindings();
+        add_common_keybindings(&mut keybindings);
+        apply_enter_mode(&mut keybindings);
+        Box::new(Emacs::new(keybindings))
+    }
+}
+
+#[cfg(test)]
+mod build_edit_mode_tests {
+    use super::build_edit_mode;
+    use crossterm::event::{Event, KeyEvent, KeyEventKind, KeyEventState};
+    use reedline::{EditCommand, EditMode, KeyCode, KeyModifiers, ReedlineEvent, ReedlineRawEvent};
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> ReedlineRawEvent {
+        ReedlineRawEvent::try_from(Event::Key(KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn normal_mode_enter_submits() {
+        let mut em = build_edit_mode(false, false);
+        assert!(matches!(
+            em.parse_event(key(KeyCode::Enter, KeyModifiers::NONE)),
+            ReedlineEvent::Enter // default emacs binding (validator path → submit)
+        ));
+    }
+
+    #[test]
+    fn multiline_enter_inserts_newline() {
+        let mut em = build_edit_mode(false, true);
+        assert!(matches!(
+            em.parse_event(key(KeyCode::Enter, KeyModifiers::NONE)),
+            ReedlineEvent::Edit(cmds)
+                if matches!(cmds.as_slice(), [EditCommand::InsertNewline])
+        ));
+    }
+
+    #[test]
+    fn ctrl_enter_submits_in_both_modes() {
+        for multiline in [false, true] {
+            let mut em = build_edit_mode(false, multiline);
+            assert!(
+                matches!(
+                    em.parse_event(key(KeyCode::Enter, KeyModifiers::CONTROL)),
+                    ReedlineEvent::Submit
+                ),
+                "multiline={multiline}"
+            );
+        }
+    }
+
+    #[test]
+    fn vi_enter_hardcoded_submit_but_ctrl_enter_honors_binding() {
+        // reedline's Vi parser hardcodes plain (NONE, Enter) → Enter before
+        // the keybinding table, so the multiline reroute can't apply there;
+        // Ctrl+Enter goes through the table and does submit (see
+        // `build_edit_mode` docs).
+        let mut em = build_edit_mode(true, true);
+        assert!(matches!(
+            em.parse_event(key(KeyCode::Enter, KeyModifiers::NONE)),
+            ReedlineEvent::Enter
+        ));
+        assert!(matches!(
+            em.parse_event(key(KeyCode::Enter, KeyModifiers::CONTROL)),
+            ReedlineEvent::Submit
+        ));
+    }
+}
+
+/// One-line dim description of the current input mode, printed after every
+/// F1/F2/Esc mode switch (and on leaving AI chat via F1/F2/F3/Esc/F4) so the
+/// symbol change (`>` / `▌>` / `▌#`) is self-explanatory. In the AutoScript
+/// lock the editor is multi-line (Enter=newline, Ctrl+Enter=submit); in the
+/// other modes multi-line input remains syntax-driven (unclosed `{ ( [ "`
+/// or trailing `\`).
+fn mode_banner(state: &auto_shell::repl_mode::ModeState) -> String {
+    use auto_shell::repl_mode::InputMode;
+    let dim = |s: &str| format!("  \x1b[2m{s}\x1b[0m");
+    match state.locked {
+        Some(InputMode::Shell) => dim(
+            "▌> Shell 模式已锁定 — 输入一律按命令执行（再按 F1 或 Esc 解锁）",
+        ),
+        Some(InputMode::AutoScript) => dim(
+            "▌# AutoScript 模式已锁定 — 输入 AutoLang 代码，Enter 换行 / Ctrl+Enter 执行\
+             （再按 F2 或 Esc 解锁）",
+        ),
+        // AI is transient (set directly by run_chat_loop, never by
+        // apply_mode_switch); the chat banner already describes it.
+        Some(InputMode::AI) => dim("? AI 对话模式 — /exit 或 Esc 离开"),
+        None => dim(
+            "> 自动检测模式 — 按输入内容自动识别 命令 / AutoLang\
+             （F1 锁定命令，F2 锁定 AutoScript，F3/F4 AI 对话）",
+        ),
+    }
+}
+
+#[cfg(test)]
+mod mode_banner_tests {
+    use super::mode_banner;
+    use auto_shell::repl_mode::{InputMode, ModeState};
+
+    #[test]
+    fn locked_shell_banner_explains_lock_and_exit() {
+        let mut ms = ModeState::default();
+        ms.toggle_lock(InputMode::Shell);
+        let b = mode_banner(&ms);
+        assert!(b.contains("Shell 模式已锁定"));
+        assert!(b.contains("解锁"));
+        assert!(b.starts_with("  \x1b[2m"), "banner should be dim + indented");
+    }
+
+    #[test]
+    fn locked_autoscript_banner_mentions_newline_and_submit_keys() {
+        let mut ms = ModeState::default();
+        ms.toggle_lock(InputMode::AutoScript);
+        let b = mode_banner(&ms);
+        assert!(b.contains("AutoScript 模式已锁定"));
+        assert!(b.contains("Enter 换行"));
+        assert!(b.contains("Ctrl+Enter 执行"));
+    }
+
+    #[test]
+    fn unlocked_banner_explains_auto_detect_and_keys() {
+        let b = mode_banner(&ModeState::default());
+        assert!(b.contains("自动检测"));
+        assert!(b.contains("F1"));
+        assert!(b.contains("F2"));
+    }
+}
 
 #[cfg(test)]
 mod read_recent_history_tests {

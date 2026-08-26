@@ -38,6 +38,22 @@ TIERS (highest priority first):
 Format: Auto/Atom (.at). `generate` parses the command's --help output.
 ";
 
+/// AutoLang builtin names, sourced from the engine's own registration map
+/// (`auto_lang::libs::builtin::builtins()` — the same map
+/// `ExecutionEngine::new` installs). Used by auto-detection so builtin calls
+/// like `print("hello")` are recognized as Auto code. Cached once per
+/// process; the map is deterministic.
+fn auto_builtin_names() -> &'static std::collections::HashSet<String> {
+    static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        auto_lang::libs::builtin::builtins()
+            .keys()
+            .map(|n| n.to_string())
+            .collect()
+    })
+}
+
 /// Print the output of a shell command without adding a spurious trailing
 /// newline. Commands like `echo` already end their captured output with `\n`;
 /// using `println!("{}", output)` would emit a second `\n`, producing blank
@@ -1692,13 +1708,18 @@ impl Shell {
     }
 
     /// Check if input looks like a function call to an Auto function
+    /// (user-defined OR a language builtin such as `print`).
     fn is_function_call(&self, input: &str) -> bool {
         // Check if it matches pattern: name(...)
         if let Some(paren_pos) = input.find('(') {
             if input.ends_with(')') {
-                let func_name = &input[..paren_pos].trim();
-                // Check if this is a registered Auto function
-                return self.has_auto_function(func_name);
+                let func_name = input[..paren_pos].trim();
+                // Check if this is a registered Auto function or builtin.
+                // Builtins must be recognized here too: without this,
+                // `print("hello")` fell through auto-detection to the Shell
+                // path (PowerShell tried to run `print(hello)`).
+                return self.has_auto_function(func_name)
+                    || auto_builtin_names().contains(func_name);
             }
         }
         false
@@ -4717,6 +4738,21 @@ mod tests {
     }
 
     #[test]
+    fn locked_autoscript_forces_auto_path() {
+        // Plan 322: the lock must actually route — under an AutoScript lock a
+        // shell command like `ls` goes to the Auto VM (parse error), never to
+        // the Shell path. The REPL syncs this via `set_locked_mode`.
+        let mut shell = Shell::new();
+        shell.set_locked_mode(Some(crate::repl_mode::InputMode::AutoScript));
+        let r = shell.execute("ls");
+        assert!(r.is_err(), "locked Auto must not fall back to shell: {:?}", r);
+
+        // And expressions still evaluate under the lock.
+        let r = shell.execute("1 + 2");
+        assert_eq!(r.unwrap(), Some("3".to_string()));
+    }
+
+    #[test]
     fn test_is_auto_expression() {
         let shell = Shell::new();
 
@@ -4726,6 +4762,13 @@ mod tests {
         assert!(shell.is_auto_expression("fn add() {}"), "fn keyword");
         assert!(shell.is_auto_expression("\"hello\""), "string literal");
         assert!(shell.is_auto_expression("3.14 / 2"), "float arithmetic");
+        // Builtin calls count as Auto (Plan 322 fix: `print("hello")` used to
+        // fall through auto-detection to the Shell path).
+        assert!(shell.is_auto_expression("print(\"hello\")"), "print builtin");
+        assert!(
+            shell.is_auto_expression("str_upper(\"abc\")"),
+            "str builtin"
+        );
 
         // Should NOT be recognized (Shell commands)
         assert!(!shell.is_auto_expression("ls"), "ls");

@@ -1,22 +1,29 @@
-//! Block header rendering — Plan 037 M3 (degraded "Block UX").
+//! Block status rendering — Plan 037 M3 (degraded "Block UX").
 //!
 //! reedline 0.44.0 is an immediate-mode line editor with no scroll-region /
 //! alternate-screen / sticky-header API, so a true Warp-style block (header
 //! pinned while the body scrolls) is not achievable without forking the line
-//! editor. This module implements the plan's documented fallback: print a
-//! single colored header line before each command's output.
+//! editor. This module is what remains of that fallback in the reedline CLI:
+//! a single red right-aligned status marker printed before a FAILED
+//! command's output.
 //!
-//! The header mirrors ash-gui's block color convention
-//! (`ash-gui-bin/src/renderer.rs:193-199`):
-//!   - success (exit 0)  → green `✓`
-//!   - failure (exit≠0)  → red   `✗`
+//! Success is silent — the user's typed input line sits directly above the
+//! result (so echoing the command is noise), and a happy-path "0ms  ✓" line
+//! carries no information. Failures keep the marker because silent non-zero
+//! exits (e.g. `grep` with no match) would otherwise be invisible;
+//! slow-command feedback lives in the next prompt via the `$cmd_duration`
+//! module (default threshold: 2s).
 //!
-//! Layout (right-aligned status within the terminal width):
+//! Layout (marker right-aligned within the terminal width):
 //!
 //! ```text
-//!   ❯ ls -la                              12ms  ✓
-//!   ❯ cat missing                          3ms  ✗
+//!   > cat missing       ← the user's typed input line (reedline leaves it here)
+//!                                              3ms  ✗
+//!   cat: missing: No such file or directory
 //! ```
+//!
+//! (The full-screen block TUI — `block_tui.rs` — keeps its own header WITH
+//! the command, because there the input line is consumed into the block.)
 //!
 //! All functions here are pure (no I/O) so they unit-test without a terminal.
 
@@ -24,60 +31,37 @@ use nu_ansi_term::{Color, Style};
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
-/// Render the block header line (WITHOUT a trailing newline). The caller is
-/// expected to `println!` it.
+/// Render the failure status marker (WITHOUT a trailing newline), or `None`
+/// on success — the caller prints nothing in that case.
 ///
-/// - `command`    — the (post-expansion) command text to echo.
-/// - `exit_code`  — the command's exit code; 0 = success, anything else = failure.
+/// - `exit_code`  — the command's exit code; 0 = success (→ `None`), anything
+///                   else = failure (→ red right-aligned marker).
 /// - `duration`   — how long the command took.
 /// - `term_width` — current terminal column count (for right-aligning the
-///                   status). When 0 (width unknown), the status is printed
-///                   left-aligned after a single space.
-pub fn render_block_header(
-    command: &str,
+///                   marker). When 0 (width unknown), the marker is emitted
+///                   bare (no padding).
+pub fn render_failure_status(
     exit_code: i32,
     duration: Duration,
     term_width: u16,
-) -> String {
-    let ok = exit_code == 0;
-    let (status_icon, status_color) = if ok {
-        ("✓", Color::Green)
-    } else {
-        ("✗", Color::Red)
-    };
-    let duration_str = format_duration(duration);
+) -> Option<String> {
+    if exit_code == 0 {
+        return None;
+    }
 
-    // Left side: "❯ {command}" in dim gray (echoes the prompt indicator).
-    let left = format!("❯ {}", command);
-    // Right side: "{duration}  {icon}" colored by status.
-    let right_plain = format!("{}  {}", duration_str, status_icon);
-    let right = Style::new().fg(status_color).paint(&right_plain).to_string();
-
-    // Right-align the status within term_width. Both `left` and `right_plain`
-    // carry ANSI codes when colored; measure display width on the *plain*
-    // text so the on-screen columns line up.
-    let left_width = UnicodeWidthStr::width(left.as_str()) as usize;
+    // "{duration}  ✗" in red. It carries ANSI codes; measure display width
+    // on the *plain* text so the on-screen columns line up.
+    let right_plain = format!("{}  ✗", format_duration(duration));
+    let right = Style::new().fg(Color::Red).paint(&right_plain).to_string();
     let right_width = UnicodeWidthStr::width(right_plain.as_str()) as usize;
 
     let w = term_width as usize;
-    if w == 0 {
-        // Width unknown — just join with a space.
-        format!("{} {}", dim(&left), right)
-    } else if left_width + right_width >= w {
-        // Not enough room for both side by side — drop the padding so the
-        // status follows on the same line tight against the command. If even
-        // that overflows the terminal will wrap naturally; no panic.
-        format!("{} {}", dim(&left), right)
+    Some(if w == 0 || right_width >= w {
+        // Width unknown (or terminal narrower than the marker) — no padding.
+        right
     } else {
-        let pad = w - left_width - right_width;
-        format!("{}{}{}", dim(&left), " ".repeat(pad), right)
-    }
-}
-
-/// Dim/gray styling for the echoed command + indicator (mirrors the prompt's
-/// use of DarkGray for secondary text).
-fn dim(s: &str) -> String {
-    Style::new().fg(Color::DarkGray).paint(s).to_string()
+        format!("{}{}", " ".repeat(w - right_width), right)
+    })
 }
 
 /// Format a duration compactly. Mirrors the three-tier logic of the prompt's
@@ -105,24 +89,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_success_header_has_green_check() {
-        let h = render_block_header("ls", 0, Duration::from_millis(12), 80);
-        assert!(h.contains("✓"), "success header should contain ✓: {}", h);
-        assert!(h.contains("ls"), "should echo the command");
-        assert!(
-            h.contains("\x1b[32m") || h.contains("\x1b[38;5;2m"),
-            "status should be green-ish (ANSI 32 or 38;5;2): {}",
-            h
-        );
+    fn test_success_is_silent() {
+        // Exit 0 → nothing to print; a happy-path "Nms ✓" line would be noise.
+        assert!(render_failure_status(0, Duration::from_millis(12), 80).is_none());
     }
 
     #[test]
-    fn test_failure_header_has_red_cross() {
-        let h = render_block_header("cat missing", 1, Duration::from_millis(3), 80);
-        assert!(h.contains("✗"), "failure header should contain ✗: {}", h);
+    fn test_failure_has_red_cross() {
+        let h = render_failure_status(1, Duration::from_millis(3), 80).unwrap();
+        assert!(h.contains("✗"), "failure marker should contain ✗: {}", h);
         assert!(
             h.contains("\x1b[31m") || h.contains("\x1b[38;5;1m"),
-            "status should be red-ish (ANSI 31 or 38;5;1): {}",
+            "marker should be red-ish (ANSI 31 or 38;5;1): {}",
             h
         );
     }
@@ -138,30 +116,32 @@ mod tests {
     }
 
     #[test]
-    fn test_long_command_does_not_panic() {
-        // A command far wider than any terminal — must not panic and must
-        // still contain the command text and a status icon.
-        let long = "x".repeat(500);
-        let h = render_block_header(&long, 0, Duration::from_millis(1), 80);
-        assert!(h.contains(&long));
-        assert!(h.contains("✓"));
-    }
-
-    #[test]
     fn test_zero_width_unknown_terminal() {
-        // term_width = 0 means "unknown" — header should still render with
-        // both sides present (joined by a space), no padding math.
-        let h = render_block_header("ls", 0, Duration::from_millis(5), 0);
-        assert!(h.contains("❯ ls"));
-        assert!(h.contains("✓"));
+        // term_width = 0 means "unknown" — the marker is returned bare (no
+        // padding math, no panic).
+        let h = render_failure_status(2, Duration::from_millis(5), 0).unwrap();
+        assert!(h.contains("5ms"));
+        assert!(h.contains("✗"));
     }
 
     #[test]
     fn test_right_alignment_padding() {
-        // With a wide terminal, there should be a run of spaces pushing the
-        // status to the right edge.
-        let h = render_block_header("ls", 0, Duration::from_millis(5), 100);
-        // left "❯ ls" = 5 cols; right "5ms  ✓" = 7 cols → pad = 100-5-7 = 88
-        assert!(h.contains(&" ".repeat(88)), "expected 88 spaces of padding");
+        // With a known width the marker is pushed to the right edge: it
+        // starts with a run of spaces and ends with the colored marker
+        // (ANSI reset sequence included).
+        let h = render_failure_status(1, Duration::from_millis(5), 100).unwrap();
+        let pad = h.len() - h.trim_start_matches(' ').len();
+        assert!(pad > 0, "expected leading padding to right-align: {:?}", h);
+        assert!(h.contains("5ms  ✗"));
+        assert!(h.ends_with("\x1b[0m"), "marker should be the last span: {:?}", h);
+    }
+
+    #[test]
+    fn test_narrow_terminal_no_panic() {
+        // A terminal narrower than the marker itself — must not panic; the
+        // marker is emitted without padding.
+        let h = render_failure_status(1, Duration::from_millis(12345), 3).unwrap();
+        assert!(h.contains("12.3s"));
+        assert!(h.contains("✗"));
     }
 }
