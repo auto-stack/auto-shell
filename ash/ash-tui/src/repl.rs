@@ -276,15 +276,10 @@ impl Repl {
     }
 
     /// Plan 322: apply a mode-switch prefix — toggle the lock (F1=\x11 Shell,
-    /// F2=\x12 AutoScript) or unlock (Esc/F3/F4 prefixes), refresh the prompt,
-    /// and print a one-line mode banner. The symbol alone (`▌>`/`▌#`) is not
-    /// self-explanatory, so every switch announces what the mode does and how
-    /// to leave it.
-    ///
-    /// Exception: entering the AutoScript lock stays quiet — the editor box
-    /// that opens immediately carries the mode as its border title, and any
-    /// banner here would sit between the erased input row and the box (the
-    /// editor erases exactly one row on entry).
+    /// F2=\x12 AutoScript) or unlock (Esc/F3/F4 prefixes) and refresh the
+    /// prompt. The mode is announced by the right-prompt tag (`auto`/`Shell`)
+    /// and, for the AutoScript lock, by the editor box title — no banner
+    /// lines in the transcript (Plan 070).
     fn apply_mode_switch(&mut self, prefix: char) {
         use auto_shell::repl_mode::InputMode;
         match prefix {
@@ -293,29 +288,25 @@ impl Repl {
             _ => self.mode_state.unlock(),
         }
         self.update_prompt();
-        if self.mode_state.locked != Some(InputMode::AutoScript) {
-            println!("{}", mode_banner(&self.mode_state));
-        }
     }
 
     /// Plan 070: the AutoScript lock opens the editor box (single-shot). Any
-    /// outcome — run (echo + execute), cancel (dim echo), or plain exit —
-    /// returns to the normal inline mode afterwards.
+    /// outcome — run (boxed echo + execute), cancel (boxed echo), or plain
+    /// exit — returns to the normal inline mode afterwards.
     fn open_script_editor(&mut self) {
         match crate::editor_overlay::run_editor("", "▌# AutoScript") {
             crate::editor_overlay::EditorOutcome::Run(text) => {
-                self.commit_script_echo(&text, None);
+                self.commit_script_echo("▌# AutoScript", &text, false);
                 let _ = self.execute_with_header(&text);
                 self.after_editor_execute();
             }
             crate::editor_overlay::EditorOutcome::Cancelled(text) => {
-                self.commit_script_echo(&text, Some("已取消"));
+                self.commit_script_echo("▌# AutoScript", &text, true);
             }
             crate::editor_overlay::EditorOutcome::Exit => {}
         }
         self.mode_state.unlock();
         self.update_prompt();
-        println!("{}", mode_banner(&self.mode_state));
     }
 
     /// Plan 070: Ctrl+O — one-shot editor box from any inline mode, seeded
@@ -324,12 +315,12 @@ impl Repl {
     fn run_editor_once(&mut self, prefill: &str) {
         match crate::editor_overlay::run_editor(prefill, "> 命令") {
             crate::editor_overlay::EditorOutcome::Run(text) => {
-                self.commit_script_echo(&text, None);
+                self.commit_script_echo("> 命令", &text, false);
                 let _ = self.execute_with_header(&text);
                 self.after_editor_execute();
             }
             crate::editor_overlay::EditorOutcome::Cancelled(text) => {
-                self.commit_script_echo(&text, Some("已取消"));
+                self.commit_script_echo("> 命令", &text, true);
             }
             crate::editor_overlay::EditorOutcome::Exit => {}
         }
@@ -342,15 +333,15 @@ impl Repl {
         self.sync_completion_state();
     }
 
-    /// Plan 070: commit editor content into the linear transcript — dim
-    /// script lines (copy-friendly, no line numbers) plus an optional marker.
-    fn commit_script_echo(&self, text: &str, marker: Option<&str>) {
-        for line in text.lines() {
-            println!("  \x1b[2m{line}\x1b[0m");
-        }
-        if let Some(m) = marker {
-            println!("  \x1b[2m— {m} —\x1b[0m");
-        }
+    /// Plan 070: commit editor content into the linear transcript — a dim,
+    /// rounded-border, line-numbered box (same visual language as the live
+    /// editor box), so the echo reads as "what was in the box" and stays
+    /// copy-friendly.
+    fn commit_script_echo(&self, title: &str, text: &str, cancelled: bool) {
+        println!(
+            "{}",
+            crate::editor_overlay::render_script_block(title, text, cancelled)
+        );
     }
 
 
@@ -622,6 +613,10 @@ impl Repl {
         // pre-322 config default (`❯`), so the prompt looks the same before
         // and after the first F1/F2 switch.
         self.update_prompt();
+
+        // Plan 070: one-time key legend; modes themselves live on the right
+        // prompt (`auto` / `Shell` / `AI` tag).
+        println!("{}", startup_legend());
 
         // Initial git cache: sync refresh + start filesystem watcher for cwd
         auto_shell::prompt::context::on_directory_changed(self.shell.pwd());
@@ -1123,66 +1118,23 @@ mod build_edit_mode_tests {
     }
 }
 
-/// One-line dim description of the current input mode, printed after every
-/// F1/F2/Esc mode switch (and on leaving AI chat via F1/F2/F3/Esc/F4) so the
-/// symbol change (`>` / `▌>`) is self-explanatory. The AutoScript lock
-/// bypasses this on entry (the editor box carries the mode as its title);
-/// its banner only describes the box semantics if ever shown. In the inline
-/// modes multi-line input remains syntax-driven (unclosed `{ ( [ "` or
-/// trailing `\`).
-fn mode_banner(state: &auto_shell::repl_mode::ModeState) -> String {
-    use auto_shell::repl_mode::InputMode;
-    let dim = |s: &str| format!("  \x1b[2m{s}\x1b[0m");
-    match state.locked {
-        Some(InputMode::Shell) => dim(
-            "▌> Shell 模式已锁定 — 输入一律按命令执行（再按 F1 或 Esc 解锁）",
-        ),
-        Some(InputMode::AutoScript) => dim(
-            "▌# AutoScript — 脚本编辑器:Enter 换行 / Ctrl+Enter 运行 / Esc 取消退出\
-             （运行或取消后回到普通模式;任意时刻 Ctrl+O 也可唤出编辑器）",
-        ),
-        // AI is transient (set directly by run_chat_loop, never by
-        // apply_mode_switch); the chat banner already describes it.
-        Some(InputMode::AI) => dim("? AI 对话模式 — /exit 或 Esc 离开"),
-        None => dim(
-            "> 自动检测模式 — 按输入内容自动识别 命令 / AutoLang\
-             （F1 锁定命令，F2 脚本编辑器，F3/F4 AI 对话，Ctrl+O 编辑当前行）",
-        ),
-    }
+/// Plan 070: one-time key legend, printed at REPL startup. Mode changes are
+/// announced by the right-prompt tag (`auto`/`Shell`/`AI`) instead of the
+/// old per-switch banners — the transcript stays clean.
+fn startup_legend() -> &'static str {
+    "  \x1b[2mF1 命令锁 · F2 脚本编辑器 · F3/F4 AI 对话 · Ctrl+O 编辑当前行 · Tab 补全 · Ctrl+R 历史\x1b[0m"
 }
 
 #[cfg(test)]
-mod mode_banner_tests {
-    use super::mode_banner;
-    use auto_shell::repl_mode::{InputMode, ModeState};
+mod startup_legend_tests {
+    use super::startup_legend;
 
     #[test]
-    fn locked_shell_banner_explains_lock_and_exit() {
-        let mut ms = ModeState::default();
-        ms.toggle_lock(InputMode::Shell);
-        let b = mode_banner(&ms);
-        assert!(b.contains("Shell 模式已锁定"));
-        assert!(b.contains("解锁"));
-        assert!(b.starts_with("  \x1b[2m"), "banner should be dim + indented");
-    }
-
-    #[test]
-    fn locked_autoscript_banner_mentions_editor_and_keys() {
-        let mut ms = ModeState::default();
-        ms.toggle_lock(InputMode::AutoScript);
-        let b = mode_banner(&ms);
-        assert!(b.contains("AutoScript"));
-        assert!(b.contains("脚本编辑器"));
-        assert!(b.contains("Enter 换行"));
-        assert!(b.contains("Ctrl+Enter 运行"));
-    }
-
-    #[test]
-    fn unlocked_banner_explains_auto_detect_and_keys() {
-        let b = mode_banner(&ModeState::default());
-        assert!(b.contains("自动检测"));
-        assert!(b.contains("F1"));
-        assert!(b.contains("F2"));
+    fn legend_covers_every_mode_key() {
+        let l = startup_legend();
+        for key in ["F1", "F2", "F3", "F4", "Ctrl+O", "Tab", "Ctrl+R"] {
+            assert!(l.contains(key), "legend should mention {key}: {l}");
+        }
     }
 }
 

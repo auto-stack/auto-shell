@@ -21,6 +21,10 @@
 mod term;
 mod view;
 
+/// The committed-echo renderer (boxed, dim, line-numbered) — used by the
+/// REPL to print what was in the editor box.
+pub use view::render_script_block;
+
 use ratatui_crossterm::crossterm::cursor;
 use ratatui_crossterm::crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui_crossterm::crossterm::execute;
@@ -35,6 +39,14 @@ const VIEWPORT_HEIGHT: u16 = 12;
 
 /// Key hints shown in the box's bottom border title.
 const HINTS: &str = "Enter 换行 · Ctrl+Enter 运行 · Esc 取消退出";
+
+/// Whether the OS hardware cursor should track the textarea cursor (IME
+/// anchoring). Off by default — the textarea renders its own block cursor,
+/// and a second hardware cursor reads as an offset underline (auto-ai 029
+/// made the same call, pi likewise).
+fn hardware_cursor() -> bool {
+    std::env::var("ASH_HARDWARE_CURSOR").map(|v| v == "1").unwrap_or(false)
+}
 
 /// What the caller should do after the modal closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,14 +127,18 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
 
     let outcome = loop {
         let chunk = view::draw(&mut terminal, &mut textarea, mode_hint, HINTS)?;
-        // Hardware cursor on the textarea's cursor cell — the IME anchor
-        // (029 §2.4 manual equivalent of pi's CURSOR_MARKER).
-        let sc = textarea.screen_cursor();
-        let _ = execute!(
-            io::stdout(),
-            cursor::MoveTo(chunk.x + sc.col as u16, chunk.y + sc.row as u16),
-            cursor::Show
-        );
+        // Hardware cursor: OFF by default. The textarea draws its own block
+        // cursor — a second hardware cursor shows up as the offset underline
+        // users see (auto-ai 029 hit the same thing). Opt in via
+        // ASH_HARDWARE_CURSOR=1 when IME anchoring is needed.
+        if hardware_cursor() {
+            let sc = textarea.screen_cursor();
+            let _ = execute!(
+                io::stdout(),
+                cursor::MoveTo(chunk.x + sc.col as u16, chunk.y + sc.row as u16),
+                cursor::Show
+            );
+        }
 
         let Event::Key(key) = read()? else {
             continue;

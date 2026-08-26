@@ -31,19 +31,17 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Close the modal cleanly: blank the viewport rows (a final empty frame
-/// erases the editor visuals), park the cursor on the line below, and show
-/// it. After this the caller prints linearly from a fresh line.
+/// Close the modal cleanly: clear the box rows IN PLACE (cursor to the box's
+/// top-left, clear to end of screen — the rows below were already overwritten
+/// by the box draws). The caller then prints the committed echo starting at
+/// that row, so no blank gap remains between the transcript and the echo.
 pub fn exit_modal(terminal: &mut EditorTerminal) {
-    // Empty frame → ratatui diffs against the last (editor) frame and clears
-    // the viewport rows.
-    let _ = terminal.draw(|_f| {});
-    let bottom = terminal.get_frame().area().bottom();
-    let last_row = bottom.saturating_sub(1);
+    let area = terminal.get_frame().area();
     let _ = ratatui_crossterm::crossterm::execute!(
         io::stdout(),
-        ratatui_crossterm::crossterm::cursor::MoveTo(0, last_row),
-        ratatui_crossterm::crossterm::style::Print("\r\n"),
-        ratatui_crossterm::crossterm::cursor::Show
+        ratatui_crossterm::crossterm::cursor::MoveTo(0, area.y),
+        ratatui_crossterm::crossterm::terminal::Clear(
+            ratatui_crossterm::crossterm::terminal::ClearType::FromCursorDown
+        ),
     );
 }

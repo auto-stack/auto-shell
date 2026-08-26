@@ -41,6 +41,10 @@ pub struct AshPrompt {
     /// width (`▌# ` → `·· `), so wrapped/continuation lines align with the
     /// first input line. Updated by `set_character_symbol`.
     multiline_indicator: String,
+    /// Plan 070: compact mode tag shown on the right prompt before the time
+    /// (`auto` / `Shell` / `AI`) — the persistent, zero-clutter replacement
+    /// for the old one-line mode banners. Updated by `set_character_symbol`.
+    mode_tag: String,
 }
 
 impl AshPrompt {
@@ -53,6 +57,7 @@ impl AshPrompt {
             multiline_indicator: Self::indicator_for(&config.module_string(
                 "character", "success", "❯",
             )),
+            mode_tag: "auto".to_string(),
             config,
         };
 
@@ -85,11 +90,28 @@ impl AshPrompt {
 
     /// Plan 322: Override the character module's success symbol at runtime
     /// (used for mode switching: > / # / ? / ·). When locked, uses Blue color.
+    /// Also refreshes the width-matched continuation indicator and the right
+    /// -prompt mode tag derived from the symbol.
     pub fn set_character_symbol(&mut self, symbol: &str) {
         let locked = symbol.starts_with("▌");
         let clean = symbol.trim_start_matches("▌");
         self.multiline_indicator = Self::indicator_for(symbol);
+        if let Some(tag) = Self::mode_tag_for(symbol) {
+            self.mode_tag = tag.to_string();
+        }
         self.character = Box::new(CharacterModule::with_symbol_locked(clean, locked));
+    }
+
+    /// Plan 070: map the mode symbol to the compact right-prompt tag. The
+    /// continuation symbol `·` keeps the previous tag (it isn't a mode).
+    fn mode_tag_for(symbol: &str) -> Option<&'static str> {
+        match symbol {
+            ">" | "❯" => Some("auto"),
+            "▌>" => Some("Shell"),
+            "▌#" | "#" => Some("Auto"),
+            "▌?" | "?" => Some("AI"),
+            _ => None, // "·" (continuation) — keep the current tag
+        }
     }
 
     /// Plan 070: build a continuation indicator with the SAME display width as
@@ -136,9 +158,17 @@ impl AshPrompt {
             .filter_map(|m| m.render(ctx))
             .collect();
 
-        segments
-            .iter()
-            .map(|s| s.to_ansi_string())
+        // Plan 070: the mode tag leads the right prompt (dim), e.g.
+        // `auto [15:53]` — the persistent replacement for mode banners.
+        let tag = crate::prompt::module::PromptSegment::new(
+            format!("{} ", self.mode_tag),
+            crate::prompt::module::SegmentStyle {
+                fg: Some(nu_ansi_term::Color::DarkGray),
+                ..Default::default()
+            },
+        );
+        std::iter::once(tag.to_ansi_string())
+            .chain(segments.iter().map(|s| s.to_ansi_string()))
             .collect::<Vec<_>>()
             .join("")
     }
@@ -258,5 +288,23 @@ mod tests {
                 "symbol {symbol:?}: indicator {indicator:?}"
             );
         }
+    }
+
+    /// Plan 070: the right-prompt mode tag derives from the symbol; the
+    /// continuation `·` keeps the previous tag.
+    #[test]
+    fn test_mode_tag_follows_symbol() {
+        use reedline::Prompt;
+
+        let mut prompt = AshPrompt::new(AshConfig::default());
+        prompt.set_character_symbol("▌>");
+        assert!(prompt.render_prompt_right().contains("Shell"));
+        prompt.set_character_symbol("▌?");
+        assert!(prompt.render_prompt_right().contains("AI"));
+        // Continuation keeps the previous tag (AI), then a real mode resets it.
+        prompt.set_character_symbol("·");
+        assert!(prompt.render_prompt_right().contains("AI"));
+        prompt.set_character_symbol(">");
+        assert!(prompt.render_prompt_right().contains("auto"));
     }
 }
