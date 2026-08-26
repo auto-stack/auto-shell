@@ -3,18 +3,20 @@
 //! The "third layer" of the linear-dynamic CLI (auto-ai 029 model): output
 //! stays in the native scrollback (linear archive), reedline keeps the inline
 //! single-line tail (dynamic tail), and heavy interaction — multi-line
-//! script editing — opens this ratatui [`Viewport::Inline`] modal on demand.
+//! script editing — opens this rounded-border input box via a ratatui
+//! [`Viewport::Inline`] on demand.
 //!
-//! - Enter inserts a newline; **Ctrl+Enter runs**; Esc cancels (content is
-//!   dim-committed by the caller so nothing is lost) and exits on an empty
-//!   buffer (double-Esc leaves the AutoScript lock).
+//! - Enter inserts a newline; **Ctrl+Enter runs**; Esc exits the modal —
+//!   with a non-empty buffer the content is dim-committed by the caller so
+//!   nothing is lost (empty-buffer Esc is a plain exit).
+//! - Single-shot: every outcome (Run/Cancelled/Exit) closes the modal; the
+//!   F2 AutoScript lock returns to the normal inline mode afterwards.
 //! - No alternate screen, no mouse capture — native copy/paste keeps working.
 //! - Runs strictly BETWEEN two reedline `read_line` calls: reedline returns
 //!   to cooked mode between reads (see block_tui.rs "Terminal ownership"), so
-//!   terminal ownership never overlaps.
-//! - v1 is single-shot: on Run/Cancelled the modal exits and the caller
-//!   reopens it (the F2 lock loop). The cancelled-content commit therefore
-//!   happens in the caller via plain prints, no `insert_before` needed yet.
+//!   terminal ownership never overlaps. The just-submitted inline input row
+//!   is erased on entry so no stray `>` line stays above the box (wrapped
+//!   multi-row inputs leave residue — accepted v1).
 
 mod term;
 mod view;
@@ -22,24 +24,27 @@ mod view;
 use ratatui_crossterm::crossterm::cursor;
 use ratatui_crossterm::crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui_crossterm::crossterm::execute;
+use ratatui_crossterm::crossterm::terminal::{Clear, ClearType};
 use ratatui_textarea::{CursorMove, TextArea};
 use std::io;
 
-/// Viewport height (editor rows + status line). Fixed at creation — ratatui
+/// Viewport height (box borders + editor rows). Fixed at creation — ratatui
 /// Inline viewports cannot resize without rebuilding the Terminal (029 §5.1);
 /// longer scripts scroll inside the textarea instead.
 const VIEWPORT_HEIGHT: u16 = 12;
+
+/// Key hints shown in the box's bottom border title.
+const HINTS: &str = "Enter 换行 · Ctrl+Enter 运行 · Esc 取消退出";
 
 /// What the caller should do after the modal closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorOutcome {
     /// Ctrl+Enter — run the buffer content.
     Run(String),
-    /// Esc with a non-empty buffer — dim-commit the content (caller), reopen
-    /// or return to inline. Nothing is lost and stays copyable.
+    /// Esc with a non-empty buffer — dim-commit the content (caller);
+    /// nothing is lost and stays copyable.
     Cancelled(String),
-    /// Esc (or Ctrl+C) on an empty buffer — exit the modal; for the F2 lock
-    /// this also leaves the lock.
+    /// Esc (or Ctrl+C) on an empty buffer — plain exit.
     Exit,
 }
 
@@ -86,6 +91,18 @@ pub fn run_editor(prefill: &str, mode_hint: &str) -> EditorOutcome {
 }
 
 fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome> {
+    // Erase the just-submitted inline input row (the `>` line carrying only
+    // the invisible mode marker) so the box doesn't leave a stray prompt
+    // above it; the freed row is where the Inline viewport anchors. Nothing
+    // may print between the reedline submit and here, or the wrong row gets
+    // erased (see `apply_mode_switch`'s AutoScript suppression).
+    let _ = execute!(
+        io::stdout(),
+        cursor::MoveUp(1),
+        Clear(ClearType::CurrentLine),
+        cursor::MoveToColumn(0),
+    );
+
     let (guard, mut terminal) = term::TerminalGuard::enter(VIEWPORT_HEIGHT)?;
 
     let mut textarea = TextArea::from(prefill.lines().map(String::from).collect::<Vec<_>>());
@@ -96,10 +113,8 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
         ratatui_core::style::Color::DarkGray,
     ));
 
-    let status = format!("{mode_hint} · Enter 换行 · Ctrl+Enter 运行 · Esc 取消/双击退出");
-
     let outcome = loop {
-        let chunk = view::draw(&mut terminal, &mut textarea, &status)?;
+        let chunk = view::draw(&mut terminal, &mut textarea, mode_hint, HINTS)?;
         // Hardware cursor on the textarea's cursor cell — the IME anchor
         // (029 §2.4 manual equivalent of pi's CURSOR_MARKER).
         let sc = textarea.screen_cursor();
