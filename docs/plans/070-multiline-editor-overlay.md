@@ -1,7 +1,16 @@
 # 070 — 多行编辑重构:底部动态脚本编辑器(ratatui Inline 模态)
 
 - 日期:2026-08-26
-- 状态:**待实施**
+- 状态:**已实施(plan-070 worktree 分支,commit 9fc4718)——自动化验证过;F2/Ctrl+O 真终端交互冒烟待人工**
+- 实施记录(2026-08-26):
+  - Phase 1+2+3 合并落地:editor_overlay/(mod/term/view 三文件)完整模态;
+    Ctrl+O 接线(覆盖 reedline 默认 OpenEditor,\x0f 后缀标记+strip_suffix 预填);
+    F2 经 run 循环顶守卫统一进入编辑器循环(chat 内 F2 退出同样收口);
+    行号 gutter(textarea 原生)+硬件光标定位(IME)在列。
+  - 与计划的偏差:内联多行基建(build_edit_mode multiline 参数/set_editor_multiline)
+    整体拆除而非保留——F2 不再回到内联,死代码不留;Ctrl+Enter=提交移入公共绑定。
+  - v1 简化:模态单发(取消/运行后由调用方重开),未用 insert_before 提交取消内容,
+    改由调用方暗色 println——语义等价、终端处理更简单;Phase 4(syntect 高亮)未做。
 - 决策背景(用户裁定,2026-08-26):AutoScript 锁定的内联多行(Enter=换行)语义正确但
   呈现不合格——续行指示符与提示符不对齐、无行号、无滚动视界。参照 auto-ai 029
   「线性输出 + 尾部动态 + 按需模态」三层模型,多行编辑属于重交互,应从 reedline
