@@ -800,10 +800,11 @@ Phase 1 前端文件(prompt_bar/block_list 等)编译时无 known_sub_widgets,�
    生成缺位 —— auto-shell 侧已加 restore-vue-assets.py 同步脚本兜底,
    根治仍应 codegen 产出。
 6. ~~master codegen 对 `oninput` 发 `$event.target.value` 实参致 TS2554~~
-   ✅ **已修**(auto-lang 4c9dc5516,plan-008 会话):文本实参按 handler
-   声明形参判定,0 参 handler 回退裸调用。Plan 068 复核:重 gen 后无需
-   手补,vue-tsc/build 直绿。
-   handler 加参)。
+   ✅ **已修**(auto-lang `4c9dc5516`,plan-008 会话,已随 WIP 底座先行入库
+   auto-lang master——比预期提前,不必等 plan-008 整体合入):oninput/onchange
+   文本实参按 handler 声明形参判定,0 参 handler 回退裸调用。Plan 068 复核:
+   重 gen 后无需手补,vue-tsc/build 直绿;主仓与 worktree 此前两处手工回补
+   行与本修复输出一致,后续重 gen 不会再打回。
 
 **测试侧(auto-shell)已修,不再计债:**
 
