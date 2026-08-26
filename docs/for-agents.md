@@ -176,3 +176,24 @@ ash -c "ls" --json
 - [SKILL.md](../SKILL.md) —— 给 Agent 读的完整技能说明
 - [Plan 028 设计](../designs/028-agent-execution-engine.md)（已删除，委托 auto-ai）—— Agent 引擎的原始设计
 - [快速上手](quickstart.md) —— ash 基础
+
+## Git Worktree 约定
+
+为计划开 worktree 分支时，worktree 目录放在**本仓库内**的 `.worktrees/` 子目录
+（已在 .gitignore 预留），不要放到仓库外面：
+
+```
+git worktree add .worktrees/plan-NNN -b plan-NNN
+```
+
+注意：`ash/` 内的 path 依赖（auto-lang / auto-ai）按相对路径 `../../..` 解析到
+`D:/autostack/`，worktree 放在 `.worktrees/plan-NNN` 后层级多一层，解析会落到
+`.worktrees/` 下。构建前在 worktree 根建两个目录联接（junction）补齐层级：
+
+```
+# Windows（Git Bash；Linux/macOS 用 ln -s）
+cmd //c "mklink /J .worktrees/plan-NNN/auto-lang D:/autostack/auto-lang"
+cmd //c "mklink /J .worktrees/plan-NNN/auto-ai  D:/autostack/auto-ai"
+```
+
+或者更简单：worktree 只作编辑区，构建与测试在主仓跑（切换分支即可）。
