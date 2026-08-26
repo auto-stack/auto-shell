@@ -173,10 +173,19 @@ pub fn rendered_to_ansi(
     term_width: u16,
     icons: IconStyle,
 ) -> Option<String> {
-    let (table, area) = build_table_widget(rendered, term_width, icons)?;
-    let mut buf = Buffer::empty(area);
-    table.render(area, &mut buf);
-    Some(buffer_to_ansi(&buf))
+    if let Some((table, area)) = build_table_widget(rendered, term_width, icons) {
+        let mut buf = Buffer::empty(area);
+        table.render(area, &mut buf);
+        return Some(buffer_to_ansi(&buf));
+    }
+    // Plan 042 M6 B1 gap fix: `show <code-file>` produces a structured Code
+    // pipeline; without this branch the hook returned None and format_output
+    // fell back to `into_text()` — plain text, no colors (only the block TUI
+    // ever rendered Code).
+    if let RenderedOutput::Code { lines, .. } = rendered {
+        return Some(auto_shell::cmd::commands::code_highlight::spans_to_ansi(lines));
+    }
+    None
 }
 
 /// Render a `RenderedOutput::Table` directly into a ratatui `Buffer` at the
@@ -458,6 +467,30 @@ mod tests {
     fn rendered_to_ansi_returns_none_for_non_table() {
         assert!(rendered_to_ansi(&RenderedOutput::Empty, 80, IconStyle::Plain).is_none());
         assert!(rendered_to_ansi(&RenderedOutput::Text("hi".into()), 80, IconStyle::Plain).is_none());
+    }
+
+    /// Plan 042 M6 B1 gap fix: Code must render as 24-bit ANSI (the `show`
+    /// pipeline), not fall back to plain text.
+    #[test]
+    fn rendered_to_ansi_colors_code_spans() {
+        let rendered = RenderedOutput::Code {
+            lines: vec![vec![
+                ash_core::renderer::CodeSpan {
+                    text: "let".into(),
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    bold: true,
+                    italic: false,
+                },
+            ]],
+            language: "rs".into(),
+        };
+        let out = rendered_to_ansi(&rendered, 80, IconStyle::Plain)
+            .expect("Code should render, not degrade to text");
+        assert!(out.contains("\x1b[38;2;1;2;3m"), "24-bit fg: {out:?}");
+        assert!(out.contains("\x1b[1m"), "bold: {out:?}");
+        assert!(out.contains("let"));
     }
 
     #[test]

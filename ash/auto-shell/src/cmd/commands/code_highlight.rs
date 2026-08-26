@@ -237,7 +237,12 @@ fn highlight_toml_spans(text: &str) -> Vec<Vec<ash_core::renderer::CodeSpan>> {
 
 /// Convert structured CodeSpans back to ANSI-escaped text (for CLI/TUI when
 /// the legacy `highlight_code` string API is used with TOML/INI). Plan 042 M6.
-fn spans_to_ansi(lines: &[Vec<ash_core::renderer::CodeSpan>]) -> String {
+///
+/// Also the CLI render hook's `RenderedOutput::Code` fallback: `show` on a
+/// code file produces an `AtomPipeline::Code` (structured spans), and
+/// ash-tui's `rendered_to_ansi` calls this to color it — without it the
+/// pipeline degraded to plain text (the 042 M6 B1 CLI gap).
+pub fn spans_to_ansi(lines: &[Vec<ash_core::renderer::CodeSpan>]) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(lines.len() * 80);
     for line in lines {
