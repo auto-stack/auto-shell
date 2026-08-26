@@ -546,16 +546,15 @@ impl BlockTui {
 }
 
 
-/// Is the event F3/F4 or Alt+3/Alt+4 (AI chat)? Plan 069: F3 (old NL translate)
+/// Is the event F3 or Alt+3 (AI chat)? Plan 069: F3 (old NL translate)
 /// now enters the same unified AI chat — the CLI has ONE AI mode.
+/// F4 retired 2026-08-26 — F3 is the only AI entry.
 fn is_ai_chat_key(event: &ratatui_crossterm::crossterm::event::Event) -> bool {
     use ratatui_crossterm::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
     if let Event::Key(ke) = event {
         matches!(ke.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && (ke.code == KeyCode::F(3)
-                || ke.code == KeyCode::F(4)
-                || (ke.code == KeyCode::Char('3') && ke.modifiers.contains(KeyModifiers::ALT))
-                || (ke.code == KeyCode::Char('4') && ke.modifiers.contains(KeyModifiers::ALT)))
+                || (ke.code == KeyCode::Char('3') && ke.modifiers.contains(KeyModifiers::ALT)))
     } else {
         false
     }
@@ -712,7 +711,7 @@ fn handle_ai_chat(
     } else {
         push_block(
             terminal,
-            &["  * 开始新对话 *  (/clear 清空  /exit 退出  Esc/F4 离开)"],
+            &["  * 开始新对话 *  (/clear 清空  /exit 退出  Esc 离开)"],
             Color::Cyan,
         )?;
     }

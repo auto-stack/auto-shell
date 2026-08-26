@@ -1,22 +1,23 @@
 # 070 — 多行编辑重构:底部动态脚本编辑器(ratatui Inline 模态)
 
 - 日期:2026-08-26
-- 状态:**实施完成(Phase 1-3,两轮冒烟迭代);finish-plan 复审(2026-08-26):3 项可action小遗漏 + Phase 4 延期(DEBTS 在册) + 2 项人工验证待做**
+- 状态:**COMPLETE(Phase 1-3 全落地,含两轮冒烟迭代与 finish-plan 复审三遗漏修复 47a88ec);Phase 4 syntect 高亮延期(DEBTS 在册);人工验证项(resize/CJK 复制)留待日常使用覆盖**
 - **finish-plan 复审记录(2026-08-26)**:
   - 逐项核验:Phase 1-3 全部 pass(152 单测重跑绿;对齐/Ctrl+O 绑定/守卫/预填/框式回显/行号均有测试或冒烟证据);
     与计划文本的偏差已核实——panic 兜底仅 Drop guard(计划 §2.2 写"hook+Drop 双保险";
     无 panic=abort 配置,unwind 下 Drop 生效,属防线单薄而非失效)。
-  - **复审发现(可action,未修)**:① 编辑器内 F1/F2/F3/F4、Alt+1..4 为死键
-    (route_key 归 Edit,textarea 吞掉;计划 §2.1 说"等同 Esc"——F2 尤其违背直觉);
-    ② 空缓冲 Ctrl+Enter → Run(""):打印空框回显+执行空命令(无害但噪音,应 no-op);
-    ③ ASH_HARDWARE_CURSOR=1 的定位仍偏移——textarea 的 screen_cursor().col 不含
-    行号 gutter(widget.rs scroll_top_col 自注释"+lnum+2 补偿"),当前少加 gutter 宽。
+  - **复审发现(可action,已修 47a88ec)**:① 编辑器内 F1/F2/F3/F4、Alt+1..4 为死键
+    → 改为 ExitThen(prefix) 退出并按内联语义转交(open_script_editor 内 F2=直接离开,
+    Ctrl+O 内 F2=锁 AutoScript 重开;纯数字仍为文本);② 空缓冲 Ctrl+Enter → Run("")
+    → 改为 Exit no-op;③ ASH_HARDWARE_CURSOR=1 定位缺行号 gutter 偏移
+    (textarea 自证 screen_cursor().col 不含 gutter,widget.rs 同款 +digits+2 补偿)。
   - **人工验证待做**:resize 手测矩阵(Windows Terminal/VSCode,计划 Phase 3);
     鼠标框选复制含 CJK(计划 §4)。
   - **Phase 4(syntect 高亮)延期 → DEBTS 在册**:textarea 0.9 公开 API 纯文本、
     无逐行 spans 渲染(上游限制),自渲染方案(状态机用法)留待后续。
   - 绕道清单(随档):进入擦除仅清 1 行(折行输入残留,mod.rs 注释);viewport
-    固定 12 行(ratatui Inline 不可变高);CJK 复制带续接空格;IME 默认关硬件光标。
+    固定 12 行(ratatui Inline 不可变高);CJK 复制带续接空格;IME 默认关硬件光标;
+    Ctrl+O 内按 F2 转开脚本编辑器时缓冲内容不保留(与内联 F 键丢弃尾随文本一致)。
 - 实施记录(2026-08-26):
   - Phase 1+2+3 合并落地:editor_overlay/(mod/term/view 三文件)完整模态;
     Ctrl+O 接线(覆盖 reedline 默认 OpenEditor,\x0f 后缀标记+strip_suffix 预填);

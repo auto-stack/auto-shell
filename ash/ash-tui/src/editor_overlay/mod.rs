@@ -60,9 +60,10 @@ pub enum EditorOutcome {
     Exit,
     /// An F-key / Alt-digit pressed inside the editor: exit, then let the
     /// caller apply the mode-switch prefix ('\x11' F1 / '\x12' F2 /
-    /// '\x13' F3 / '\x15' F4) exactly as if typed at the inline prompt.
+    /// '\x13' F3) exactly as if typed at the inline prompt.
     /// (Plan 070 §2.1: the editor doesn't interpret mode keys; the
-    /// finish-plan review found them dead — now they exit instead.)
+    /// finish-plan review found them dead — now they exit instead.
+    /// F4 retired 2026-08-26 — F3 is the only AI entry.)
     ExitThen(char),
 }
 
@@ -73,7 +74,7 @@ enum KeyAction {
     Submit,
     /// Esc / Ctrl+C — cancel if non-empty, exit if empty.
     Escape,
-    /// F1-F4 / Alt+1-4 — exit and hand the mode prefix to the caller.
+    /// F1-F3 / Alt+1-3 — exit and hand the mode prefix to the caller.
     ExitThen(char),
     /// Plain Enter — insert a newline.
     Newline,
@@ -82,8 +83,9 @@ enum KeyAction {
 }
 
 fn route_key(code: KeyCode, modifiers: KeyModifiers) -> KeyAction {
-    // Mode keys — same prefixes the inline keybindings submit: F1-F4 and
-    // their laptop-friendly Alt+1-4 aliases. Exit and let the caller switch.
+    // Mode keys — same prefixes the inline keybindings submit: F1-F3 and
+    // their laptop-friendly Alt+1-3 aliases. Exit and let the caller switch.
+    // (F4 retired — it falls through to Edit, i.e. unbound.)
     let mode_prefix = match (code, modifiers) {
         (KeyCode::F(1), KeyModifiers::NONE) | (KeyCode::Char('1'), KeyModifiers::ALT) => {
             Some('\x11')
@@ -93,9 +95,6 @@ fn route_key(code: KeyCode, modifiers: KeyModifiers) -> KeyAction {
         }
         (KeyCode::F(3), KeyModifiers::NONE) | (KeyCode::Char('3'), KeyModifiers::ALT) => {
             Some('\x13')
-        }
-        (KeyCode::F(4), KeyModifiers::NONE) | (KeyCode::Char('4'), KeyModifiers::ALT) => {
-            Some('\x15')
         }
         _ => None,
     };
@@ -259,19 +258,18 @@ mod tests {
         );
     }
 
-    /// finish-plan finding ①: F1-F4 and Alt+1-4 used to be dead keys; they
-    /// now exit and hand the mode prefix to the caller.
+    /// finish-plan finding ①: F1-F3 and Alt+1-3 used to be dead keys; they
+    /// now exit and hand the mode prefix to the caller. F4 is retired
+    /// (2026-08-26) — it stays an unbound edit key, as does Alt+4.
     #[test]
     fn mode_keys_exit_with_prefix() {
         for (code, modifiers, prefix) in [
             (KeyCode::F(1), KeyModifiers::NONE, '\x11'),
             (KeyCode::F(2), KeyModifiers::NONE, '\x12'),
             (KeyCode::F(3), KeyModifiers::NONE, '\x13'),
-            (KeyCode::F(4), KeyModifiers::NONE, '\x15'),
             (KeyCode::Char('1'), KeyModifiers::ALT, '\x11'),
             (KeyCode::Char('2'), KeyModifiers::ALT, '\x12'),
             (KeyCode::Char('3'), KeyModifiers::ALT, '\x13'),
-            (KeyCode::Char('4'), KeyModifiers::ALT, '\x15'),
         ] {
             assert_eq!(
                 route_key(code, modifiers),
@@ -279,5 +277,10 @@ mod tests {
                 "{code:?} + {modifiers:?}"
             );
         }
+        assert_eq!(route_key(KeyCode::F(4), KeyModifiers::NONE), KeyAction::Edit);
+        assert_eq!(
+            route_key(KeyCode::Char('4'), KeyModifiers::ALT),
+            KeyAction::Edit
+        );
     }
 }

@@ -276,7 +276,7 @@ impl Repl {
     }
 
     /// Plan 322: apply a mode-switch prefix — toggle the lock (F1=\x11 Shell,
-    /// F2=\x12 AutoScript) or unlock (Esc/F3/F4 prefixes) and refresh the
+    /// F2=\x12 AutoScript) or unlock (Esc/F3 prefixes) and refresh the
     /// prompt. The mode is announced by the right-prompt tag (`auto`/`Shell`)
     /// and, for the AutoScript lock, by the editor box title — no banner
     /// lines in the transcript (Plan 070).
@@ -293,7 +293,7 @@ impl Repl {
     /// Plan 070: the AutoScript lock opens the editor box (single-shot). Any
     /// outcome — run (boxed echo + execute), cancel (boxed echo), or plain
     /// exit — returns to the normal inline mode afterwards. Mode keys pressed
-    /// inside (F1-F4/Alt+1-4) exit and then switch modes like at the prompt.
+    /// inside (F1-F3/Alt+1-3) exit and then switch modes like at the prompt.
     fn open_script_editor(&mut self) {
         let mut pending_prefix = None;
         match crate::editor_overlay::run_editor("", "▌# AutoScript") {
@@ -339,12 +339,12 @@ impl Repl {
     }
 
     /// Apply a mode-switch prefix exactly like the run() keybinding branches
-    /// do: F1/F2 toggle locks, F3/F4 open the AI chat. Shared by the editor's
+    /// do: F1/F2 toggle locks, F3 opens the AI chat. Shared by the editor's
     /// ExitThen outcomes (finish-plan finding ①).
     fn dispatch_mode_prefix(&mut self, prefix: char) {
         match prefix {
             '\x11' | '\x12' => self.apply_mode_switch(prefix),
-            '\x13' | '\x15' => {
+            '\x13' => {
                 let _ = self.run_chat_loop();
             }
             _ => {}
@@ -371,7 +371,7 @@ impl Repl {
 
 
     /// Plan 027: the standalone AI chat loop. Owns the reedline editor until
-    /// the user exits via Esc, F4 (toggle-off), F1/F2/F3 (mode switch), or
+    /// the user exits via Esc, F1/F2/F3 (mode switch), or
     /// `/exit`. Persists the conversation on exit.
     fn run_chat_loop(&mut self) -> Result<()> {
         // Lock AI mode so the prompt shows `▌?`.
@@ -414,11 +414,11 @@ impl Repl {
                 Err(_) => continue,
             };
 
-            // Exit prefixes: F4 toggle-off (\x15), Esc (\x14), F1/F2/F3
-            // (\x11/\x12/\x13). Save, then hand the prefix to the shared
-            // mode-switch helper (toggle/unlock + prompt refresh + banner).
+            // Exit prefixes: Esc (\x14), F1/F2/F3 (\x11/\x12/\x13). Save,
+            // then hand the prefix to the shared mode-switch helper
+            // (toggle/unlock + prompt refresh + banner).
             if let Some(prefix) = line.chars().next() {
-                if matches!(prefix, '\x11' | '\x12' | '\x13' | '\x14' | '\x15') {
+                if matches!(prefix, '\x11' | '\x12' | '\x13' | '\x14') {
                     if let Some(session) = self.chat.as_mut() {
                         let _ = session.save();
                     }
@@ -697,17 +697,12 @@ impl Repl {
                         self.run_editor_once(prefill.trim_start_matches('\x0f'));
                         continue;
                     }
-                    // F3 = AI mode: natural language → command suggestion.
-                    // Plan 069 (unified agent): F3 now enters the SAME persistent
-                    // AI chat as F4 — the CLI has ONE AI mode; the one-shot NL
+                    // F3 = AI mode: the persistent AI chat.
+                    // Plan 069 (unified agent): one AI mode; the one-shot NL
                     // translate flow (ask_ai + approval card) is retired.
-                    if line.starts_with('') {
-                        self.run_chat_loop()?;
-                        continue;
-                    }
-                    if line.starts_with('\x15') {
-                        // Any text typed after F4 is ignored for now
-                        // (chat reads full lines in its own loop).
+                    // F4 was retired alongside (2026-08-26 user decision:
+                    // F3 is the only AI entry).
+                    if line.starts_with('\x13') {
                         self.run_chat_loop()?;
                         continue;
                     }
@@ -943,7 +938,7 @@ pub fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
 use auto_shell::ai::brief::{brief_args, brief_result};
 
 /// Common ash keybindings added to every edit-mode keybinding set (Tab
-/// completion, Ctrl+F hint accept, Ctrl+R history menu, F1-F4 mode switches,
+/// completion, Ctrl+F hint accept, Ctrl+R history menu, F1-F3 mode switches,
 /// Esc unlock, Alt+1/2/3/4 aliases). Module-scope so both the initial editor
 /// build and runtime multiline rebuilds share one source of truth.
 fn add_common_keybindings(keybindings: &mut reedline::Keybindings) {
@@ -1035,15 +1030,7 @@ fn add_common_keybindings(keybindings: &mut reedline::Keybindings) {
             ReedlineEvent::Submit,
         ]),
     );
-    // Plan 027: F4 — enter persistent AI chat mode (insert \x15 + submit).
-    keybindings.add_binding(
-        KeyModifiers::NONE,
-        KeyCode::F(4),
-        ReedlineEvent::Multiple(vec![
-            ReedlineEvent::Edit(vec![EditCommand::InsertString("\x15".to_string())]),
-            ReedlineEvent::Submit,
-        ]),
-    );
+    // (F4 retired 2026-08-26: F3 is the only AI entry — user decision.)
     // Esc — unlock mode (insert \x14 + submit).
     keybindings.add_binding(
         KeyModifiers::NONE,
@@ -1054,7 +1041,7 @@ fn add_common_keybindings(keybindings: &mut reedline::Keybindings) {
         ]),
     );
     // Plan 322 #4: Alt+1/2/3 as laptop-friendly F1/F2/F3 aliases.
-    for (key, prefix) in [('1', "\x11"), ('2', "\x12"), ('3', "\x13"), ('4', "\x15")] {
+    for (key, prefix) in [('1', "\x11"), ('2', "\x12"), ('3', "\x13")] {
         keybindings.add_binding(
             KeyModifiers::ALT,
             KeyCode::Char(key),
@@ -1147,7 +1134,7 @@ mod build_edit_mode_tests {
 /// announced by the right-prompt tag (`auto`/`Shell`/`AI`) instead of the
 /// old per-switch banners — the transcript stays clean.
 fn startup_legend() -> &'static str {
-    "  \x1b[2mF1 命令锁 · F2 脚本编辑器 · F3/F4 AI 对话 · Ctrl+O 编辑当前行 · Tab 补全 · Ctrl+R 历史\x1b[0m"
+    "  \x1b[2mF1 命令锁 · F2 脚本编辑器 · F3 AI 对话 · Ctrl+O 编辑当前行 · Tab 补全 · Ctrl+R 历史\x1b[0m"
 }
 
 #[cfg(test)]
@@ -1157,7 +1144,7 @@ mod startup_legend_tests {
     #[test]
     fn legend_covers_every_mode_key() {
         let l = startup_legend();
-        for key in ["F1", "F2", "F3", "F4", "Ctrl+O", "Tab", "Ctrl+R"] {
+        for key in ["F1", "F2", "F3", "Ctrl+O", "Tab", "Ctrl+R"] {
             assert!(l.contains(key), "legend should mention {key}: {l}");
         }
     }
