@@ -28,7 +28,7 @@ pub struct Repl {
     mode_state: auto_shell::repl_mode::ModeState,
     /// Plan 027: Lazy-initialized persistent AI chat session.
     chat: Option<auto_shell::ai::ChatSession>,
-    /// Plan 071 M2 (S-3): receiving end of the chat approval gate — the
+    /// Plan 072 M2 (S-3): receiving end of the chat approval gate — the
     /// agent queues non-readonly commands here; each turn drains them for a
     /// user verdict ([Enter] run / [e] replace / anything else cancel).
     ai_proposals: Option<std::sync::mpsc::Receiver<String>>,
@@ -387,7 +387,7 @@ impl Repl {
         // runs the blocking daemon probe, which must NOT happen inside the
         // async turn (see `frontend::ai::ChatSession` docs).
         //
-        // Plan 071 M2 (S-3/S-5): the CLI session now carries the approval
+        // Plan 072 M2 (S-3/S-5): the CLI session now carries the approval
         // gate (non-readonly commands become proposals, drained for a user
         // verdict after each turn) and runs under the interactive session's
         // security policy (`--read-only`/`--sandbox` constrain AI commands).
@@ -535,13 +535,13 @@ impl Repl {
                 );
             }
         }
-        // Plan 071 M2 (S-3): approval gate — anything the agent proposed
+        // Plan 072 M2 (S-3): approval gate — anything the agent proposed
         // (non-readonly commands) waits for the user's verdict here.
         self.drain_ai_proposals();
         Ok(())
     }
 
-    /// Plan 071 M2 (S-3): present each AI-proposed command for approval.
+    /// Plan 072 M2 (S-3): present each AI-proposed command for approval.
     /// `[Enter]` executes it (through the normal command path, under the
     /// session's security policy), `e` replaces it with an edited line,
     /// anything else (incl. Ctrl-C/Ctrl-D) cancels.

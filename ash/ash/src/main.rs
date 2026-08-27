@@ -70,7 +70,7 @@ fn main() -> Result<()> {
             // remaining args.
             "plugin" => {
                 let plugin_args: Vec<String> = args[i + 1..].to_vec();
-                // Plan 071 M2: plugin management mutates disk and installs
+                // Plan 072 M2: plugin management mutates disk and installs
                 // executable code — mutating subcommands honor the security
                 // flags (previously this early-return bypassed them entirely).
                 let sub = plugin_args.first().map(String::as_str).unwrap_or("");
@@ -91,7 +91,7 @@ fn main() -> Result<()> {
             // an AutoLang script via the cloud model + eval_auto tool.
             "ask" => {
                 let ask_args: Vec<String> = args[i + 1..].to_vec();
-                // Plan 071 M2 (S-5): the agent's shell runs under the CLI
+                // Plan 072 M2 (S-5): the agent's shell runs under the CLI
                 // security policy.
                 return auto_shell::ai::ask::run(&ask_args, policy);
             }

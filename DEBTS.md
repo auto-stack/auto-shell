@@ -840,7 +840,7 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
   (cell 网格固有)、IME 默认关硬件光标(`ASH_HARDWARE_CURSOR=1` 显式开启;
   其 gutter 偏移已修,横向滚动场景为已知近似)、Ctrl+O 内按 F2 转开脚本
   编辑器时缓冲内容不保留(与内联 F 键丢弃尾随文本的 v1 行为一致)。
-## 安全边界定位与预存测试项(Plan 071 安全加固,2026-08-26;编号撞号说明:远端 070 为脚本编辑器,本计划顺延 071)
+## 安全边界定位与预存测试项(Plan 072 安全加固,2026-08-26;编号撞号说明:远端 070 为脚本编辑器,本计划最终为 072(071 归 ash-tui 融合计划))
 
 ### read-only / no-network 名单 = 提醒层,不是安全边界(原审核 S-8)
 
@@ -850,7 +850,7 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
   `bash -c curl`、PATH 内同名二进制)不受 read-only/no-network 约束,
   仅 `--no-exec` 全拦。
 - **接受理由**:名单语义对用户是"防误操作"提醒;真正边界是 sandbox
-  路径限制 + AI 审批门(071 M2 已落)。语义改造(参数级/子命令级判定)
+  路径限制 + AI 审批门(072 M2 已落)。语义改造(参数级/子命令级判定)
   收益/代价比低,文档需如实声明(THREAT-MODEL 一页纸,P1 文档计划)。
 - **推翻条件**:出现把 read-only 当真隔离用的场景(如多租户执行)。
 
@@ -858,13 +858,13 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
 
 - **现状**:`plugin install` 唯一校验 plugin.at 可解析;REPL 启动即
   `source functions.ash`(顶层语句立即执行);capabilities 仅 stderr
-  警告(loader.rs)。071 M2 已补:mutating 子命令(install/update/
+  警告(loader.rs)。072 M2 已补:mutating 子命令(install/update/
   remove/enable/disable)在 `--read-only/--no-exec/--dry-run` 下拒绝。
 - **接受理由**:单用户本地工具的插件生态,信任模型等同 npm/git clone;
   签名/域名白名单是生态决策(需插件源基础设施),单仓做不了。
 - **推翻条件**:出现公共插件仓库/分发渠道。
 
-### 预存测试失败项(2026-08-26 Plan 071 回归在册,非本计划引入)
+### 预存测试失败项(2026-08-26 Plan 072 回归在册,非本计划引入)
 
 - `test_ls_tilde_lists_home`:ls 排序比较器非全序,std smallsort panic
   —— 依赖本机 home 目录内容才触发,确定性失败;与 ls/排序改动零交集
@@ -875,4 +875,4 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
   Plan 430/432/后续在途改动,与 069 时在册的
   `test_auto_expression_execution`(`<obj#…>`)同源。
 - **对照说明**:stash 对照无法成立(干净 HEAD 因 auto-ai API 漂移
-  编译不过,Plan 071 顺手适配了 ToolOutput/TurnStart/model_meta 三处)。
+  编译不过,Plan 072 顺手适配了 ToolOutput/TurnStart/model_meta 三处)。

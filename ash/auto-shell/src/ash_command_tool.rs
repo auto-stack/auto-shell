@@ -45,7 +45,7 @@ const DANGER_PATTERNS: &[&str] = &[
 ];
 
 /// Shell control characters that turn a single argument into multiple
-/// commands when spliced into a CLI string (Plan 071 M4 / S-7).
+/// commands when spliced into a CLI string (Plan 072 M4 / S-7).
 const METACHARS: &[char] = &[';', '|', '&', '>', '<'];
 
 /// Characters double quotes cannot neutralize (expansion happens inside
@@ -90,7 +90,7 @@ impl AshCommandShellThread {
         Self::start_with_policy(ash_core::security::SecurityPolicy::default())
     }
 
-    /// Plan 071 M2 (S-5): start the dedicated shell thread under the
+    /// Plan 072 M2 (S-5): start the dedicated shell thread under the
     /// **interactive session's** security policy. Without this the agent's
     /// Shell was a fresh default-policy one — `ash --read-only` / `--sandbox`
     /// did not constrain AI-initiated commands.
@@ -116,7 +116,7 @@ impl AshCommandShellThread {
                             Ok(None) => Ok(String::new()),
                             Err(e) => Err(ToolError::Exec(format!("{e}"))),
                         };
-                        // Plan 071 M2 (S-5): a system() call inside the script
+                        // Plan 072 M2 (S-5): a system() call inside the script
                         // may have been denied by policy — the interactive
                         // path only prints it. Surface it to the model.
                         if let Some(reason) = shell.take_denial() {
@@ -258,7 +258,7 @@ impl Tool for ProposeTool {
 }
 
 /// Rebuild a CLI string from the model's JSON arguments — **strict** form for
-/// commands that will be executed directly (Plan 071 M4 / S-7).
+/// commands that will be executed directly (Plan 072 M4 / S-7).
 ///
 /// A malicious or confused model could pass `{"args": ["hi", ";", "touch",
 /// "pwn"]}`; splicing that raw produced `echo hi ; touch pwn`, riding the
@@ -385,7 +385,7 @@ fn quote_if_needed(s: &str) -> String {
 
 /// Strict-path quoting: also quote tokens carrying shell control characters —
 /// a quoted `;`/`|` is a literal argument, neutralizing token-splitting
-/// injection (Plan 071 M4 / S-7).
+/// injection (Plan 072 M4 / S-7).
 fn quote_strict(s: &str) -> String {
     if s.is_empty() || s.chars().any(|c| c.is_whitespace() || METACHARS.contains(&c)) {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
@@ -450,7 +450,7 @@ impl Tool for EvalAutoTool {
             .and_then(|c| c.as_str())
             .ok_or_else(|| ToolError::Args("missing 'code' field".into()))?;
 
-        // Plan 071 M2 (S-4): danger-check the source itself — this also
+        // Plan 072 M2 (S-4): danger-check the source itself — this also
         // covers system("...") call strings nested inside it, which used to
         // bypass every tool-layer safeguard.
         let lower = code.to_lowercase();
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(json_args_to_cli("echo", &args).unwrap(), "echo 42");
     }
 
-    // ── Plan 071 M4 (S-7): metacharacter neutralization ────────────────
+    // ── Plan 072 M4 (S-7): metacharacter neutralization ────────────────
 
     #[test]
     fn injection_separator_tokens_get_quoted_not_spliced() {
@@ -714,7 +714,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Plan 071 M2 (S-4): `system("rm -rf /")` inside generated code used to
+    /// Plan 072 M2 (S-4): `system("rm -rf /")` inside generated code used to
     /// bypass every tool-layer safeguard.
     #[tokio::test]
     async fn eval_auto_refuses_embedded_dangerous_system_call() {
@@ -722,7 +722,7 @@ mod tests {
         assert!(result.is_err(), "danger pattern inside system() must be refused");
     }
 
-    /// Plan 071 M2 (S-5): the agent's shell thread must run under the
+    /// Plan 072 M2 (S-5): the agent's shell thread must run under the
     /// interactive session's policy, not a fresh default one.
     #[tokio::test]
     async fn shell_thread_runs_under_passed_policy() {

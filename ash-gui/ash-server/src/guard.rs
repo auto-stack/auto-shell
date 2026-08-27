@@ -1,4 +1,4 @@
-//! Plan 071 M1 (S-1): loopback + bearer-token + Origin/Host guard.
+//! Plan 072 M1 (S-1): loopback + bearer-token + Origin/Host guard.
 //!
 //! ash-server used to bind `0.0.0.0:3000` with no authentication — anyone on
 //! the LAN could POST `/api/run_command` and execute arbitrary commands. The

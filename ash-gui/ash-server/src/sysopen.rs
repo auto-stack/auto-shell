@@ -1,4 +1,4 @@
-//! Plan 071 M1 (S-2): safe "open path in OS" used by both transports.
+//! Plan 072 M1 (S-2): safe "open path in OS" used by both transports.
 //!
 //! The old implementation concatenated the request-supplied path into
 //! `cmd /C start "" <path>` — a `{"path": "x & calc"}` POST meant arbitrary

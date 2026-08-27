@@ -1,4 +1,4 @@
-//! Plan 071 M1: guard 路由级测试 — 打真实 `create_router_with_guard`
+//! Plan 072 M1: guard 路由级测试 — 打真实 `create_router_with_guard`
 //! (含 Shell worker),覆盖验收清单:无 token 401、伪 Origin 403、
 //! open_path 元字符载荷 400。
 
