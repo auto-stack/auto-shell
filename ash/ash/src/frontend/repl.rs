@@ -889,16 +889,43 @@ impl Repl {
         let snippet = match result {
             Ok(Some(s)) => {
                 let snippet: String = s.chars().take(200).collect();
-                auto_shell::shell::print_command_output(&s);
+                Self::print_frozen_output(&s);
                 snippet
             }
             Ok(None) => String::new(),
             Err(e) => {
-                eprintln!("Error: {}", e);
+                // Plan 076: a failing long build carries its whole stderr in
+                // the message — summarize it like successful output instead
+                // of dumping it in one eprintln.
+                Self::print_frozen_output(&format!("Error: {e}"));
                 String::new()
             }
         };
         Some((snippet, exit_code))
+    }
+
+    /// Plan 076 E5: freeze a completed command's output into the transcript
+    /// — verbatim within [`tail_cmd::DEFAULT_FREEZE_MAX_LINES`], else a
+    /// head+tail excerpt with the full text spilled to a temp file (pointed
+    /// out for `show`).
+    fn print_frozen_output(output: &str) {
+        use crate::frontend::tail_cmd::{build_freeze_text, spill_full_output, FreezeText};
+        match build_freeze_text(output) {
+            FreezeText::Full => auto_shell::shell::print_command_output(output),
+            FreezeText::Summary { excerpt, total_lines, total_bytes } => {
+                println!("{excerpt}");
+                match spill_full_output(output) {
+                    Ok(path) => {
+                        println!(
+                            " 📄 完整输出({total_lines} 行 · {total_bytes} 字节):{}",
+                            path.display()
+                        );
+                        println!("    查看: show {}", path.display());
+                    }
+                    Err(e) => println!(" ⚠️ 完整输出留存失败: {e}"),
+                }
+            }
+        }
     }
 
     /// Open the current input line in $EDITOR (or vim/notepad) and return the result.
