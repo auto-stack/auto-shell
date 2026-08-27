@@ -683,7 +683,7 @@ fn handle_ai_chat(
     terminal: &mut Terminal<ratatui_crossterm::CrosstermBackend<std::io::Stdout>>,
 ) -> io::Result<()> {
     // Load the session on the main thread (sync daemon probe).
-    // Plan 070 M2 (S-3/S-5): approval gate + policy passthrough — the agent's
+    // Plan 071 M2 (S-3/S-5): approval gate + policy passthrough — the agent's
     // shell runs under this session's security policy, and non-readonly
     // commands queue as proposals awaiting a user verdict after each turn.
     let (ptx, prx) = std::sync::mpsc::channel::<String>();
@@ -877,7 +877,7 @@ fn handle_ai_chat(
                         let refs: Vec<&str> = block_lines.iter().map(|s| s.as_str()).collect();
                         push_block(terminal, &refs, Color::DarkGray)?;
                     }
-                    // Plan 070 M2 (S-3): approval gate — drain everything the
+                    // Plan 071 M2 (S-3): approval gate — drain everything the
                     // agent proposed this turn for a user verdict.
                     while let Ok(cmd) = prx.try_recv() {
                         match prompt_approval(terminal, &cmd)? {
@@ -922,7 +922,7 @@ fn push_block(
     })
 }
 
-/// Plan 070 M2 (S-3): present an AI-proposed command for approval. Returns
+/// Plan 071 M2 (S-3): present an AI-proposed command for approval. Returns
 /// `Some(command)` — approved as-is ([Enter]) or replaced (`e` + typed line) —
 /// or `None` when cancelled (any other key; an empty replacement cancels too).
 fn prompt_approval(

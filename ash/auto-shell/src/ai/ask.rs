@@ -71,7 +71,7 @@ impl Role for AutoLangCoder {
 
 /// Entry point for `ash ask`. `args` is everything after `ask`
 /// (e.g. `["count", "the", ".rs", "files"]`). `policy` is the CLI security
-/// policy (Plan 070 M2/S-5: the agent's shell runs under it — `ash
+/// policy (Plan 071 M2/S-5: the agent's shell runs under it — `ash
 /// --read-only ask ...` stays read-only).
 pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Result<()> {
     if args.is_empty() {

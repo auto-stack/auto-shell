@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(p.check("ls", &[], false).unwrap(), Decision::Allow);
     }
 
-    // Plan 070 M3 (S-6): `ash --sandbox <dir>` alone used to be silently
+    // Plan 071 M3 (S-6): `ash --sandbox <dir>` alone used to be silently
     // dropped by the interactive REPL because `active()` ignored sandbox_dir
     // and main.rs only applies the policy when `active()`.
     #[test]

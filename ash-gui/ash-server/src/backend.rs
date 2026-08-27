@@ -202,7 +202,7 @@ fn register_bridges(
     }));
 
     // POST /api/open_path {path} → {}
-    // Plan 070 M1 (S-2): resolve + argv spawn via sysopen — the old
+    // Plan 071 M1 (S-2): resolve + argv spawn via sysopen — the old
     // `cmd /C start "" <path>` concat allowed metacharacter injection.
     host_call!("open_path", Arc::new(|args: &str| {
         let v: serde_json::Value = serde_json::from_str(args)

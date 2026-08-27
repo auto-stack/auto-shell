@@ -3,7 +3,7 @@
 //! Spawns the Shell worker + an axum HTTP server. The browser version
 //! (`npm run dev`) connects via vite proxy (`/api` → `localhost:3000`).
 //!
-//! Plan 070 M1 (S-1): binds **loopback by default**. The old `0.0.0.0:3000`
+//! Plan 071 M1 (S-1): binds **loopback by default**. The old `0.0.0.0:3000`
 //! let anyone on the LAN execute commands via `/api/run_command`. To expose
 //! the server beyond this machine, set `ASH_SERVER_BIND` — and a shared
 //! secret via `ASH_SERVER_TOKEN` (mandatory for non-loopback binds; the

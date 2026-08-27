@@ -186,7 +186,7 @@ pub struct Shell {
     /// before spawn/dispatch (allow/deny, capability switches, dry-run, audit,
     /// dangerous-pattern detection). Default is a no-op (full pass-through).
     pub policy: ash_core::security::SecurityPolicy,
-    /// Plan 070 M2 (S-5): the reason of the most recent policy denial within
+    /// Plan 071 M2 (S-5): the reason of the most recent policy denial within
     /// the current `execute()` call. Interactive execution swallows denials
     /// (print + `Ok(None)`), but agent callers (`execute_for_agent`) must see
     /// them as errors — otherwise the model reads "ran fine, empty output".
@@ -442,7 +442,7 @@ impl Shell {
     /// (0 for success, non-zero for failure).
     pub fn execute(&mut self, input: &str) -> Result<Option<String>> {
         self.last_exit_code = 0; // reset; execute_inner may override
-        self.last_denial = None; // Plan 070 M2: per-execute denial trace
+        self.last_denial = None; // Plan 071 M2: per-execute denial trace
 
         // Cleanup temp files from previous process substitution
         for path in self.temp_files_for_cleanup.drain(..) {
@@ -801,7 +801,7 @@ impl Shell {
             Err(e) => {
                 eprintln!("Error: {}", e);
                 self.last_exit_code = 1;
-                self.last_denial = Some(format!("{e}")); // Plan 070 M2
+                self.last_denial = Some(format!("{e}")); // Plan 071 M2
                 self.policy.audit(&ash_core::security::AuditRecord {
                     command: input.trim().to_string(),
                     timestamp: chrono::Utc::now().to_rfc3339(),
@@ -1123,7 +1123,7 @@ impl Shell {
         let result = self.execute(input);
         self.json_output = false; // always reset (interactive default)
         self.bash_compat = false;
-        // Plan 070 M2 (S-5): interactive `execute` prints a policy denial and
+        // Plan 071 M2 (S-5): interactive `execute` prints a policy denial and
         // returns Ok(None); the agent caller must see it as an error instead
         // of "ran fine, empty output".
         if let Some(reason) = self.last_denial.take() {
@@ -1133,7 +1133,7 @@ impl Shell {
     }
 
     /// Take the most recent policy-denial reason (if any) within the last
-    /// `execute()` call. Plan 070 M2: used by agent bridges (`eval_auto`'s
+    /// `execute()` call. Plan 071 M2: used by agent bridges (`eval_auto`'s
     /// `system()`) to surface denials to the model.
     pub fn take_denial(&mut self) -> Option<String> {
         self.last_denial.take()
@@ -1405,7 +1405,7 @@ impl Shell {
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     self.last_exit_code = 1;
-                    self.last_denial = Some(format!("{e}")); // Plan 070 M2
+                    self.last_denial = Some(format!("{e}")); // Plan 071 M2
                     return Ok(None);
                 }
             }
@@ -4285,7 +4285,7 @@ impl Shell {
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     self.last_exit_code = 1;
-                    self.last_denial = Some(format!("{e}")); // Plan 070 M2
+                    self.last_denial = Some(format!("{e}")); // Plan 071 M2
                     return Ok(None);
                 }
             }

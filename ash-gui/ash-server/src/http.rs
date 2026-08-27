@@ -40,7 +40,7 @@ pub struct AppState {
 }
 
 /// Build the axum router with all API routes + the request guard
-/// (Plan 070 M1: token/Origin/Host checks; see `guard.rs`).
+/// (Plan 071 M1: token/Origin/Host checks; see `guard.rs`).
 pub fn create_router(shell: ShellHandle) -> Router {
     create_router_with_guard(shell, GuardConfig::from_env())
 }
@@ -194,7 +194,7 @@ struct OpenPathBody {
 }
 
 async fn open_path(Json(body): Json<OpenPathBody>) -> impl IntoResponse {
-    // Plan 070 M1 (S-2): resolve + argv spawn via sysopen — the old
+    // Plan 071 M1 (S-2): resolve + argv spawn via sysopen — the old
     // `cmd /C start "" <path>` concat allowed metacharacter injection.
     match crate::sysopen::open_in_os(&body.path) {
         Ok(()) => StatusCode::OK.into_response(),

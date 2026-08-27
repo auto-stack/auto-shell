@@ -1,4 +1,4 @@
-# 070 — 安全加固 P0:ash-server 网络面 + AI 执行链审批收尾 + sandbox 失效修复
+# 071 — 安全加固 P0:ash-server 网络面 + AI 执行链审批收尾 + sandbox 失效修复
 
 - 日期:2026-08-26
 - 状态:**✅ 已实施,验收通过**(M1-M4 全落;回归结论见 §7)
@@ -140,10 +140,10 @@ active() 补 `self.sandbox_dir.is_some()`,加回归测试(单 --sandbox 启动�
 - **ash-core**:408+1 全绿(含 M3 新测试)。
 - **ash-server**:15/15 全绿(0→1)。
 - **ash workspace**:ash-tui 153 / auto-shell lib 700 过 2 挂 / parity 2 过 /
-  examples 3+1;**5 个失败全部预存或环境项,与 070 改动零交集,已入 DEBTS**:
+  examples 3+1;**5 个失败全部预存或环境项,与 071 改动零交集,已入 DEBTS**:
   - `test_auto_expression_execution`:069 时已在册豁免(auto-lang 430/432)。
   - `test_ls_tilde_lists_home`:ls 比较器非全序(依赖本机 home 内容触发,
-    确定性失败,070 未触碰 ls/排序)。
+    确定性失败,071 未触碰 ls/排序)。
   - `examples_smoke` cron-list/svc-status、`examples_parity` positional_arg:
     auto-lang VM 在途回归(engine.rs:1492 panic / for 循环字符串拼接损坏,
     手工复现在案)。
@@ -157,5 +157,5 @@ active() 补 `self.sandbox_dir.is_some()`,加回归测试(单 --sandbox 启动�
   - CLI `?` 审批卡 / `--read-only ask` 拒写:需 AI key 的交互路径未做活体
     验证,由单测覆盖(policy 线程/EvalAuto 拒绝/审批通道组件级全绿)。
 - **对照说明**:stash 基线对照不成立 —— 干净 HEAD 因 auto-ai API 漂移编译
-  不过(070 顺手适配的六处即此),069 归档时同样以"引擎预存项在册豁免"
+  不过(071 顺手适配的六处即此),069 归档时同样以"引擎预存项在册豁免"
   口径收口。

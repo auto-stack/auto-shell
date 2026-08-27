@@ -371,7 +371,7 @@ impl ChatSession {
         Ok(Self::with_client_and_path(client, history_path()))
     }
 
-    /// Plan 070 M2(S-3/S-5):CLI 审批门入口 —— 交互会话的 SecurityPolicy
+    /// Plan 071 M2(S-3/S-5):CLI 审批门入口 —— 交互会话的 SecurityPolicy
     /// 透传(`--read-only`/`--sandbox` 对 AI 发起的命令同样生效)+ proposal
     /// sink(非只读命令产建议卡等审批)。`proposals=None` 为旧行为。
     pub fn load_secured(
@@ -417,7 +417,7 @@ impl ChatSession {
         policy: ash_core::security::SecurityPolicy,
     ) -> Self {
         let messages = load_messages(&path);
-        // Plan 070 M2 (S-5): the agent's shell runs under the interactive
+        // Plan 071 M2 (S-5): the agent's shell runs under the interactive
         // session's policy — previously a fresh default-policy Shell.
         let shell_thread = AshCommandShellThread::start_with_policy(policy);
         let tx = shell_thread.sender();
