@@ -607,6 +607,15 @@ impl Repl {
     /// do NOT go through here, keeping their machine-readable output free of
     /// decoration.
     fn execute_with_header(&mut self, command: &str) -> (String, i32) {
+        // Plan 074 E2: plain single external commands get the live tail
+        // preview (dynamic viewport while running → frozen linear output on
+        // completion). Lease failure falls back to the normal path below.
+        if self.should_tail(command) {
+            if let Some(result) = self.try_execute_tail(command) {
+                return result;
+            }
+        }
+
         let start = std::time::Instant::now();
         let result = self.shell.execute(command);
         let elapsed = start.elapsed();
@@ -645,6 +654,126 @@ impl Repl {
         (snippet, exit_code)
     }
 
+    /// Plan 074 E2: eligibility for the live tail preview — a plain single
+    /// external command (no shell structures), not a registry/builtin/Auto
+    /// function, not on the interactive-command list (vim/less/top need a
+    /// real tty). `ASH_NO_TAIL=1` is the escape hatch.
+    fn should_tail(&self, command: &str) -> bool {
+        if std::env::var("ASH_NO_TAIL").map(|v| v == "1").unwrap_or(false) {
+            return false;
+        }
+        if !crate::frontend::tail_cmd::tail_eligible_line(command) {
+            return false;
+        }
+        let name = command.split_whitespace().next().unwrap_or("");
+        if !self.shell.classify_is_external_pub(name) {
+            return false;
+        }
+        !ash_core::cmd::interactive::is_interactive_command(command)
+    }
+
+    /// Plan 074 E2: run one command with the live tail preview. Returns the
+    /// same `(snippet, exit_code)` contract as [`Self::execute_with_header`],
+    /// or `None` when the lease can't be acquired (normal path takes over).
+    ///
+    /// Thread split: the REPL thread stays blocked inside `Shell::execute`
+    /// (all engine semantics — policy, history, exit codes — unchanged);
+    /// the lease's terminal moves to a render thread which is the viewport's
+    /// single writer, draining the engine's line channel into a TailBuffer
+    /// and redrawing on an 80ms cadence. Key events are drained and dropped
+    /// so nothing leaks into the next reedline read (Ctrl+C cannot interrupt
+    /// — known v1 limitation, plan 074 §3).
+    fn try_execute_tail(&mut self, command: &str) -> Option<(String, i32)> {
+        use crate::frontend::tail;
+        use crate::frontend::tail_cmd;
+
+        let start = std::time::Instant::now();
+        let _ = tail::TailLease::erase_inline_row();
+        let lease = tail::TailLease::acquire(tail_cmd::TAIL_HEIGHT).ok()?;
+        let (terminal, guard) = lease.into_parts();
+
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(
+            tail::TailBuffer::new(tail_cmd::VIEW_LINES),
+        ));
+        let label = tail_cmd::status_label(command);
+        let render_start = start;
+
+        let render = std::thread::spawn(move || {
+            let mut terminal = terminal;
+            loop {
+                // Drain everything already queued, then wait for more.
+                while let Ok(line) = rx.try_recv() {
+                    if let Ok(mut b) = buffer.lock() {
+                        b.push(line);
+                    }
+                }
+                // Swallow key events (incl. Ctrl+C) so raw-mode bytes don't
+                // leak into the next reedline read_line.
+                while ratatui_crossterm::crossterm::event::poll(
+                    std::time::Duration::from_millis(0),
+                )
+                .unwrap_or(false)
+                {
+                    let _ = ratatui_crossterm::crossterm::event::read();
+                }
+                let _ = tail_cmd::draw_tail_frame(&mut terminal, &buffer, &label, render_start);
+                match rx.recv_timeout(std::time::Duration::from_millis(80)) {
+                    Ok(line) => {
+                        if let Ok(mut b) = buffer.lock() {
+                            b.push(line);
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            // Final drain (lines raced with the disconnect), then freeze.
+            while let Ok(line) = rx.try_recv() {
+                if let Ok(mut b) = buffer.lock() {
+                    b.push(line);
+                }
+            }
+            tail::freeze_viewport(&mut terminal);
+        });
+
+        // Run through the engine — policy checks, history, exit-code and
+        // did-you-mean all apply exactly as on the normal path.
+        self.shell.set_external_tail(Some(tx.clone()));
+        let result = self.shell.execute(command);
+        self.shell.set_external_tail(None);
+        drop(tx); // closes the channel → render thread exits and freezes.
+
+        let _ = render.join();
+        drop(guard); // cooked mode back before printing the frozen output.
+
+        let elapsed = start.elapsed();
+        let exit_code = result.as_ref().map(|_| self.shell.last_exit_code()).unwrap_or_else(|_| {
+            let code = self.shell.last_exit_code();
+            if code != 0 { code } else { 1 }
+        });
+        let term_width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(0);
+        if let Some(status) = crate::block_header::render_failure_status(
+            exit_code,
+            elapsed,
+            term_width,
+        ) {
+            println!("{}", status);
+        }
+        let snippet = match result {
+            Ok(Some(s)) => {
+                let snippet: String = s.chars().take(200).collect();
+                auto_shell::shell::print_command_output(&s);
+                snippet
+            }
+            Ok(None) => String::new(),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                String::new()
+            }
+        };
+        Some((snippet, exit_code))
+    }
 
     /// Open the current input line in $EDITOR (or vim/notepad) and return the result.
     /// Plan 304: Multi-line edit via Ctrl+E.

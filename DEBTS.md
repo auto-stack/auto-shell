@@ -876,3 +876,15 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
   `test_auto_expression_execution`(`<obj#…>`)同源。
 - **对照说明**:stash 对照无法成立(干净 HEAD 因 auto-ai API 漂移
   编译不过,Plan 072 顺手适配了 ToolOutput/TurnStart/model_meta 三处)。
+
+## 尾部动态命令预览 v1 限制(Plan 074,2026-08-28)
+
+- **预览期间 Ctrl+C 不能中断命令**:raw 模式关闭控制台 Ctrl+C 处理,渲染
+  线程排空并丢弃按键(防残留字节泄入下轮 read_line)。属既有"阻塞路径不可
+  取消"DEBT 的延伸;取消需要 engine 暴露子进程句柄/kill 通道,另议。
+  逃生门:`ASH_NO_TAIL=1` 整体关闭预览回老路径。
+- **仅单命令形态**:管道/重定向/复合/含 `$` 反引号括号的行回退老路径
+  (tail_cmd::tail_eligible_line 保守闸);Windows shell 内建(echo/dir 裸用)
+  直接 spawn 失败走 fallback 链,无预览但行为不变。
+- **冻结为全文**:摘要/截断/落文件是 E5;长构建冻结后仍会占转录(与今天
+  直继承行为相同的总字节,只是从渐进变为一次性)。

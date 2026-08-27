@@ -23,6 +23,7 @@ pub mod prompt;
 pub mod renderer;
 pub mod repl;
 pub mod tail;
+pub mod tail_cmd;
 pub mod term;
 
 // Re-export the entry-point type for the `ash` binary (composition root).

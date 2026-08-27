@@ -191,6 +191,10 @@ pub struct Shell {
     /// (print + `Ok(None)`), but agent callers (`execute_for_agent`) must see
     /// them as errors — otherwise the model reads "ran fine, empty output".
     last_denial: Option<String>,
+    /// Plan 074 E2: when set, single external commands run with piped
+    /// stdout/stderr and stream their lines to this channel (the frontend's
+    /// live tail preview). Set/cleared around `execute()` by the REPL.
+    external_tail_tx: Option<std::sync::mpsc::Sender<String>>,
     /// Plan 011 (MS3-B): shell-host bridge for AutoLang system()/exit()/
     /// export(). Installed on the VM so natives can call back into this Shell.
     pub host: crate::host::ShellHostImpl,
@@ -414,6 +418,7 @@ impl Shell {
             bash_compat: false,
             policy,
             last_denial: None,
+            external_tail_tx: None,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
             script_args: Vec::new(), // Plan 034 Bug 2: no script args by default
@@ -914,8 +919,15 @@ impl Shell {
             return Ok(Some(String::new()));
         }
 
-        // Otherwise, execute as external command
-        let result = external::execute_external(input, &self.current_dir, false);
+        // Otherwise, execute as external command. Plan 074 E2: with a tail
+        // channel installed, single external commands run piped and stream
+        // lines to it (frontend live preview); the policy/exit-code/
+        // suggestion logic below is shared with the normal path.
+        let result = if let Some(tx) = self.external_tail_tx.clone() {
+            external::execute_external_tailed(input, &self.current_dir, &tx)
+        } else {
+            external::execute_external(input, &self.current_dir, false)
+        };
         if let Err(ref e) = result {
             self.last_exit_code = extract_exit_code(&e.to_string());
             // Plan 304 + 062 T3: fold the "did you mean?" suggestion into the
@@ -1137,6 +1149,14 @@ impl Shell {
     /// `system()`) to surface denials to the model.
     pub fn take_denial(&mut self) -> Option<String> {
         self.last_denial.take()
+    }
+
+    /// Plan 074 E2: install/remove the live-output channel for single
+    /// external commands. The frontend sets it around `execute()` so its
+    /// render thread can show a dynamic tail preview while the REPL thread
+    /// is blocked inside the engine.
+    pub fn set_external_tail(&mut self, tx: Option<std::sync::mpsc::Sender<String>>) {
+        self.external_tail_tx = tx;
     }
 
     /// Execute a command in bash-compatible capture mode and return its

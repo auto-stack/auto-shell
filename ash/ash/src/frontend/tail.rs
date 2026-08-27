@@ -31,15 +31,6 @@ use ratatui_crossterm::crossterm::terminal::{
 /// The Inline-viewport terminal a lease renders into.
 pub type TailTerminal = Terminal<ratatui_crossterm::CrosstermBackend<Stdout>>;
 
-/// RAII: enable raw mode on create, restore on drop (incl. panic unwinding).
-struct RawGuard;
-
-impl Drop for RawGuard {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-    }
-}
-
 /// A lease on the dynamic tail of the terminal.
 ///
 /// Acquire between two reedline `read_line` calls; render dynamic frames with
@@ -103,12 +94,7 @@ impl TailLease {
     /// The caller then prints the frozen content linearly starting at that
     /// row, so no blank gap remains between the transcript and the content.
     pub fn begin_freeze(&mut self) {
-        let area = self.terminal.get_frame().area();
-        let _ = execute!(
-            io::stdout(),
-            MoveTo(0, area.y),
-            Clear(ClearType::FromCursorDown),
-        );
+        freeze_viewport(&mut self.terminal);
     }
 
     /// The leased terminal (consumers render widgets through it when they
@@ -116,6 +102,37 @@ impl TailLease {
     pub fn terminal(&mut self) -> &mut TailTerminal {
         &mut self.terminal
     }
+
+    /// Plan 074: split the lease — the terminal moves to the render thread
+    /// (single-writer discipline: the REPL thread is blocked inside
+    /// `Shell::execute` while the tail runs and never touches it), the
+    /// raw-mode guard stays with the caller and restores cooked mode on
+    /// drop. The render thread calls [`freeze_viewport`] before exiting.
+    pub fn into_parts(self) -> (TailTerminal, RawGuard) {
+        (self.terminal, self._raw)
+    }
+}
+
+/// The raw-mode half of a [`TailLease`] (`into_parts`). Restores cooked mode
+/// on drop, including panic unwinding.
+pub struct RawGuard;
+
+impl Drop for RawGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+/// Freezing for a terminal handed to a render thread via
+/// [`TailLease::into_parts`]: cursor to the viewport's top row, clear to the
+/// end of screen — the frozen content is then printed linearly from there.
+pub fn freeze_viewport(terminal: &mut TailTerminal) {
+    let area = terminal.get_frame().area();
+    let _ = execute!(
+        io::stdout(),
+        MoveTo(0, area.y),
+        Clear(ClearType::FromCursorDown),
+    );
 }
 
 /// Bounded line buffer for dynamic tail views (E2 consumers): keeps the last

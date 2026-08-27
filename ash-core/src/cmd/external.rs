@@ -1,8 +1,107 @@
 use miette::{miette, IntoDiagnostic, Result};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, ChildStdout, Command, Stdio};
 
 use crate::pipeline::ExternalStream;
+
+/// Plan 074 E2: execute a single external command with stdout AND stderr
+/// piped, streaming each output line to `tx` as it arrives (arrival-order
+/// interleaving of both streams, like terminal inheritance looks). The
+/// frontend renders a live tail preview from this channel and prints the
+/// frozen output after completion.
+///
+/// Semantics mirror [`execute_external`]'s inherit path + the capture path's
+/// return contract: success → `Some(trimmed combined output)` (`None` when
+/// empty), failure → `Err("Command failed: {stderr}")` so the caller's
+/// exit-code extraction chain stays unchanged. Direct spawn failure falls
+/// back to the platform shell chain (un-tailed — same behavior as the normal
+/// path, rare for real executables).
+pub fn execute_external_tailed(
+    input: &str,
+    current_dir: &Path,
+    tx: &std::sync::mpsc::Sender<String>,
+) -> Result<Option<String>> {
+    let parts = parse_command(input);
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    let cmd_name = &parts[0];
+    let args = &parts[1..];
+
+    let mut cmd = Command::new(cmd_name);
+    cmd.args(args)
+        .current_dir(current_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    restore_sigint_in_child(&mut cmd);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => {
+            // Direct spawn failed (shell builtin, not on PATH, …) — run the
+            // platform fallback chain un-tailed, exactly like the normal path.
+            #[cfg(windows)]
+            {
+                if let Ok(ps_result) =
+                    try_execute_powershell(cmd_name, args, current_dir, false)
+                {
+                    return Ok(ps_result);
+                }
+            }
+            #[cfg(unix)]
+            {
+                for shell in &["sh", "bash", "zsh"] {
+                    if let Ok(shell_result) =
+                        try_execute_with_shell(cmd_name, args, current_dir, shell, false)
+                    {
+                        return Ok(shell_result);
+                    }
+                }
+            }
+            return Err(miette!("command not found: {}", cmd_name));
+        }
+    };
+
+    // Two reader threads → one channel: lines interleave in arrival order.
+    let read_pipe = |rd: Option<Box<dyn Read + Send>>, tx: std::sync::mpsc::Sender<String>| {
+        std::thread::spawn(move || {
+            let mut collected = String::new();
+            if let Some(rd) = rd {
+                for line in BufReader::new(rd).lines().map_while(Result::ok) {
+                    let _ = tx.send(line.clone());
+                    collected.push_str(&line);
+                    collected.push('\n');
+                }
+            }
+            collected
+        })
+    };
+    let stdout_handle = read_pipe(
+        child.stdout.take().map(|s| Box::new(s) as Box<dyn Read + Send>),
+        tx.clone(),
+    );
+    let stderr_handle = read_pipe(
+        child.stderr.take().map(|s| Box::new(s) as Box<dyn Read + Send>),
+        tx.clone(),
+    );
+
+    let status = child.wait().into_diagnostic()?;
+    let stdout_text = stdout_handle.join().unwrap_or_default();
+    let stderr_text = stderr_handle.join().unwrap_or_default();
+
+    if status.success() {
+        let combined = format!("{stdout_text}{stderr_text}");
+        let trimmed = combined.trim();
+        if trimmed.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(trimmed.to_string()))
+        }
+    } else {
+        Err(miette!("Command failed: {}", stderr_text.trim()))
+    }
+}
 
 /// Execute an external command with platform-specific fallbacks.
 ///
@@ -675,5 +774,63 @@ mod tests {
         let mut sorted = lines.to_vec();
         sorted.sort_unstable();
         assert_eq!(lines, sorted.as_slice());
+    }
+
+    // ── Plan 074 E2: tailed execution ─────────────────────────────────
+
+    fn tailed_run(cmd: &str) -> (Vec<String>, Result<Option<String>>) {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        // Separate thread so we can drain while it runs (mirrors the
+        // frontend render thread). `cmd` is owned by the closure ('static).
+        let cmd = cmd.to_string();
+        let t = {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                execute_external_tailed(&cmd, std::path::Path::new("."), &tx)
+            })
+        };
+        drop(tx); // only the worker's clones remain — loop ends when they drop
+        let mut lines = Vec::new();
+        for line in rx {
+            lines.push(line);
+        }
+        (lines, t.join().expect("tailed thread"))
+    }
+
+    #[test]
+    fn tailed_streams_lines_and_returns_output() {
+        #[cfg(windows)]
+        let cmd = "cmd /c echo tailed_hello";
+        #[cfg(unix)]
+        let cmd = "echo tailed_hello";
+        let (lines, result) = tailed_run(cmd);
+        assert!(
+            lines.iter().any(|l| l.contains("tailed_hello")),
+            "live channel got the line: {lines:?}"
+        );
+        assert_eq!(result.unwrap().unwrap().trim(), "tailed_hello");
+    }
+
+    #[test]
+    fn tailed_nonzero_exit_is_error_with_code() {
+        #[cfg(windows)]
+        let cmd = "cmd /c exit 3";
+        #[cfg(unix)]
+        let cmd = "sh -c \"exit 3\"";
+        let (_lines, result) = tailed_run(cmd);
+        assert!(result.is_err(), "non-zero exit must surface as Err");
+    }
+
+    #[test]
+    fn tailed_multi_line_output_all_lines_arrive() {
+        #[cfg(windows)]
+        let cmd = "cmd /c echo one&echo two";
+        #[cfg(unix)]
+        let cmd = "printf \"one\ntwo\n\"";
+        let (lines, result) = tailed_run(cmd);
+        assert!(lines.iter().any(|l| l.contains("one")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("two")), "{lines:?}");
+        let out = result.unwrap().unwrap();
+        assert!(out.contains("one") && out.contains("two"), "{out}");
     }
 }
