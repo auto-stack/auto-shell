@@ -11,7 +11,7 @@ use ratatui_widgets::block::Block;
 use ratatui_widgets::borders::BorderType;
 use std::io;
 
-use super::term::EditorTerminal;
+use crate::frontend::tail::TailTerminal;
 
 /// Cap for echo content columns — wider lines truncate with `…` so the box
 /// never wraps in the terminal.
@@ -20,7 +20,7 @@ const ECHO_MAX_CONTENT_COLS: usize = 68;
 /// One frame of the input box. Returns the textarea's inner area so the
 /// caller can place the hardware cursor.
 pub fn draw(
-    terminal: &mut EditorTerminal,
+    terminal: &mut TailTerminal,
     textarea: &mut TextArea,
     title: &str,
     hints: &str,

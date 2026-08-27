@@ -18,7 +18,6 @@
 //!   is erased on entry so no stray `>` line stays above the box (wrapped
 //!   multi-row inputs leave residue — accepted v1).
 
-mod term;
 mod view;
 
 /// The committed-echo renderer (boxed, dim, line-numbered) — used by the
@@ -28,7 +27,6 @@ pub use view::render_script_block;
 use ratatui_crossterm::crossterm::cursor;
 use ratatui_crossterm::crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui_crossterm::crossterm::execute;
-use ratatui_crossterm::crossterm::terminal::{Clear, ClearType};
 use ratatui_textarea::{CursorMove, TextArea};
 use std::io;
 
@@ -130,19 +128,10 @@ pub fn run_editor(prefill: &str, mode_hint: &str) -> EditorOutcome {
 }
 
 fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome> {
-    // Erase the just-submitted inline input row (the `>` line carrying only
-    // the invisible mode marker) so the box doesn't leave a stray prompt
-    // above it; the freed row is where the Inline viewport anchors. Nothing
-    // may print between the reedline submit and here, or the wrong row gets
-    // erased (see `apply_mode_switch`'s AutoScript suppression).
-    let _ = execute!(
-        io::stdout(),
-        cursor::MoveUp(1),
-        Clear(ClearType::CurrentLine),
-        cursor::MoveToColumn(0),
-    );
-
-    let (guard, mut terminal) = term::TerminalGuard::enter(VIEWPORT_HEIGHT)?;
+    // Plan 073: the modal rides the unified tail lease (acquire → draw →
+    // begin_freeze → Drop). Semantics identical to the old term.rs pair.
+    crate::frontend::tail::TailLease::erase_inline_row()?;
+    let mut lease = crate::frontend::tail::TailLease::acquire(VIEWPORT_HEIGHT)?;
 
     let mut textarea = TextArea::from(prefill.lines().map(String::from).collect::<Vec<_>>());
     if !prefill.trim().is_empty() {
@@ -153,7 +142,7 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
     ));
 
     let outcome = loop {
-        let chunk = view::draw(&mut terminal, &mut textarea, mode_hint, HINTS)?;
+        let chunk = view::draw(lease.terminal(), &mut textarea, mode_hint, HINTS)?;
         // Hardware cursor: OFF by default. The textarea draws its own block
         // cursor — a second hardware cursor shows up as the offset underline
         // users see (auto-ai 029 hit the same thing). Opt in via
@@ -208,8 +197,7 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
         }
     };
 
-    term::exit_modal(&mut terminal);
-    drop(guard);
+    lease.begin_freeze();
     Ok(outcome)
 }
 
