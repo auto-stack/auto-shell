@@ -1,7 +1,12 @@
-# 071 — ash-tui 融合退役:单一线性动态 CLI
+# 071 — 单一线性动态 CLI:线性输出+尾部动态架构(含 ash-tui 融合退役)
 
 - 日期:2026-08-26
-- 状态:**Phase 1 已实施(2026-08-27,用户放行 D1);Phase 2/3(crate 融合+清理)待裁定**
+- **定位修正(用户裁定,2026-08-27)**:本计划不只是"tui 的合并"——crate 融合只是
+  结构手段,真正的目标是**更好地实现「线性输出 + 尾部动态」架构**:CLI 主体是
+  传统线性输出(结果固定、累计、可原生复制),尾部是 BlockTUI 形态的动态区
+  (各种 Block 类型在运行中动态展示),运行完毕即冻结回归线性转录。shell 输出
+  不做 GUI 式多窗口 Block 管理(Phase 1 已退役)。此方向的深化探索见 §6。
+- 状态:**✅ COMPLETE(Phase 1-3 已实施,2026-08-27;实施记录见 §1/§7);§6 探索项为方向储备,逐个另立计划**
 - 决策背景(用户裁定,2026-08-26):CLI 版随功能增长(文本编辑、模态)与 TUI 版
   边界模糊,而两者使用场景相同(终端环境)。auto-ai 029 已验证「线性输出 +
   底部动态」是终端最优形态:纯 CLI 交互太弱,自管滚动的复杂 TUI 易错且复制
@@ -112,5 +117,45 @@
 3. **block_tui 退役的能力缺口**:其结构化块渲染 insert_before 形态由 CLI 的
    线性 ANSI 打印等价覆盖(037 已双轨并存数月,无已知只有 block-tui 才有的
    用户可见能力;Phase 1 前再核一遍 block_tui.rs 的独有交互清单)。
+
+## 6. 方向储备:「线性输出 + 尾部动态」的深化探索(用户裁定 2026-08-27,逐项另立计划)
+
+> 本节是本计划的真正主旨所在:融合/退役只是结构清理,以下是架构方向。
+> 核心不变式:**线性转录永远固定、累计、可原生复制;尾部动态区只在"进行中"
+> 存在,完成即冻结回归线性**。不回退成 block_tui 式全托管多窗口。
+
+- **E1 尾部租约(tail lease)统一机制**:070 编辑器模态与 subprocess 交接是
+  两个孤立先例;抽出统一的"尾部所有权"抽象——reedline `read_line` 间隙将
+  尾部 Inline viewport 租给动态内容,结束即释放,term.rs 的 raw/恢复/panic
+  兜底复用。这是 E2-E4 的公共地基。
+- **E2 运行中命令的动态块**:外部命令流式输出目前逐行线性打印(打出去即
+  固定);目标:运行中在尾部动态区渲染(限高滚动预览 + 耗时/spinner),
+  完成后 `insert_before` 一次性冻结全文。GUI 侧 SSE 块流已是此模型,CLI
+  对齐。
+- **E3 结构化命令的渐进渲染**:表格类输出在数据到达时尾部动态增长(计数/
+  预览),完成时渲染最终表格冻结——替代现在的"完成后才一次性打印"。
+- **E4 AI 回合的动态渲染**:chat 流式文本在尾部重绘(markdown 渐进着色可行),
+  回合结束整体冻结,替代逐字线性追加;审批卡(072 M2)同住动态区。
+- **E5 长输出摘要冻结**:运行中尾部实时预览,完成后冻结"摘要 + 全文(截断
+  或落临时文件提示路径)"——解决长构建刷屏淹没转录的问题。
+
+## 7. Phase 2/3 实施记录(2026-08-27)
+
+- **Phase 2(纯机械搬迁)**:`git mv ash-tui/src/* → ash/src/frontend/`
+  (11 模块:repl/prompt/menu/renderer/term/completions_reedline/commands+
+  commands_less/block_header/subprocess/editor_overlay);新 `ash/src/lib.rs`
+  (lib+bin 双目标,`pub use frontend::*` 根级再导出使迁入模块内部
+  `crate::` 路径零改写);唯一实质改写:commands.rs 内 `mod less` 的
+  `crate::commands_less` → `crate::frontend::commands_less`(私有模块,
+  glob 再导出不可达);三套集成测试迁 `ash/tests/`;依赖全量并入 ash
+  Cargo.toml;workspace members 两成员;ash-tui 目录删除。
+- **Phase 3(清理)**:auto-shell lib.rs 架构图/cmd.rs/completions.rs、
+  ash main.rs/commands.rs 五处过期结构注释改写;README 项目结构图更新
+  (两成员 + frontend/ 定位);`ash_tui` 残引清零(仅存 git 历史引用)。
+- **回归**:workspace 编译绿;ash lib 108 单测 + 15 集成(ls_render 7/
+  renderer_golden 6/completion_runtime 2)全绿;auto-shell 701 过 2 挂
+  (在册预存,与融合前逐字一致);`ash -c` 冒烟正常;`ls | head -n 2` 的
+  报错经 stash 对照确认为融合前既有行为(非回归,疑似 head 对结构化管道
+  输入的既有边角,另册追查)。
 4. **依赖平移**:auto-ai-client/auto-ai-agent 等 path 依赖随迁,版本对齐无冲突
    (同一 workspace 解析)。

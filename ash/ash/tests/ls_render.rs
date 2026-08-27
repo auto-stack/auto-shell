@@ -9,7 +9,7 @@
 //! sequence). Strip ANSI before asserting on text content; assert on raw output
 //! only for single-glyph icons and presence of specific style codes.
 
-use ash_tui::renderer::{render_table, render_table_with};
+use ash::frontend::renderer::{render_table, render_table_with};
 use auto_shell::config::IconStyle;
 use auto_val::{Array, Obj, Value};
 

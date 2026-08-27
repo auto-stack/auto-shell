@@ -3,10 +3,11 @@
 //! This library provides the core functionality for the AutoShell REPL,
 //! command execution, and pipeline system.
 //!
-//! ## Architecture (Plan 037 M2.2)
+//! ## Architecture (Plan 037 M2.2 → Plan 071 融合)
 //!
 //! - `auto-shell` (this crate) — pure Shell logic + commands, ZERO terminal deps
-//! - `ash-tui` crate — terminal frontend (reedline/crossterm/ratatui/nu-ansi-term)
+//! - `ash` crate — CLI binary + terminal frontend modules (`frontend/`,
+//!   reedline/crossterm/ratatui; was the separate ash-tui crate until Plan 071)
 //! - `ash-core` crate — pure logic, zero terminal dependencies
 //! - `cmd/`, `completions/`, `data/`, `shell/` — Shell logic layer
 

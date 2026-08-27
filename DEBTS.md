@@ -833,8 +833,8 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
   渲染自管 Paragraph + 行号 gutter + 自绘反色光标块,等于重写渲染层。
 - **接受理由**:M1 纯文本+行号完全可用;自渲染是已知工作量(计划 §3 Phase 4
   标注"可缓"),收益(编辑态着色)不抵当前优先级。
-- **参考**:`ash/ash-tui/src/editor_overlay/view.rs`;计划
-  `docs/plans/070-multiline-editor-overlay.md` §3 Phase 4。
+- **参考**:`ash/ash/src/frontend/editor_overlay/view.rs`(Plan 071 融合后
+  路径);计划 `docs/plans/archive/070-multiline-editor-overlay.md` §3 Phase 4。
 - **连带绕道**(有意识接受,详见计划复审记录):进入擦除仅清 1 行(折行输入
   残留)、viewport 固定 12 行(ratatui Inline 不可变高)、CJK 复制带续接空格
   (cell 网格固有)、IME 默认关硬件光标(`ASH_HARDWARE_CURSOR=1` 显式开启;

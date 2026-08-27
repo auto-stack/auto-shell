@@ -4,13 +4,14 @@ use std::path::PathBuf;
 /// Plan 037 M2.2: wire a `Shell` with the terminal frontend's hooks and
 /// terminal-only commands. The `ash` binary is the composition root — it pulls
 /// the pure Shell logic (auto-shell) together with the terminal frontend
-/// (ash-tui). Every code path that builds a `Shell` (`-c`, `-s`, script, REPL)
+/// modules (src/frontend/, ex-ash-tui per Plan 071). Every code path that
+/// builds a `Shell` (`-c`, `-s`, script, REPL)
 /// must call this so terminal-dependent commands (`less`/`more`/`color`) and
 /// structured rendering behave identically to before the crate split.
 fn wire_shell(shell: &mut auto_shell::Shell) {
-    shell.set_render_hook(Box::new(ash_tui::renderer::TuiRenderHook));
-    shell.set_pager_hook(Box::new(ash_tui::commands::TuiPagerHook));
-    shell.register_commands(ash_tui::commands::terminal_commands());
+    shell.set_render_hook(Box::new(ash::frontend::renderer::TuiRenderHook));
+    shell.set_pager_hook(Box::new(ash::frontend::commands::TuiPagerHook));
+    shell.register_commands(ash::frontend::commands::terminal_commands());
 }
 
 fn main() -> Result<()> {
@@ -274,7 +275,7 @@ fn main() -> Result<()> {
     println!("Type 'exit' or press Ctrl+D to exit");
     println!();
 
-    let mut repl = ash_tui::Repl::new()?;
+    let mut repl = ash::frontend::Repl::new()?;
     // Plan 008: apply CLI security policy to the REPL shell too.
     if policy.active() {
         repl.set_policy(policy);

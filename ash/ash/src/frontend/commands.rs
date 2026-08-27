@@ -6,10 +6,10 @@
 //!   here as a `Command` (it was previously a `Shell` dispatch arm).
 //!
 //! These register into a `Shell` via `Shell::register_commands` at the
-//! composition root (the `ash` binary).
+//! composition root (this crate's `main.rs`).
 
 mod less {
-    pub use crate::commands_less::*;
+    pub use crate::frontend::commands_less::*;
 }
 
 pub use less::{LessCommand, MoreCommand};

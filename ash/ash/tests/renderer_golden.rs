@@ -12,7 +12,7 @@ use ash_core::pipeline::atom::{Atom, AtomType};
 use ash_core::pipeline::AtomPipeline;
 use ash_core::renderer::render_pipeline_to_structured;
 use auto_shell::config::IconStyle;
-use ash_tui::renderer::{render_table_with, rendered_to_ansi};
+use ash::frontend::renderer::{render_table_with, rendered_to_ansi};
 use auto_val::{Array, Obj, Value};
 
 /// Build an AtomPipeline wrapping a Value with the given AtomType.

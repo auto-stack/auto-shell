@@ -8,7 +8,7 @@
 
 ### P1(结构止血,建议紧随 070)
 
-- [ ] **CI 修复与全量化**:ash workspace `cargo test --workspace`(ash-tui 138 单测与 examples e2e 回归网入 CI);ci.yml:79 parity 选择器指向改名前的包,疑似失效需修;rustfmt/clippy 从 continue-on-error 转硬门槛。(候选 Plan 071,半天量,可与文档止血合并)
+- [ ] **CI 修复与全量化**:ash workspace `cargo test --workspace`(frontend 模块测试与 examples e2e 回归网入 CI;Plan 071 融合后已并入 ash 包);ci.yml:79 parity 选择器指向改名前的包,疑似失效需修;rustfmt/clippy 从 continue-on-error 转硬门槛。(候选下一计划,半天量,可与文档止血合并)
 - [ ] **文档止血**:README/for-agents/SKILL 删除代码中不存在的 `ash agent` 子命令族与已退役 F3 流程;README 项目结构图修正(auto-shell/ash 角色写反、漏 ash-tui);补一个"文档冒烟"脚本(校验文档中 `ash xxx` 子命令真实存在)。
 - [ ] **合并根 workspace**:统一 Cargo.lock/target,消 axum 0.7+0.8 双版本与 windows 0.58/0.61/0.62 三版本共存(双 target 实测 ~6.9GB)。
 - [ ] **shell.rs 第一刀拆分**:内联 builtins(cmd_* 19 个)迁入既有 registry 抽象 + expansion 抽独立模块,调用点不动。

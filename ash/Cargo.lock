@@ -165,32 +165,6 @@ name = "ash"
 version = "0.1.0"
 dependencies = [
  "ash-core",
- "ash-tui",
- "auto-shell",
- "miette",
-]
-
-[[package]]
-name = "ash-core"
-version = "0.1.0"
-dependencies = [
- "auto-val",
- "chrono",
- "dirs 5.0.1",
- "indexmap",
- "miette",
- "regex",
- "serde",
- "serde_json",
- "sysinfo",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "ash-tui"
-version = "0.1.0"
-dependencies = [
- "ash-core",
  "auto-ai-agent",
  "auto-ai-client",
  "auto-lang",
@@ -210,6 +184,22 @@ dependencies = [
  "reedline",
  "tokio",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "ash-core"
+version = "0.1.0"
+dependencies = [
+ "auto-val",
+ "chrono",
+ "dirs 5.0.1",
+ "indexmap",
+ "miette",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

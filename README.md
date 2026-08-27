@@ -221,13 +221,14 @@ ash agent run "<cmd>"        # 执行 + 结构化信封
 ```
 auto-shell/
 ├── ash-core/          纯逻辑引擎（零终端依赖）：parser、pipeline、security、completions
-├── ash/               CLI/TUI workspace：reedline REPL + ratatui 渲染 + 80 命令
-│   └── auto-shell/    ash 二进制 crate
+├── ash/               CLI workspace（Plan 071 融合后两成员）
+│   ├── auto-shell/    纯 Shell 逻辑 crate：Shell 引擎、命令注册表、AI
+│   └── ash/           ash 二进制 + 终端前端模块（frontend/：线性输出 + 尾部动态）
 ├── ash-gui/           GUI（ash-gui-auto .at 项目 + ash-server 后端，Plan 061 外部后端架构；
 │                      旧 ash-gui-vue 参考实现与 ash-gui-bin iced 原型已退役，见 git 历史）
 ├── designs/           设计文档（Plan 029-035）
 ├── docs/              用户文档
-│   └── plans/         实施计划（Plan 014-030）
+│   └── plans/         实施计划（当前活跃 + archive/ 归档 + old/ 历史）
 └── examples/          脚本实例
 ```
 

@@ -13,9 +13,9 @@ pub use ash_core::completions::{
     WhenCondition, CompletionSource, ParseMode,
 };
 
-// Plan 037 M2.2: the reedline Completer adapter (`ShellCompleter`) moved to
-// the ash-tui crate (`ash_tui::completions_reedline`). The dep-free completion
-// types/specs below stay here.
+// Plan 037 M2.2 (Plan 071 融合后归属 ash crate): the reedline Completer
+// adapter (`ShellCompleter`) lives in `ash::frontend::completions_reedline`.
+// The dep-free completion types/specs below stay here.
 
 // Plan 041 M7: the frontend-agnostic completion engine — sinks the orchestration
 // logic out of ShellCompleter so TUI (reedline) and GUI (Tauri) share one engine.

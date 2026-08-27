@@ -9,5 +9,5 @@
 #   - ash-tui    : terminal frontend (reedline/crossterm/ratatui/nu-ansi-term)
 #   - ash        : the CLI binary (composition root — wires shell + tui)
 [workspace]
-members = ["auto-shell", "ash-tui", "ash"]
+members = ["auto-shell", "ash"]
 resolver = "2"
