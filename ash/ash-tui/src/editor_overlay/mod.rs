@@ -13,7 +13,7 @@
 //!   F2 AutoScript lock returns to the normal inline mode afterwards.
 //! - No alternate screen, no mouse capture — native copy/paste keeps working.
 //! - Runs strictly BETWEEN two reedline `read_line` calls: reedline returns
-//!   to cooked mode between reads (see block_tui.rs "Terminal ownership"), so
+//!   to cooked mode between reads (see the retired block_tui.rs in git history (Plan 038)), so
 //!   terminal ownership never overlaps. The just-submitted inline input row
 //!   is erased on entry so no stray `>` line stays above the box (wrapped
 //!   multi-row inputs leave residue — accepted v1).

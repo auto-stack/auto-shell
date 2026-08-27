@@ -1,13 +1,31 @@
 # 071 — ash-tui 融合退役:单一线性动态 CLI
 
 - 日期:2026-08-26
-- 状态:**待实施**(前置:070 编辑器模态落地)
+- 状态:**Phase 1 已实施(2026-08-27,用户放行 D1);Phase 2/3(crate 融合+清理)待裁定**
 - 决策背景(用户裁定,2026-08-26):CLI 版随功能增长(文本编辑、模态)与 TUI 版
   边界模糊,而两者使用场景相同(终端环境)。auto-ai 029 已验证「线性输出 +
   底部动态」是终端最优形态:纯 CLI 交互太弱,自管滚动的复杂 TUI 易错且复制
   不便。ash 的 CLI 已天然线性(输出全走 ANSI 打印,表格一次性 Buffer→ANSI),
   block-tui 实验的自管 viewport 复杂度不再需要。故:退役 ash-tui 差异化前端,
   融合为单一 CLI 本体,形态对齐 auto-ai-cli。
+- **用户二次裁定(2026-08-27,放行 Phase 1)**:不再单独搞 block-tui。「线性输出+
+  尾部动态」= 传统 CLI 模式 + 尾部的 BlockTUI 形态 —— 各种 Block 类型在尾部
+  **动态展示**(运行中),一旦运行完毕变成结果,就**回归固定输出、一直累计**。
+  把 shell 输出也做成 Block(ash 变成和 GUI 程序一样的多小窗口管理)对 shell
+  没有必要。
+- Phase 1 实施记录(2026-08-27):
+  - main.rs 删 `--block-tui` 预扫描(:57-59)/参数跳过臂(:108)/REPL 分支
+    (:288-296);ash-tui/src 删 `block_tui.rs`(1787 行,含 072 M2 期间给它
+    接的审批门 —— 模式退役,CLI 侧 repl.rs 的审批门为存活实现)与 `editor/`
+    (M1 底行编辑器 5 文件,唯一消费者即 block_tui);lib.rs 删导出;
+    block_header.rs 头注释去掉对 block_tui 的过期引用。
+  - 独有能力核验(计划 §5.3 要求):block_tui 的交互清单(结构化块 insert_before
+    渲染/Ctrl+R 历史/方向键历史/vi 检测/F 键模式切换/AI chat 流式)在 reedline
+    主线均有等价物(renderer 线性 ANSI、reedline 菜单/hints、repl.rs 模式机、
+    run_chat_loop);subprocess.rs(less/vim 交接)与 block_header.rs 按 D3 保留。
+  - 回归:workspace 编译绿;ash-tui 123 测试全绿(原 153 中 30 个属 block_tui.rs/
+    editor/,随文件删除);`ash -c` 冒烟正常,`--help` 无 block-tui 残留;
+    editor_overlay 两处对 block_tui.rs 的注释引用改为指向 git 历史。
 
 ## 1. 决策
 

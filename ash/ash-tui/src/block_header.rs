@@ -21,10 +21,6 @@
 //!                                              3ms  ✗
 //!   cat: missing: No such file or directory
 //! ```
-//!
-//! (The full-screen block TUI — `block_tui.rs` — keeps its own header WITH
-//! the command, because there the input line is consumed into the block.)
-//!
 //! All functions here are pure (no I/O) so they unit-test without a terminal.
 
 use nu_ansi_term::{Color, Style};

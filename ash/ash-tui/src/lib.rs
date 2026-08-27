@@ -10,12 +10,7 @@
 
 // Terminal-dependent modules moved here from auto-shell in Plan 037 M2.2.
 pub mod block_header;
-/// Plan 038 M0: experimental ratatui inline-viewport block TUI (counterpart
-/// to the reedline-driven [`Repl`]). Owned by the `--block-tui` CLI flag.
-pub mod block_tui;
 pub mod commands;
-/// Plan 038 M1: the bottom-line input editor for the block TUI.
-pub mod editor;
 /// Plan 038 M3: fullscreen subprocess handoff (teardown/rebuild ratatui).
 pub mod subprocess;
 // `commands_less.rs` is the original `less`/`more` implementation (crossterm),

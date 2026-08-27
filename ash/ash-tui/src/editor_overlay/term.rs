@@ -1,6 +1,6 @@
 //! Terminal lifecycle for the editor modal (Plan 070).
 //!
-//! RAII pattern mirrors block_tui.rs's `TerminalGuard`: raw mode is restored
+//! RAII pattern mirrors the retired block_tui.rs TerminalGuard (git history): raw mode is restored
 //! on every exit path including panics. No alternate screen, no mouse capture
 //! — the whole point is that native scrollback/copy stays usable.
 
