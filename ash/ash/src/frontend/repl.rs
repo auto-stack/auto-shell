@@ -489,32 +489,136 @@ impl Repl {
     /// agent may call ash command tools (pwd/ls/cat/...) mid-turn; tool events
     /// are rendered inline so the user sees what the agent is doing.
     fn handle_chat_turn(&mut self, user: &str) -> Result<()> {
+        // Plan 075 E4: the turn rides the tail lease when possible — stream
+        // events accumulate into TurnTailState (a render thread redraws the
+        // dynamic viewport), and the whole transcript freezes linearly at
+        // turn end. The user's input line is NOT erased: the question stays
+        // in the transcript; the frozen block holds the reply only.
+        let tail_state = if self.chat_tail_enabled() {
+            Some(std::sync::Arc::new(std::sync::Mutex::new(
+                crate::frontend::tail_chat::TurnTailState::new(),
+            )))
+        } else {
+            None
+        };
+
+        let state_for_cb = tail_state.clone();
         let on_event: Arc<dyn Fn(auto_ai_agent::agent::StreamEvent) + Send + Sync> = Arc::new(
-            |ev| match ev {
-                auto_ai_agent::agent::StreamEvent::Delta { text } => {
-                    use std::io::Write;
-                    print!("{text}");
-                    let _ = std::io::stdout().flush();
+            move |ev| {
+                // Sink: Live prints immediately (pre-075 fallback behavior);
+                // Tail pushes into the turn state for the render thread.
+                fn put_line(
+                    state: &Option<
+                        std::sync::Arc<
+                            std::sync::Mutex<crate::frontend::tail_chat::TurnTailState>,
+                        >,
+                    >,
+                    text: String,
+                    kind: crate::frontend::tail_chat::LineKind,
+                ) {
+                    match state {
+                        Some(st) => {
+                            if let Ok(mut s) = st.lock() {
+                                s.push_line(text, kind);
+                            }
+                        }
+                        None => println!("{text}"),
+                    }
                 }
-                auto_ai_agent::agent::StreamEvent::ToolStart { tool, args } => {
-                    println!("\n  \x1b[2m\u{2699} {tool} {}\x1b[0m", brief_args(&args));
-                }
-                auto_ai_agent::agent::StreamEvent::Tool { tool, result, .. } => {
-                    println!("\n  \x1b[2m\u{2190} {tool}: {}\x1b[0m", brief_result(&result));
-                }
-                auto_ai_agent::agent::StreamEvent::Warning { text } => {
-                    println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m");
-                }
-                auto_ai_agent::agent::StreamEvent::Done { .. } => {} // keep chat output clean
-                auto_ai_agent::agent::StreamEvent::Thinking { .. } => {}
-                auto_ai_agent::agent::StreamEvent::Error { message } => {
-                    println!("\n  [error] {message}");
-                }
-                auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
-                    println!("\n  [cancelled]");
+                match ev {
+                    auto_ai_agent::agent::StreamEvent::Delta { text } => {
+                        match &state_for_cb {
+                            Some(st) => {
+                                if let Ok(mut s) = st.lock() {
+                                    s.push_delta(&text);
+                                }
+                            }
+                            None => {
+                                use std::io::Write;
+                                print!("{text}");
+                                let _ = std::io::stdout().flush();
+                            }
+                        }
+                    }
+                    auto_ai_agent::agent::StreamEvent::ToolStart { tool, args } => {
+                        put_line(
+                            &state_for_cb,
+                            format!("  \x1b[2m\u{2699} {tool} {}\x1b[0m", brief_args(&args)),
+                            crate::frontend::tail_chat::LineKind::Tool,
+                        );
+                    }
+                    auto_ai_agent::agent::StreamEvent::Tool { tool, result, .. } => {
+                        put_line(
+                            &state_for_cb,
+                            format!("  \x1b[2m\u{2190} {tool}: {}\x1b[0m", brief_result(&result)),
+                            crate::frontend::tail_chat::LineKind::Tool,
+                        );
+                    }
+                    auto_ai_agent::agent::StreamEvent::Warning { text } => {
+                        put_line(
+                            &state_for_cb,
+                            format!("  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m"),
+                            crate::frontend::tail_chat::LineKind::Tool,
+                        );
+                    }
+                    auto_ai_agent::agent::StreamEvent::Done { .. } => {} // keep chat output clean
+                    auto_ai_agent::agent::StreamEvent::Thinking { .. } => {}
+                    auto_ai_agent::agent::StreamEvent::Error { message } => {
+                        put_line(
+                            &state_for_cb,
+                            format!("  [error] {message}"),
+                            crate::frontend::tail_chat::LineKind::Error,
+                        );
+                    }
+                    auto_ai_agent::agent::StreamEvent::Cancelled { .. } => {
+                        put_line(
+                            &state_for_cb,
+                            "  [cancelled]".to_string(),
+                            crate::frontend::tail_chat::LineKind::Tool,
+                        );
+                    }
                 }
             },
         );
+
+        // Lease + render thread (single viewport writer; the REPL thread is
+        // blocked inside block_on_async below). The done flag stays with the
+        // REPL thread to stop the loop after the turn.
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut render = None;
+        let mut raw_guard = None;
+        if let Some(state) = tail_state.clone() {
+            if let Ok(lease) = crate::frontend::tail::TailLease::acquire(
+                crate::frontend::tail_chat::CHAT_TAIL_HEIGHT,
+            ) {
+                let (terminal, guard) = lease.into_parts();
+                let done_for_thread = done.clone();
+                let start = std::time::Instant::now();
+                render = Some(std::thread::spawn(move || {
+                    let mut terminal = terminal;
+                    while !done_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                        // Swallow key events so raw-mode bytes don't leak
+                        // into the next reedline read_line.
+                        while ratatui_crossterm::crossterm::event::poll(
+                            std::time::Duration::from_millis(0),
+                        )
+                        .unwrap_or(false)
+                        {
+                            let _ = ratatui_crossterm::crossterm::event::read();
+                        }
+                        let _ = crate::frontend::tail_chat::draw_chat_frame(
+                            &mut terminal,
+                            &state,
+                            start,
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                    }
+                    crate::frontend::tail::freeze_viewport(&mut terminal);
+                }));
+                raw_guard = Some(guard);
+            }
+        }
+
         let session = self.chat.as_mut().expect("chat session initialized in run_chat_loop");
         // Plan 029 §7.2: refresh the agent's context (cwd/last-command/aliases)
         // before each turn — the user may have `cd`'d since the last turn.
@@ -522,9 +626,25 @@ impl Repl {
         let result = auto_shell::ai::block_on_async(
             session.send_turn_streaming(user, on_event),
         );
+
+        // Turn over: stop the render thread (it freezes the viewport on its
+        // way out), restore cooked mode, print the frozen transcript, then
+        // surface a transport error (if any) after the frozen block.
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = render {
+            let _ = handle.join();
+        }
+        drop(raw_guard); // cooked mode before printing
+        if let Some(state) = &tail_state {
+            let mut s = match state.lock() {
+                Ok(s) => s,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let frozen = s.frozen_lines();
+            crate::frontend::tail_chat::print_frozen_turn(&frozen);
+        }
         match result {
             Ok(_full_text) => {
-                println!(); // newline after the streamed reply
                 let _ = session.save();
             }
             Err(e) => {
@@ -539,6 +659,12 @@ impl Repl {
         // (non-readonly commands) waits for the user's verdict here.
         self.drain_ai_proposals();
         Ok(())
+    }
+    /// Plan 075: chat turns use the dynamic tail unless disabled.
+    fn chat_tail_enabled(&self) -> bool {
+        !std::env::var("ASH_NO_TAIL")
+            .map(|v| v == "1")
+            .unwrap_or(false)
     }
 
     /// Plan 072 M2 (S-3): present each AI-proposed command for approval.
