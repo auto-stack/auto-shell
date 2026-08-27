@@ -194,7 +194,7 @@ pub struct Shell {
     /// Plan 074 E2: when set, single external commands run with piped
     /// stdout/stderr and stream their lines to this channel (the frontend's
     /// live tail preview). Set/cleared around `execute()` by the REPL.
-    external_tail_tx: Option<std::sync::mpsc::Sender<String>>,
+    live_tail_tx: Option<std::sync::mpsc::Sender<String>>,
     /// Plan 011 (MS3-B): shell-host bridge for AutoLang system()/exit()/
     /// export(). Installed on the VM so natives can call back into this Shell.
     pub host: crate::host::ShellHostImpl,
@@ -265,6 +265,12 @@ fn canonicalize_or_parent(path: &std::path::Path) -> Result<PathBuf> {
 impl ShellContext for Shell {
     fn pwd(&self) -> std::path::PathBuf {
         Shell::pwd(self)
+    }
+    /// Plan 077 E3: forward to the live tail channel (no-op when unset).
+    fn emit_tail(&mut self, line: &str) {
+        if let Some(tx) = &self.live_tail_tx {
+            let _ = tx.send(line.to_string());
+        }
     }
     fn resolve_path(&self, arg: &str, for_write: bool) -> miette::Result<std::path::PathBuf> {
         Shell::resolve_path(self, arg, for_write)
@@ -418,7 +424,7 @@ impl Shell {
             bash_compat: false,
             policy,
             last_denial: None,
-            external_tail_tx: None,
+            live_tail_tx: None,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
             script_args: Vec::new(), // Plan 034 Bug 2: no script args by default
@@ -923,7 +929,7 @@ impl Shell {
         // channel installed, single external commands run piped and stream
         // lines to it (frontend live preview); the policy/exit-code/
         // suggestion logic below is shared with the normal path.
-        let result = if let Some(tx) = self.external_tail_tx.clone() {
+        let result = if let Some(tx) = self.live_tail_tx.clone() {
             external::execute_external_tailed(input, &self.current_dir, &tx)
         } else {
             external::execute_external(input, &self.current_dir, false)
@@ -1151,12 +1157,13 @@ impl Shell {
         self.last_denial.take()
     }
 
-    /// Plan 074 E2: install/remove the live-output channel for single
-    /// external commands. The frontend sets it around `execute()` so its
-    /// render thread can show a dynamic tail preview while the REPL thread
-    /// is blocked inside the engine.
-    pub fn set_external_tail(&mut self, tx: Option<std::sync::mpsc::Sender<String>>) {
-        self.external_tail_tx = tx;
+    /// Plan 074 E2 / 077 E3: install/remove the live-output channel shared
+    /// by tailed external execution AND instrumented structured commands
+    /// (`emit_tail`). The frontend sets it around `execute()` so its render
+    /// thread can show a dynamic tail preview while the REPL thread is
+    /// blocked inside the engine.
+    pub fn set_live_tail(&mut self, tx: Option<std::sync::mpsc::Sender<String>>) {
+        self.live_tail_tx = tx;
     }
 
     /// Execute a command in bash-compatible capture mode and return its

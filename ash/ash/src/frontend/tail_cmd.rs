@@ -33,6 +33,26 @@ pub fn tail_eligible_line(input: &str) -> bool {
     !t.is_empty() && !t.chars().any(|c| TAIL_BLOCKERS.contains(&c))
 }
 
+/// Which live-tail flavor a command qualified for (Plan 074 E2 / 077 E3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TailKind {
+    /// Plain single external command — erase the submitted line (the frozen
+    /// header re-states it) and apply the E5 freeze policy.
+    External,
+    /// Instrumented structured command (find) — keep the command line above
+    /// the frozen table (as today) and freeze the table verbatim.
+    Structured,
+}
+
+/// Plan 077 E3: registry commands instrumented with `emit_tail` — they get
+/// the structured tail preview (live count + recent rows, frozen table at
+/// completion). Extend as more commands gain emission (grep/du pattern).
+pub const INSTRUMENTED_COMMANDS: &[&str] = &["find"];
+
+pub fn is_instrumented(name: &str) -> bool {
+    INSTRUMENTED_COMMANDS.contains(&name)
+}
+
 /// Short label for the status line: first three words of the command.
 pub fn status_label(command: &str) -> String {
     command
@@ -191,6 +211,13 @@ mod tests {
         ] {
             assert!(!tail_eligible_line(line), "should block: {line:?}");
         }
+    }
+
+    #[test]
+    fn instrumented_set_membership() {
+        assert!(is_instrumented("find"));
+        assert!(!is_instrumented("grep"), "v1: only find is instrumented");
+        assert!(!is_instrumented("ls"));
     }
 
     #[test]

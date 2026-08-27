@@ -75,7 +75,9 @@ impl Command for FindCommand {
             .and_then(|s| s.parse().ok());
 
         let mut results = Vec::new();
-        find_recursive(&root, &root, root_arg, name_pattern.as_deref(), type_filter.as_deref(), max_depth, &mut results, 0)?;
+        // Plan 077 E3: bridge the context's live channel into the recursion.
+        let mut emit = |line: &str| shell.emit_tail(line);
+        find_recursive(&root, &root, root_arg, name_pattern.as_deref(), type_filter.as_deref(), max_depth, &mut results, 0, &mut emit)?;
 
         Ok(PipelineData::from_value(Value::Array(Array::from(results))))
     }
@@ -113,6 +115,7 @@ fn find_recursive(
     max_depth: Option<usize>,
     results: &mut Vec<Value>,
     depth: usize,
+    emit: &mut dyn FnMut(&str),
 ) -> Result<()> {
     // Check depth limit
     if let Some(max) = max_depth {
@@ -167,11 +170,13 @@ fn find_recursive(
             obj.set("path", Value::str(&rel));
             obj.set("type", Value::str(if is_dir { "dir" } else { "file" }));
             results.push(Value::Obj(obj));
+            // Plan 077 E3: live-progress emission (frontend tail preview).
+            emit(&rel);
         }
 
         // Recurse into directories
         if is_dir {
-            find_recursive(root, &path, root_arg, name_pattern, type_filter, max_depth, results, depth + 1)?;
+            find_recursive(root, &path, root_arg, name_pattern, type_filter, max_depth, results, depth + 1, emit)?;
         }
     }
 
@@ -262,5 +267,38 @@ mod tests {
     fn test_find_command_name() {
         let cmd = FindCommand;
         assert_eq!(cmd.name(), "find");
+    }
+
+    /// Plan 077 E3: with a live channel installed, find emits each hit as it
+    /// walks (the frontend's dynamic tail preview source).
+    #[test]
+    fn find_emits_hits_to_live_tail() {
+        use crate::shell::Shell;
+        let dir = std::env::temp_dir().join("ash-find-emit-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), "y").unwrap();
+
+        let mut shell = Shell::new();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        shell.set_live_tail(Some(tx));
+        let dir_str = dir.to_string_lossy().replace('\\', "/");
+        let out = shell.execute(&format!("find \"{dir_str}\"")).unwrap();
+        shell.set_live_tail(None);
+
+        let lines: Vec<String> = rx.into_iter().collect();
+        let norm = |l: &String| l.replace('\\', "/");
+        assert!(
+            lines.iter().any(|l| norm(l).ends_with("a.txt")),
+            "emitted: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| norm(l).ends_with("b.txt")),
+            "emitted: {lines:?}"
+        );
+        let text = out.unwrap_or_default();
+        assert!(text.contains("a.txt"), "frozen output unchanged: {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

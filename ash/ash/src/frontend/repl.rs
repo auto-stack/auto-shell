@@ -733,11 +733,12 @@ impl Repl {
     /// do NOT go through here, keeping their machine-readable output free of
     /// decoration.
     fn execute_with_header(&mut self, command: &str) -> (String, i32) {
-        // Plan 074 E2: plain single external commands get the live tail
-        // preview (dynamic viewport while running → frozen linear output on
+        // Plan 074 E2 / 077 E3: plain single external commands AND
+        // instrumented structured commands get the live tail preview
+        // (dynamic viewport while running → frozen linear output on
         // completion). Lease failure falls back to the normal path below.
-        if self.should_tail(command) {
-            if let Some(result) = self.try_execute_tail(command) {
+        if let Some(kind) = self.should_tail(command) {
+            if let Some(result) = self.try_execute_tail(command, kind) {
                 return result;
             }
         }
@@ -780,22 +781,29 @@ impl Repl {
         (snippet, exit_code)
     }
 
-    /// Plan 074 E2: eligibility for the live tail preview — a plain single
-    /// external command (no shell structures), not a registry/builtin/Auto
-    /// function, not on the interactive-command list (vim/less/top need a
-    /// real tty). `ASH_NO_TAIL=1` is the escape hatch.
-    fn should_tail(&self, command: &str) -> bool {
+    /// Plan 074 E2 / 077 E3: eligibility for the live tail preview.
+    /// [`TailKind::External`] — a plain single external command (no shell
+    /// structures), not on the interactive list (vim/less/top need a real
+    /// tty). [`TailKind::Structured`] — an instrumented registry command
+    /// (find). `ASH_NO_TAIL=1` is the shared escape hatch.
+    fn should_tail(&self, command: &str) -> Option<crate::frontend::tail_cmd::TailKind> {
         if std::env::var("ASH_NO_TAIL").map(|v| v == "1").unwrap_or(false) {
-            return false;
+            return None;
         }
         if !crate::frontend::tail_cmd::tail_eligible_line(command) {
-            return false;
+            return None;
         }
         let name = command.split_whitespace().next().unwrap_or("");
-        if !self.shell.classify_is_external_pub(name) {
-            return false;
+        if ash_core::cmd::interactive::is_interactive_command(command) {
+            return None;
         }
-        !ash_core::cmd::interactive::is_interactive_command(command)
+        if self.shell.classify_is_external_pub(name) {
+            Some(crate::frontend::tail_cmd::TailKind::External)
+        } else if crate::frontend::tail_cmd::is_instrumented(name) {
+            Some(crate::frontend::tail_cmd::TailKind::Structured)
+        } else {
+            None
+        }
     }
 
     /// Plan 074 E2: run one command with the live tail preview. Returns the
@@ -809,12 +817,14 @@ impl Repl {
     /// and redrawing on an 80ms cadence. Key events are drained and dropped
     /// so nothing leaks into the next reedline read (Ctrl+C cannot interrupt
     /// — known v1 limitation, plan 074 §3).
-    fn try_execute_tail(&mut self, command: &str) -> Option<(String, i32)> {
+    fn try_execute_tail(&mut self, command: &str, kind: crate::frontend::tail_cmd::TailKind) -> Option<(String, i32)> {
         use crate::frontend::tail;
         use crate::frontend::tail_cmd;
 
         let start = std::time::Instant::now();
-        let _ = tail::TailLease::erase_inline_row();
+        if kind == crate::frontend::tail_cmd::TailKind::External {
+            let _ = tail::TailLease::erase_inline_row();
+        }
         let lease = tail::TailLease::acquire(tail_cmd::TAIL_HEIGHT).ok()?;
         let (terminal, guard) = lease.into_parts();
 
@@ -865,9 +875,9 @@ impl Repl {
 
         // Run through the engine — policy checks, history, exit-code and
         // did-you-mean all apply exactly as on the normal path.
-        self.shell.set_external_tail(Some(tx.clone()));
+        self.shell.set_live_tail(Some(tx.clone()));
         let result = self.shell.execute(command);
-        self.shell.set_external_tail(None);
+        self.shell.set_live_tail(None);
         drop(tx); // closes the channel → render thread exits and freezes.
 
         let _ = render.join();
@@ -889,7 +899,13 @@ impl Repl {
         let snippet = match result {
             Ok(Some(s)) => {
                 let snippet: String = s.chars().take(200).collect();
-                Self::print_frozen_output(&s);
+                if kind == crate::frontend::tail_cmd::TailKind::Structured {
+                    // The frozen table is the artifact — print verbatim
+                    // (E5 summary policy is for plain external output).
+                    auto_shell::shell::print_command_output(&s);
+                } else {
+                    Self::print_frozen_output(&s);
+                }
                 snippet
             }
             Ok(None) => String::new(),

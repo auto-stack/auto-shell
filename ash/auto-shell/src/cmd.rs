@@ -270,12 +270,17 @@ pub trait ShellContext {
     fn cd(&mut self, path: &str) -> Result<()>;
     /// Source (execute) a script file.
     fn execute_script_file(&mut self, path: &std::path::Path) -> Result<()>;
-    /// Plan 037 M2.2: the interactive pager hook, if one was injected by the
+    /// Plan 037 M2.2: the interactive pager hook, if one is injected by the
     /// frontend (ash's `frontend/` module tree, ex-ash-tui). `None` for
     /// dep-free/embedded consumers; `show
     /// --pager` then falls through to streamed highlighting. Commands access
     /// this via the trait rather than the concrete `Shell`.
     fn pager_hook(&self) -> Option<&dyn crate::shell::PagerHook>;
+    /// Plan 077 E3: emit one live-progress line to the frontend's dynamic
+    /// tail (when a live channel is installed around `execute`). Long-running
+    /// structured commands call this as results arrive; the default no-op
+    /// keeps every other implementor untouched.
+    fn emit_tail(&mut self, _line: &str) {}
 }
 
 /// Trait that all shell commands must implement
