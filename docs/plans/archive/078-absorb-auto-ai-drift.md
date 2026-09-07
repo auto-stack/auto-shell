@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-078
-status: execution_done
+status: archived
 feature_name: 吸收 auto-ai API 漂移(ToolOutput 分离 + StreamEvent 回合臂)
 author: [zhaop]
 created_at: 2026-09-07T00:00:00+08:00
@@ -150,7 +150,23 @@ Rust;async-trait;`auto-ai-agent`(path dep `../../../auto-ai/crates/auto-ai-agent
 
 ## 复审记录
 
-(待 /auto-plan:review 填写)
+**结论:通过(2026-09-07,同会话复审)。**
+
+- C1 ✅ ash `cargo check --workspace --all-targets` 0 error(折回主检出后
+  复跑 Finished,3.46s)
+- C2 ✅ ash-server `cargo check` 0 error(主检出复跑 Finished,4.31s)
+- C3 ✅ 基线不劣化:auto-shell lib 703 过(+1 引擎侧在册红
+  `test_auto_expression_execution`,DEBTS 在案);ash lib 129 过(+1 预存
+  flaky spill,6 跑 3 败实证);examples_parity 3 过(+1 新定性引擎侧红
+  P583 stale-copy,`[P583]` 横幅自证);其余目标全绿。三红均与本计划
+  diff 零交集,已在 DEBTS 注记②③入账
+- C4 ✅ 冒烟 `ash -c "echo hi"` + `ash -c "ls"`(077 表格渲染正常)
+- C5 ✅ DEBTS 结清+勘误③条;NEXT.md 078 登记→已归档(立项提交 04515d0)
+- spec-impact:纯下游漂移吸收,无 spec 组件增删,无目标触碰(本地无
+  specs 账本后端,三字段留空);scope 偏差(装箱测试面漏网 14 处)属同
+  计划验证门强制收敛,已记执行注记①
+- 工作树折叠:plan-078-dev → main(678f8ea),依赖只读 worktree
+  (auto-lang/auto-ai detached)与代码 worktree 随归档拆除
 
 ## 待澄清事项
 
