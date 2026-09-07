@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-078
-status: drafting
+status: execution_done
 feature_name: 吸收 auto-ai API 漂移(ToolOutput 分离 + StreamEvent 回合臂)
 author: [zhaop]
 created_at: 2026-09-07T00:00:00+08:00
@@ -10,7 +10,7 @@ supersedes_spec_components: []
 new_spec_components: []
 touched_goals: []
 
-current_step: 0
+current_step: 6
 total_steps: 6
 ---
 
@@ -102,20 +102,51 @@ Rust;async-trait;`auto-ai-agent`(path dep `../../../auto-ai/crates/auto-ai-agent
 
 ## 执行步骤
 
-- [ ] T1 `ash/auto-shell/src/ai/ask.rs:119` match 补
+- [x] T1 `ash/auto-shell/src/ai/ask.rs:119` match 补
       `TurnStart { .. } | TurnEnd { .. } => {}` 忽略臂。验证:
-      `cd ash && cargo check -p auto-shell 2>&1 | grep -c "E0004"` → 0
-- [ ] T2 `ash/auto-shell/src/ash_command_tool.rs:169/233/419` 三个
-      execute 成功返回 `ToolOutput::text(...)` 包装。验证:同上
-      `grep -c "E0053"` → 0
-- [ ] T3 同文件 `#[cfg(test)]` 段(~604/632/666/677)String 消费点改
+      `cd ash && cargo check -p auto-shell 2>&1 | grep -c "E0004"` → 0 ✅ 已完成
+- [x] T2 `ash/auto-shell/src/ash_command_tool.rs:169/233/419` 三个
+      execute 成功返回 `ToolOutput::text(...)` 包装(通道 `Result<String,_>`
+      不动,边界 `.map(ToolOutput::text)`)。验证:同上 `grep -c "E0053"`
+      → 0 ✅ 已完成
+- [x] T3 同文件 `#[cfg(test)]` 段(~604/632/666/677)String 消费点改
       `.content`;Display/contains/trim 移到 content;E0308 两处修类型。
       验证:`cd ash && cargo check --workspace --all-targets` → 0 error
-- [ ] T4 `cd ash-gui/ash-server && cargo check`,对 `src/worker.rs` 浮出的
-      E0004 逐一补臂。验证:该命令 → 0 error
-- [ ] T5 回归 + 冒烟:`cd ash && cargo test --workspace`(基线对照)、
-      `ash -c "echo hi"`。验证:C3/C4 达成
-- [ ] T6 DEBTS.md 偏斜条目结清注记。验证:git diff 仅注记行
+      ✅ 已完成(范围扩展,见执行注记①②)
+- [x] T4 `cd ash-gui/ash-server && cargo check`,对 `src/worker.rs` 浮出的
+      E0004 逐一补臂。验证:该命令 → 0 error ✅ 已完成(实际浮出为
+      `model_meta` E0063 ×3——PLAN-064 第三族;worker.rs StreamEvent
+      match 有通配兜底无需补臂;3 处 fake-client 初始化补
+      `model_meta: None`;复跑 Finished EXIT:0)
+- [x] T5 回归 + 冒烟:`cd ash && cargo test --workspace`(基线对照)、
+      `ash -c "echo hi"`。验证:C3/C4 达成 ✅ 已完成(执行注记④:
+      全套件 --no-fail-fast,红全部定性为引擎侧在案/flaky,非本计划引入;
+      冒烟 echo hi + ls 表格渲染正常)
+- [x] T6 DEBTS.md 偏斜条目结清注记。验证:git diff 仅注记行
+      ✅ 已完成(含勘误①②与新引擎侧红③)
+
+### 执行注记(2026-09-07)
+
+1. **566 装箱残留(计划外发现,T3 范围内吸收)**:上次装箱迁移只覆盖
+   lib/bin 目标,集成测试与 `#[cfg(test)]` 段有 14 处漏网
+   `Value::Obj(x)` → `Value::Obj(Box::new(x))`:`auto-shell/tests/atom_pipeline.rs`
+   ×3(189/202/216)、`ash/ash/src/frontend/renderer/tui.rs:444`(test mod ×2 span)、
+   `ash/ash/tests/ls_render.rs` ×3(40/60/112)、`ash/ash/tests/renderer_golden.rs`
+   ×6(61/81/105/122/133)。DEBTS"装箱面零残留"表述据此修正为"lib/bin 面零残留"。
+2. **ash bin 自有 StreamEvent 缺臂(计划预期为 ash-server,实际 ash bin 先浮出)**:
+   `ash/ash/src/frontend/repl.rs:528` match 补
+   `TurnStart { .. } | TurnEnd { .. } => {}`(与 ask.rs 同语义);ash-server
+   worker.rs 由 T4 验证。
+3. 匹配臂形态的 `Value::Obj(obj) =>`(from_csv/du/each 等)依赖匹配经济学
+   自动适配 Box,无需改动——全仓 grep 复核确认。
+4. **T5 全量基线定性(--no-fail-fast)**:auto-shell lib 703 过 +1 红
+   (`test_auto_expression_execution` `<obj#…>`,DEBTS 在册引擎侧红,基线
+   吻合);ash lib 129 过 +1 flaky(spill 毫秒名,6 跑 3 败实证,预存);
+   examples_parity 3 过 +1 红(`positional_arg_passes_to_system`,**新定性
+   引擎侧红**:auto-lang P583 堆池 stale-copy 污染第二轮 system() 命令串,
+   `[P583]` 横幅自证,独立 probe 复现,与本计划 diff 零交集);其余目标
+   全绿(ls_render 7/renderer_golden 6/atom_pipeline 18 等)。两个引擎侧
+   红均待 auto-lang 修复后回归,已在 DEBTS 注记③入账。
 
 ## 复审记录
 
