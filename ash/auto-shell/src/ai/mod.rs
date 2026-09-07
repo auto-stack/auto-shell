@@ -333,6 +333,33 @@ pub fn is_readonly_command(name: &str) -> bool {
     false
 }
 
+/// Plan 079: extract a displayable transcript from message history —
+/// `(is_user, text)` pairs in history order, built from `ContentBlock::Text`
+/// blocks only. ToolUse/ToolResult blocks and empty texts are skipped: they
+/// rendered live as ⚙️/← lines during the turn; replaying them would
+/// resurface the table dumps the user asked us to suppress. Multi-block
+/// messages join their text blocks with newlines.
+pub fn extract_transcript(messages: &[Message]) -> Vec<(bool, String)> {
+    let mut out = Vec::new();
+    for m in messages {
+        let mut text = String::new();
+        for block in &m.content {
+            if let auto_ai_client::ContentBlock::Text { text: t } = block {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(t);
+            }
+        }
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        out.push((m.role == "user", text));
+    }
+    out
+}
+
 /// A persistent, agent-backed chat conversation.
 ///
 /// Wraps an [`Agent`] (which owns the LLM client, ReAct loop, tool registry,
@@ -454,6 +481,14 @@ impl ChatSession {
             .count()
     }
 
+    /// Plan 079: displayable transcript of the conversation — text blocks
+    /// only, as `(is_user, text)` in history order. Tool use/result blocks
+    /// are skipped (they rendered live as ⚙️/← lines; replaying them would
+    /// resurface table dumps the user asked us to suppress).
+    pub fn transcript(&self) -> Vec<(bool, String)> {
+        extract_transcript(self.agent.history())
+    }
+
     /// Send one user turn through the agent's ReAct loop, streaming events to
     /// `on_event` as they arrive. The agent manages multi-turn memory and tool
     /// dispatch internally. On success returns the assistant's final text.
@@ -547,6 +582,67 @@ pub mod suggest;
 mod tests {
     use super::*;
     use std::path::Path;
+
+    // ── Plan 079 extract_transcript ─────────────────────────────────────
+
+    #[test]
+    fn transcript_skips_tool_blocks_and_keeps_text() {
+        use auto_ai_client::ContentBlock;
+        let messages = vec![
+            Message::user("这个目录有多少子目录?"),
+            Message {
+                role: "assistant".into(),
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "call-1".into(),
+                        name: "ls".into(),
+                        input: serde_json::json!({"args": []}),
+                    },
+                    ContentBlock::Text {
+                        text: "共 28 个子目录".into(),
+                    },
+                ],
+            },
+            Message {
+                role: "user".into(),
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "call-1".into(),
+                    content: "Name Type Size".into(),
+                    is_error: false,
+                }],
+            },
+        ];
+        let t = extract_transcript(&messages);
+        assert_eq!(t.len(), 2, "tool_use/tool_result blocks must be skipped");
+        assert_eq!(t[0], (true, "这个目录有多少子目录?".to_string()));
+        assert_eq!(t[1], (false, "共 28 个子目录".to_string()));
+    }
+
+    #[test]
+    fn transcript_joins_multi_text_blocks_and_skips_empty() {
+        use auto_ai_client::ContentBlock;
+        let messages = vec![
+            Message {
+                role: "assistant".into(),
+                content: vec![
+                    ContentBlock::Text { text: "第一段".into() },
+                    ContentBlock::Text { text: "第二段".into() },
+                ],
+            },
+            Message {
+                role: "user".into(),
+                content: vec![ContentBlock::Text { text: "   ".into() }],
+            },
+        ];
+        let t = extract_transcript(&messages);
+        assert_eq!(t.len(), 1, "whitespace-only messages are skipped");
+        assert_eq!(t[0], (false, "第一段\n第二段".to_string()));
+    }
+
+    #[test]
+    fn transcript_empty_history() {
+        assert!(extract_transcript(&[]).is_empty());
+    }
 
     // ── F3 validate_suggestion ─────────────────────────────────────────
 
