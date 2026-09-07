@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-079
-status: drafting
+status: execution_done
 feature_name: AI 模式 UX——恢复对话回放 + 工具结果摘要去表头
 author: [zhaop]
 created_at: 2026-09-07T00:00:00+08:00
@@ -104,15 +104,20 @@ Rust;auto-ai-agent 的 `Message { role, content: Vec<ContentBlock> }`
 
 ## 执行步骤
 
-- [ ] T1 `brief.rs` 增 `brief_tool_result` + 4 例单测。验证:
-      `cargo test -p auto-shell --lib brief` 全绿
-- [ ] T2 `repl.rs:553`/`ask.rs:129` Tool 臂换 `brief_tool_result`。验证:
-      `cargo check -p ash -p auto-shell` 0 error
-- [ ] T3 `ai/mod.rs` 增 `extract_transcript` + `ChatSession::transcript()`
-      + 3 例单测。验证:`cargo test -p auto-shell --lib extract_transcript`
-- [ ] T4 `repl.rs` 恢复回放(最近 5 轮 + 折叠)。验证:T3 测试 + 编译门
-- [ ] T5 全量:`cargo check --workspace --all-targets` 0 error +
-      `cargo test --workspace` 红名单不变。验证:C1/C2
+- [x] T1 `brief.rs` 增 `brief_tool_result` + 4 例单测。验证:
+      `cargo test -p auto-shell --lib brief` 全绿 ✅ 已完成(4/4)
+- [x] T2 `repl.rs:553`/`ask.rs:129` Tool 臂换 `brief_tool_result`(空摘要
+      跳过 ← 行)。验证:`cargo check -p ash -p auto-shell` 0 error
+      ✅ 已完成
+- [x] T3 `ai/mod.rs` 增 `extract_transcript` + `ChatSession::transcript()`
+      + 3 例单测。验证:`cargo test -p auto-shell --lib transcript`
+      ✅ 已完成(3/3)
+- [x] T4 `repl.rs` 恢复回放(最近 5 轮 + 折叠)。验证:T3 测试 + 编译门
+      ✅ 已完成
+- [x] T5 全量:`cargo check --workspace --all-targets` 0 error +
+      `cargo test --workspace` 红名单不变。验证:C1/C2 ✅ 已完成
+      (--all-targets Finished 0 error;套件红仅 spill flaky +
+      `<obj#…>` 引擎侧,与折回前基线一致)
 
 ## 复审记录
 
