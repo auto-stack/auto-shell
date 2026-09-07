@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-079
-status: execution_done
+status: archived
 feature_name: AI 模式 UX——恢复对话回放 + 工具结果摘要去表头
 author: [zhaop]
 created_at: 2026-09-07T00:00:00+08:00
@@ -121,7 +121,16 @@ Rust;auto-ai-agent 的 `Message { role, content: Vec<ContentBlock> }`
 
 ## 复审记录
 
-(待复审填写)
+**结论:通过(2026-09-07,同会话复审)。**
+
+- C1 ✅ 单测 brief 4/4 + extract_transcript 3/3(折回主检出复跑 6 passed)
+- C2 ✅ `--all-targets` 0 error(主检出 Finished 28.8s);套件红名单
+  不变(仅引擎侧在册 `<obj#…>`;spill flaky 非确定性,本轮未触发)
+- C3 ⏳ 交互验收待用户下次 F3 会话确认(回放可见性/N 行摘要观感);
+  历史文件现存 fake 测试轮次会随回放现形,可用 `/clear` 清空
+- C4 ✅ NEXT 079 登记→已归档
+- spec-impact 三字段留空(纯 UX 修补,无 spec 组件增删)
+- 工作树折叠:plan-079-dev → main,三个 worktree 随归档拆除
 
 ## 待澄清事项
 
