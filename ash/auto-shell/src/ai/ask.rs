@@ -126,7 +126,12 @@ pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Resul
             println!("\n  \x1b[2m\u{2699} {tool} {}\x1b[0m", crate::ai::brief::brief_args(&args));
         }
         StreamEvent::Tool { tool, result, .. } => {
-            println!("\n  \x1b[2m\u{2190} {tool}: {}\x1b[0m", crate::ai::brief::brief_result(&result));
+            // Plan 079: line-count summary for multi-line output (table
+            // headers are garbage to the user); empty result prints nothing.
+            let brief = crate::ai::brief::brief_tool_result(&result);
+            if !brief.is_empty() {
+                println!("\n  \x1b[2m\u{2190} {tool}: {brief}\x1b[0m");
+            }
         }
         StreamEvent::Warning { text } => println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m"),
         StreamEvent::Done { .. } => {}

@@ -417,6 +417,44 @@ impl Repl {
         let turns = self.chat.as_ref().expect("chat session initialized above").turn_count();
         if turns > 0 {
             println!("  * 已恢复 {} 轮对话 *", turns / 2);
+            // Plan 079: replay the most recent rounds so "restored" is
+            // visible — text turns only (⚙️/← tool lines are not replayed;
+            // extract_transcript already skips them). Older rounds fold
+            // into one line instead of flooding the screen.
+            const RESTORE_REPLAY_ROUNDS: usize = 5;
+            const RESTORE_MSG_LINES: usize = 8;
+            const RESTORE_Q_CHARS: usize = 120;
+            let transcript = self
+                .chat
+                .as_ref()
+                .expect("chat session initialized above")
+                .transcript();
+            let mut rounds: Vec<Vec<&(bool, String)>> = Vec::new();
+            for entry in &transcript {
+                if entry.0 || rounds.is_empty() {
+                    rounds.push(Vec::new());
+                }
+                rounds.last_mut().unwrap().push(entry);
+            }
+            let skip = rounds.len().saturating_sub(RESTORE_REPLAY_ROUNDS);
+            if skip > 0 {
+                println!("  \x1b[2m(更早 {skip} 轮已折叠)\x1b[0m");
+            }
+            for round in rounds.iter().skip(skip) {
+                for (is_user, text) in round {
+                    if *is_user {
+                        println!("  \x1b[2m? {}\x1b[0m", brief_truncate(text, RESTORE_Q_CHARS));
+                    } else {
+                        let lines: Vec<&str> = text.lines().collect();
+                        for line in lines.iter().take(RESTORE_MSG_LINES) {
+                            println!("  {line}");
+                        }
+                        if lines.len() > RESTORE_MSG_LINES {
+                            println!("  \x1b[2m…\x1b[0m");
+                        }
+                    }
+                }
+            }
         } else {
             println!("  * 开始新对话 *  (/clear 清空  /exit 退出  F1/F2/F3/Esc 离开)");
         }
@@ -548,11 +586,17 @@ impl Repl {
                         );
                     }
                     auto_ai_agent::agent::StreamEvent::Tool { tool, result, .. } => {
-                        put_line(
-                            &state_for_cb,
-                            format!("  \x1b[2m\u{2190} {tool}: {}\x1b[0m", brief_result(&result)),
-                            crate::frontend::tail_chat::LineKind::Tool,
-                        );
+                        // Plan 079: line-count summary for multi-line output
+                        // (a table's first line is its header — garbage to
+                        // the user); skip the ← line entirely when empty.
+                        let brief = brief_tool_result(&result);
+                        if !brief.is_empty() {
+                            put_line(
+                                &state_for_cb,
+                                format!("  \x1b[2m\u{2190} {tool}: {brief}\x1b[0m"),
+                                crate::frontend::tail_chat::LineKind::Tool,
+                            );
+                        }
                     }
                     auto_ai_agent::agent::StreamEvent::Warning { text } => {
                         put_line(
@@ -1299,7 +1343,7 @@ pub fn read_recent_history(path: &std::path::Path, n: usize) -> Vec<String> {
 // terminal-dep-free `super::brief` module so `ash ask` (frontend/ask.rs) can use
 // them without the frontend-tui feature. This file re-exports them for its own
 // StreamEvent rendering below.
-use auto_shell::ai::brief::{brief_args, brief_result};
+use auto_shell::ai::brief::{brief_args, brief_tool_result, brief_truncate};
 
 /// Common ash keybindings added to every edit-mode keybinding set (Tab
 /// completion, Ctrl+F hint accept, Ctrl+R history menu, F1-F3 mode switches,
