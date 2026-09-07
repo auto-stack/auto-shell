@@ -441,7 +441,10 @@ mod tests {
         b.set("size", Value::Void);
 
         AtomPipeline::Atom(Atom {
-            value: Value::Array(Array::from_vec(vec![Value::Obj(a), Value::Obj(b)])),
+            value: Value::Array(Array::from_vec(vec![
+                Value::Obj(Box::new(a)),
+                Value::Obj(Box::new(b)),
+            ])),
             atom_type: AtomType::FileList,
         })
     }

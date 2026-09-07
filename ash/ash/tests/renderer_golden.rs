@@ -58,7 +58,7 @@ fn golden_file_listing_plain_icons() {
     c.set("type", Value::str("file"));
     c.set("size", Value::Int(200));
 
-    let value = Value::Array(Array::from_vec(vec![Value::Obj(a), Value::Obj(b), Value::Obj(c)]));
+    let value = Value::Array(Array::from_vec(vec![Value::Obj(Box::new(a)), Value::Obj(Box::new(b)), Value::Obj(Box::new(c))]));
     for width in [40u16, 60, 80, 120] {
         assert_paths_match(&value, AtomType::FileList, width, IconStyle::Plain, "file-listing");
     }
@@ -78,7 +78,7 @@ fn golden_file_listing_emoji_and_nerd_icons() {
     c.set("name", Value::str("bin"));
     c.set("type", Value::str("dir"));
 
-    let value = Value::Array(Array::from_vec(vec![Value::Obj(a), Value::Obj(b), Value::Obj(c)]));
+    let value = Value::Array(Array::from_vec(vec![Value::Obj(Box::new(a)), Value::Obj(Box::new(b)), Value::Obj(Box::new(c))]));
     for icons in [IconStyle::Emoji, IconStyle::NerdFont] {
         assert_paths_match(&value, AtomType::FileList, 80, icons, "icons");
     }
@@ -102,7 +102,7 @@ fn golden_long_format_with_permissions() {
     b.set("size", Value::Void);
     b.set("modified", Value::str("2026-02-02"));
 
-    let value = Value::Array(Array::from_vec(vec![Value::Obj(a), Value::Obj(b)]));
+    let value = Value::Array(Array::from_vec(vec![Value::Obj(Box::new(a)), Value::Obj(Box::new(b))]));
     for width in [60u16, 100, 140] {
         assert_paths_match(&value, AtomType::FileList, width, IconStyle::Plain, "long-format");
     }
@@ -119,7 +119,7 @@ fn golden_non_file_listing_table() {
     b.set("widget", Value::str("slider"));
     b.set("count", Value::Int(3));
 
-    let value = Value::Array(Array::from_vec(vec![Value::Obj(a), Value::Obj(b)]));
+    let value = Value::Array(Array::from_vec(vec![Value::Obj(Box::new(a)), Value::Obj(Box::new(b))]));
     assert_paths_match(&value, AtomType::Table, 60, IconStyle::Plain, "non-file-table");
     // Icon style Off is a no-op here anyway, but verify both icon paths agree.
     assert_paths_match(&value, AtomType::Table, 60, IconStyle::Off, "non-file-table-off");
@@ -130,7 +130,7 @@ fn golden_off_icons_skip_icon_column() {
     let mut a = Obj::new();
     a.set("name", Value::str("x.rs"));
     a.set("type", Value::str("file"));
-    let value = Value::Array(Array::from_vec(vec![Value::Obj(a)]));
+    let value = Value::Array(Array::from_vec(vec![Value::Obj(Box::new(a))]));
     assert_paths_match(&value, AtomType::FileList, 60, IconStyle::Off, "icons-off");
 }
 

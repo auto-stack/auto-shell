@@ -563,6 +563,8 @@ impl Repl {
                     }
                     auto_ai_agent::agent::StreamEvent::Done { .. } => {} // keep chat output clean
                     auto_ai_agent::agent::StreamEvent::Thinking { .. } => {}
+                    auto_ai_agent::agent::StreamEvent::TurnStart { .. }
+                    | auto_ai_agent::agent::StreamEvent::TurnEnd { .. } => {}
                     auto_ai_agent::agent::StreamEvent::Error { message } => {
                         put_line(
                             &state_for_cb,

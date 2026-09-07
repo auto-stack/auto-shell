@@ -186,7 +186,7 @@ fn test_infer_file_list() {
     let mut obj = Obj::new();
     obj.set("name", Value::str("test.txt"));
     obj.set("type", Value::str("file"));
-    let arr = auto_val::Array::from(vec![Value::Obj(obj)]);
+    let arr = auto_val::Array::from(vec![Value::Obj(Box::new(obj))]);
 
     assert_eq!(infer_atom_type(&Value::Array(arr)), AtomType::FileList);
 }
@@ -199,7 +199,7 @@ fn test_infer_process_list() {
     let mut obj = Obj::new();
     obj.set("pid", Value::Int(1));
     obj.set("name", Value::str("init"));
-    let arr = auto_val::Array::from(vec![Value::Obj(obj)]);
+    let arr = auto_val::Array::from(vec![Value::Obj(Box::new(obj))]);
 
     assert_eq!(infer_atom_type(&Value::Array(arr)), AtomType::ProcessList);
 }
@@ -213,5 +213,8 @@ fn test_infer_system_info() {
     obj.set("cpu", Value::str("x86"));
     obj.set("memory", Value::Int(8192));
 
-    assert_eq!(infer_atom_type(&Value::Obj(obj)), AtomType::SystemInfo);
+    assert_eq!(
+        infer_atom_type(&Value::Obj(Box::new(obj))),
+        AtomType::SystemInfo
+    );
 }

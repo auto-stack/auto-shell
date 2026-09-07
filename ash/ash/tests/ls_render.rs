@@ -37,7 +37,7 @@ fn file_obj(name: &str, ty: &str) -> Value {
     let mut o = Obj::new();
     o.set("name", Value::str(name));
     o.set("type", Value::str(ty));
-    Value::Obj(o)
+    Value::Obj(Box::new(o))
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn non_file_listing_has_no_icon_column() {
     let mut o = Obj::new();
     o.set("name", Value::str("widget"));
     o.set("value", Value::Int(7));
-    let arr = Array::from_vec(vec![Value::Obj(o)]);
+    let arr = Array::from_vec(vec![Value::Obj(Box::new(o))]);
     let out = render_table(&Value::Array(arr), 60).expect("should render");
     assert!(!out.contains('■'));
     assert!(!out.contains('□'));
@@ -109,7 +109,7 @@ fn permissions_column_is_dimmed() {
     o.set("name", Value::str("main.rs"));
     o.set("type", Value::str("file"));
     o.set("permissions", Value::str("-rw-rw-rw-"));
-    let arr = Array::from_vec(vec![Value::Obj(o)]);
+    let arr = Array::from_vec(vec![Value::Obj(Box::new(o))]);
     let out = render_table(&Value::Array(arr), 80).expect("should render");
     assert!(out.contains("90m"), "permissions not dimmed (DarkGray=90m):\n{out}");
     // The permission text is still present (strip ANSI: per-cell styled).
