@@ -1,10 +1,11 @@
 //! Serializable types shared between the Shell backend and all frontends.
 //!
-//! These are frontend-agnostic (no `tauri::` types) — axum serializes them to
-//! JSON for the browser, Tauri serializes them via `invoke`/`emit` for the
-//! desktop app. The TypeScript mirrors live in `ash-gui-vue/src/types/shell.ts`.
+//! These are frontend-agnostic — axum serializes them to JSON for the
+//! browser (HTTP/SSE); the merged 模式 event pump forwards them as the same
+//! JSON. The TypeScript mirrors live in `ash-gui/vue-handwritten/lib/api.ts`
+//! (synced into gen/ by `restore-vue-assets.py`).
 //!
-//! Plan 042 M1: extracted from `ash-gui-vue/src-tauri/src/shell_worker.rs`.
+//! Plan 042 M1: extracted from the `ash-gui-vue` prototype (since deleted).
 
 use serde::Serialize;
 

@@ -8,7 +8,7 @@
 # 依赖顺序:先构建 auto-lang 主检出(产出 auto.exe),再构建后端 cdylib:
 #   cd ash-gui/ash-server && cargo build    → target/debug/ash_server.dll
 #
-# 旧入口 ash-runner(Plan 060 M3 手写宿主)已退役,bin 保留供参考。
+# 旧入口 ash-runner(Plan 060 M3 手写宿主)已删除;merged 一律走本脚本。
 # MCP UI 服务默认 :9247,可用 AUTOUI_MCP_PORT 避让。
 param(
     [string]$AutoBin = "D:\autostack\auto-lang\target\debug\auto.exe",

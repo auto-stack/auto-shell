@@ -127,13 +127,6 @@ async fn run_command(
     StatusCode::OK
 }
 
-#[derive(Deserialize)]
-struct RunSmartBody {
-    block_id: usize,
-    name: String,
-    args: Vec<String>,
-}
-
 async fn cancel(State(state): State<AppState>) -> impl IntoResponse {
     state.shell.cancel();
     StatusCode::OK
@@ -162,11 +155,6 @@ async fn kill_job(
 }
 
 // ── Plan 062 T11: NL→command ────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct Nl2CmdBody {
-    nl: String,
-}
 
 /// 待回填的 AI 建议命令(取后即清;空串 = 无)。
 async fn ai_pending(State(_state): State<AppState>) -> impl IntoResponse {

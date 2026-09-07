@@ -1,5 +1,0 @@
-name: "spikem3"
-version: "1.0.0"
-scene: "ui"
-render: "vm"
-api: "rust"

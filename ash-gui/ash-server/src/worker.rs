@@ -1,11 +1,11 @@
 //! Shell worker — owns the `!Send` Shell on a dedicated OS thread.
 //!
-//! This is the frontend-agnostic core extracted from
-//! `ash-gui-vue/src-tauri/src/shell_worker.rs` (Plan 042 M1). The only change
-//! is that output events go through a [`tokio::sync::broadcast`] channel
-//! ([`ShellEvent`]) instead of `tauri::AppHandle::emit`. Both the HTTP (axum)
-//! and Tauri transports subscribe to this channel and forward events in their
-//! own format (SSE frames / Tauri events).
+//! This is the frontend-agnostic core extracted from the `ash-gui-vue`
+//! prototype (Plan 042 M1; the prototype has since been deleted). The only
+//! change is that output events go through a [`tokio::sync::broadcast`]
+//! channel ([`ShellEvent`]) instead of the prototype's tauri emit.
+//! Subscribers forward events in their own format: `http.rs` (SSE frames)
+//! and `backend.rs`'s merged-模式 event pump.
 //!
 //! See the crate-level docs (`lib.rs`) for the architecture overview.
 
@@ -162,9 +162,6 @@ pub struct ShellHandle {
     /// Plan 062 T10: dedicated completion channel (own thread — never waits
     /// behind a running command).
     complete_tx: mpsc::UnboundedSender<CompleteReq>,
-    /// Plan 062 T12: dedicated AI-chat channel (own thread — the ChatSession
-    /// and its agent turns live there for the process lifetime).
-    chat_tx: mpsc::UnboundedSender<ChatReq>,
     /// Cancel flag — set directly (concurrent) so it lands even while the
     /// worker is blocked in `spawn_blocking`. See Plan 040 M5.
     cancel: Arc<AtomicBool>,
@@ -789,7 +786,6 @@ pub fn spawn() -> ShellHandle {
     ShellHandle {
         tx,
         complete_tx,
-        chat_tx,
         cancel,
         event_rx: event_tx,
         boot,
@@ -869,75 +865,7 @@ fn completion_ctx_shared(
     }
 }
 
-// ── Plan 062 T11: NL→command worker ─────────────────────────────────────────
-
-
-/// One NL→command translation — mirrors the CLI `ask_ai` (repl.rs:388-444):
-/// fixed system prompt + snapshot context, `tier:mid` single-shot, code-fence
-/// stripping, then the same pure validators (danger patterns / multi-step).
-/// Plan 063 T2: also returns the `split_steps` breakdown so the GUI card can
-/// render one row per step. Returns `(cmd, notice, multi, steps)`.
-fn translate_nl(
-    client: &mut Option<auto_ai_client::AiClient>,
-    session: &SharedSession,
-    nl: &str,
-    runtime: &tokio::runtime::Runtime,
-) -> Result<(String, String, bool, Vec<String>), String> {
-    let cmd = if fake_ai_enabled() {
-        fake_translate(nl)
-    } else {
-        if client.is_none() {
-            *client = Some(
-                auto_ai_client::AiClient::new()
-                    .map_err(|e| format!("AI client init: {e}"))?,
-            );
-        }
-        let system = format!(
-            "You are an AI assistant for Ash (AutoShell), a shell similar to bash/fish.\n\
-             {}\n\
-             The user will describe what they want to do in natural language.\n\
-             Translate it into a SINGLE ash shell command (or pipeline).\n\
-             Rules:\n\
-             - Respond with ONLY the command, no explanation, no markdown.\n\
-             - Use standard Unix commands (ls, grep, find, etc.).\n\
-             - For Ash-specific features, use: ls | .size > 10.mb | sort .name\n\
-             - If multiple steps are needed, use && to chain them.\n\
-             - If you're unsure, give your best single-command guess.",
-            nl_context(session)
-        );
-        let req = auto_ai_client::CompletionRequest::single("tier:mid", nl)
-            .with_system(&system)
-            .with_max_tokens(256)
-            .with_temperature(0.3);
-        match runtime.block_on(client.as_ref().unwrap().complete(&req)) {
-            Ok(resp) if resp.is_ok() => strip_code_fence(resp.content.trim()),
-            Ok(resp) => {
-                *client = None;
-                return Err(format!("AI returned error: {:?}", resp.error));
-            }
-            Err(e) => {
-                *client = None;
-                return Err(format!(
-                    "{e}(start the aaid daemon or set AAID_URL)"
-                ));
-            }
-        }
-    };
-    let findings = auto_shell::ai::validate_suggestion(&cmd);
-    let notice = findings
-        .iter()
-        .map(|f| match f {
-            auto_shell::ai::ValidationFinding::Danger(m) => format!("⚠ 危险:{m}"),
-            auto_shell::ai::ValidationFinding::Warning(m) => format!("⚠ {m}"),
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    let steps = auto_shell::ai::split_steps(&cmd);
-    let multi = steps.len() > 1;
-    Ok((cmd, notice, multi, steps))
-}
-
-/// Snapshot context for the translation prompt — mirrors
+/// Snapshot context for the chat worker's session prompt — mirrors
 /// `auto_shell::ai::context::build_context_block` (L0 OS/cwd + L1 last
 /// command/exit; the alias layer needs a live Shell and is skipped here).
 fn nl_context(session: &SharedSession) -> String {
@@ -965,38 +893,12 @@ fn nl_context(session: &SharedSession) -> String {
     lines.join("\n")
 }
 
-/// Strip markdown code fences (same chain as the CLI ask_ai).
-fn strip_code_fence(cmd: &str) -> String {
-    cmd.trim_start_matches("```bash\n")
-        .trim_start_matches("```sh\n")
-        .trim_start_matches("```\n")
-        .trim_end_matches("\n```")
-        .trim()
-        .to_string()
-}
-
 /// ASH_FAKE_AI (non-empty) swaps the model for a deterministic fake so tests
 /// never touch the real daemon (plan 062 §5 fake-backend contract).
 fn fake_ai_enabled() -> bool {
     std::env::var("ASH_FAKE_AI")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
-}
-
-/// Deterministic fake translation: questions containing 危险/danger exercise
-/// the danger validator (`rm -rf /` chain → Danger notice + multi-step card);
-/// questions containing 多步/multi produce a harmless 3-step `&&` chain for
-/// the step-execution acceptance (ST-01..03); everything else becomes an
-/// executable echo carrying the question (assertable end-to-end).
-fn fake_translate(nl: &str) -> String {
-    let n = nl.trim();
-    if n.contains("多步") || n.contains("multi") {
-        "echo multi-a && echo multi-b && echo multi-c".to_string()
-    } else if n.contains("danger") || n.contains("危险") {
-        "rm -rf / && echo cleaned".to_string()
-    } else {
-        format!("echo fake-ai:{n}")
-    }
 }
 
 // ── Plan 062 T12: block AI chat worker ──────────────────────────────────────
@@ -1033,7 +935,7 @@ fn spawn_chat_worker(
             // std Receiver 非 Sync(on_event 回调要 Send+Sync),套 Mutex。
             let prop_rx = std::sync::Arc::new(std::sync::Mutex::new(prop_rx));
             let drain_proposals = move |event_tx: &broadcast::Sender<ShellEvent>, rx: &std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>, bid: usize, turn_no: usize| {
-                let Ok(mut rx) = rx.lock() else { return };
+                let Ok(rx) = rx.lock() else { return };
                 while let Ok(cmd) = rx.try_recv() {
                     if let Ok(mut slot) = AI_PENDING.lock() {
                         *slot = Some(cmd.clone());

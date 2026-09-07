@@ -1,14 +1,13 @@
 // backend.rs — Plan 061:ash-server 作为外部后端 cdylib + 共享后端装配。
 //
-// 三种宿主形态共享同一装配逻辑(真 ash-core worker + 事件泵 + 10 端点注册):
+// 两种宿主形态共享同一装配逻辑(真 ash-core worker + 事件泵 + 10 端点注册):
 //   1. cdylib(本文件 #[no_mangle] 导出):`auto run` merged 模式经
 //      auto_lang::vm::backend_abi 装载注册(BackendRegistry 回调表);
-//   2. ash-runner bin(过渡形态):同进程直调 assemble_host_bridge;
-//   3. ash-server bin(HTTP):axum 路由直调 worker,不经此桥。
+//   2. ash-server bin(HTTP):axum 路由直调 worker,不经此桥。
 //
 // 事件泵:worker 的 ShellEvent broadcast → renderer::inject_shell_event
-// (SSE 同格式 JSON)。这是当前唯一宿主(auto run merged / ash-runner)
-// 的事件通道;BackendRegistry::inject_event 保留给未来不同通道的宿主。
+// (SSE 同格式 JSON)。这是当前唯一宿主(auto run merged)的事件通道;
+// BackendRegistry::inject_event 保留给未来不同通道的宿主。
 
 use std::sync::Arc;
 
@@ -32,7 +31,7 @@ pub extern "Rust" fn auto_backend_register(
     // boot 探活:① fail-fast(worker/ash-core 起不来立即报错而非静默);
     // ② 强制 Shell **立即**初始化 —— Shell 的会话 cwd 惰性取自首次调用
     // 时进程 cwd,而宿主随后会 chdir 到 src/front;此处先发制人,把会话
-    // cwd 锁定在项目根(与 ash-runner 行为一致,auto run / bin 两形态同)。
+    // cwd 锁定在项目根。
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -40,27 +39,6 @@ pub extern "Rust" fn auto_backend_register(
     rt.block_on(shell.command_list())
         .map_err(|e| format!("shell worker boot failed: {e}"))?;
     Ok(())
-}
-
-/// 过渡形态(ash-runner bin)用的注册表适配器:直连 vm::host_bridge 与
-/// renderer 事件注入(bin 场景只有一份 auto_lang,本地直调即正确)。
-pub struct HostBridgeRegistry;
-
-impl auto_lang::vm::backend_abi::BackendRegistry for HostBridgeRegistry {
-    fn host_call(&self, name: &str, f: auto_lang::vm::backend_abi::BackendHostCallFn) {
-        auto_lang::vm::host_bridge::register_host_call(name, f);
-    }
-    fn inject_event(&self, tag: &str, json: &str) -> bool {
-        auto_lang::ui::iced::renderer::inject_shell_event(tag, json)
-    }
-    fn log(&self, msg: &str) {
-        eprintln!("[ash-backend] {msg}");
-    }
-}
-
-/// 过渡入口(bin 直调,不经 cdylib):装配 + 注册进 vm::host_bridge。
-pub fn assemble_host_bridge() -> ShellHandle {
-    assemble(std::sync::Arc::new(HostBridgeRegistry))
 }
 
 /// 装配完整后端:进程内 Shell worker + 阻塞 runtime + 事件泵 + 10 端点注册。

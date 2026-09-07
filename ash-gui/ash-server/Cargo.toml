@@ -10,22 +10,15 @@ rust-version = "1.77.2"
 [lib]
 name = "ash_server"
 # Plan 061:cdylib 供 `auto run` merged 模式装载(backend_abi 插件 ABI);
-# rlib 供 ash-server/ash-runner bin 与 HTTP 形态直链。
+# rlib 供 ash-server bin(HTTP)直链。
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "ash-server"
 path = "src/bin/ash-server.rs"
 
-# Plan 060 M3:merged 模式宿主 runner —— 进程内起 worker + 宿主桥 +
-# auto-man 编排跑 .at GUI(auto-man 依赖 auto-lang;从本仓方向引用合法,
-# auto-lang 不可反向依赖本仓 —— cargo 环)。
-[[bin]]
-name = "ash-runner"
-path = "src/bin/ash-runner.rs"
-
 [dependencies]
-# Shell engine (same as ash-gui-vue)
+# Shell engine
 ash-core = { path = "../../ash-core" }
 auto-shell = { path = "../../ash/auto-shell", default-features = false }
 # Plan 062 T11: NL→命令翻译复用 CLI F3 同款 aaid 客户端(auto-ai 兄弟仓,
@@ -35,11 +28,9 @@ auto-ai-client = { path = "../../../auto-ai/crates/auto-ai-client" }
 auto-ai-agent = { path = "../../../auto-ai/crates/auto-ai-agent" }
 async-trait = "0.1"
 
-# Plan 060 M3:runner 侧 —— GUI 编排(auto-man)+ 宿主桥注入(auto-lang)。
-# 跨仓 path 依赖锚定 D:\autostack 兄弟布局:主检出直接成立;worktree
-# 检出需 .worktrees/auto-lang junction(见 plan 060 §M3)。
+# 宿主桥协议:auto_lang::vm::backend_abi(cdylib 装载/事件注入 ABI)。
+# 跨仓 path 依赖锚定 D:\autostack 兄弟布局:主检出直接成立。
 auto-lang = { path = "../../../auto-lang/crates/auto-lang" }
-auto-man = { path = "../../../auto-lang/crates/auto-man" }
 
 # 特性统一对齐:auto-lang workspace 的图里 windows(default/std)经由
 # python/pyo3 等成员间接启用;本 workspace 缺它会令 wgpu-hal 的 dx12
@@ -64,6 +55,6 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # Plan 072 M1: guard 路由级测试(oneshot 直接打 Router)。
 tower = { version = "0.4", features = ["util"] }
 
-# This crate is its OWN workspace (like ash-gui-vue/ash-gui-bin) so its
-# dependency graph does not unify into the shell's workspace.
+# This crate is its OWN workspace so its dependency graph does not
+# unify into the shell's workspace.
 [workspace]

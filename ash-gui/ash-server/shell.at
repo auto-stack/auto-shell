@@ -3,10 +3,10 @@
 // 架构(对齐 015-notes 双模式 / docs/plans/060 §M3):
 //   HTTP 模式:api.at 裸调用被 codegen 改写为 fetch → ash-server →
 //     worker(auto_shell::Shell)→ ash-core;本文件不被执行。
-//   merged 模式(ash-runner 启动):api.at 的实现体调本桩,本桩经
-//     auto.host.call / auto.host.call_value 直调 runner 注册的桥函数
-//     (同一 worker/Shell/ash-core,进程内、无 socket)—— 两种模式
-//     共享同一份后端实现,语义零分叉。
+//   merged 模式(`auto run -r vm` 装载 ash-server cdylib):api.at 的
+//     实现体调本桩,本桩经 auto.host.call / auto.host.call_value 直调
+//     cdylib 注册的桥函数(同一 worker/Shell/ash-core,进程内、无
+//     socket)—— 两种模式共享同一份后端实现,语义零分叉。
 //
 // 历史:此文件曾是 891 行的 .at mock 后端(79 命令表/ls/cd/pwd/show
 // 语义 + JSON 拼装),与 ash-core 反复漂移(ls 分类、show 高亮均出过
