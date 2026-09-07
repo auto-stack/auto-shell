@@ -1347,6 +1347,7 @@ impl auto_ai_agent::Client for FakeChatClient {
                 }],
                 stop_reason: Some("tool_use".into()),
                 usage: None,
+                model_meta: None,
                 model: "fake".into(),
                 error: None,
             });
@@ -1361,6 +1362,7 @@ impl auto_ai_agent::Client for FakeChatClient {
                 }],
                 stop_reason: Some("tool_use".into()),
                 usage: None,
+                model_meta: None,
                 model: "fake".into(),
                 error: None,
             });
@@ -1370,6 +1372,7 @@ impl auto_ai_agent::Client for FakeChatClient {
             tool_calls: vec![],
             stop_reason: Some("end_turn".into()),
             usage: None,
+            model_meta: None,
             model: "fake".into(),
             error: None,
         })

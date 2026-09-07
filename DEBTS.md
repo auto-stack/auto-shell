@@ -915,3 +915,22 @@ ash 工作区对 auto-ai master(d294f5d)存在 10 错偏斜:`StreamEvent::`
 (ash_command_tool.rs 169/233/419/604/632/666/677)。全部为 auto-ai 自有
 类型,与 auto-lang 装箱无关;属 auto-shell 需吸收 auto-ai PLAN-029/064
 变更的独立事项(444/446"下游回传"同模式)。
+
+**【2026-09-07 结清】** 已由 PLAN-078 全量吸收:`execute` 三实现点边界
+`ToolOutput::text` 包装(通道 `Result<String,_>` 不动)、测试消费点改
+`.content`、TurnStart/TurnEnd 显式忽略臂(ask.rs + ash/ash repl.rs:528)、
+ash-server worker.rs `CompletionResponse` 补 `model_meta: None` ×3
+(PLAN-064 第三族,072 只适配了本仓 ash 侧)。ash `--all-targets` 与
+ash-server `cargo check` 双绿。两处勘误:① 上节"装箱面零残留"实为
+**lib/bin 面零残留**——集成测试/`#[cfg(test)]` 段另有 14 处漏网
+`Value::Obj(x)`,078 已补齐;② 076 的 `spill_writes_readable_unique_files`
+为**预存 flaky**(毫秒时间戳热缓存下同毫秒碰撞,实测 6 跑 3 败,路径与
+078 零交集),产品级唯一性保障(`ash-freeze-<millis>` 同毫秒覆盖)留作
+后续计划素材;③ **新引擎侧在案红(078 执行期发现)**:
+`examples_parity::positional_arg_passes_to_system` 确定性失败——.at 脚本
+for 循环第二轮的 `system()` 命令串被污染(`find . -maxdepth 1 -name
+*.bak` → `*.bak./x.tmp`),auto-lang VM 自带横幅
+`[P583] retain-after-free on pool idx N — stale copy symptom; resurrecting`
+自证为 Plan 583 堆池 stale-copy 残留(独立 probe 复现,与本仓 diff 零
+交集)。与 `<obj#…>` 显示红同属引擎侧,待 auto-lang 修复后回归;
+`ash-freeze` 同理,届时一并验证。

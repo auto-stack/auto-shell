@@ -23,7 +23,7 @@
 use std::sync::mpsc;
 
 use auto_ai_agent::tool::Tool;
-use auto_ai_agent::ToolError;
+use auto_ai_agent::{ToolError, ToolOutput};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
@@ -176,7 +176,7 @@ impl Tool for AshCommandTool {
         &self.description
     }
 
-    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
+    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
         let cmd_str = json_args_to_cli(&self.name, args)?;
 
         // Refuse known-dangerous patterns before they reach the shell.
@@ -202,6 +202,7 @@ impl Tool for AshCommandTool {
             .map_err(|_| ToolError::Exec("shell thread has exited".into()))?;
         orx.await
             .map_err(|_| ToolError::Exec("shell thread dropped the response".into()))?
+            .map(ToolOutput::text)
     }
 }
 
@@ -240,20 +241,20 @@ impl Tool for ProposeTool {
         &self.description
     }
 
-    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
+    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
         // Lenient conversion: the proposal card is human-reviewed in full, so
         // metacharacters are shown to the user instead of being refused.
         let cmd_str = json_args_to_cli_lenient(&self.name, args)?;
         self.sink
             .send(cmd_str.clone())
             .map_err(|_| ToolError::Exec("proposal channel closed".into()))?;
-        Ok(format!(
+        Ok(ToolOutput::text(format!(
             "已提交审批:建议命令 `{cmd_str}` 已展示给用户,等待用户决定是否执行。
 \"
             用户执行后,命令与结果会在下一轮对话的上下文中可见。请基于这一点继续回答
 \"
             (给出操作指引/说明这条命令做什么),不要假设它已执行。"
-        ))
+        )))
     }
 }
 
@@ -444,7 +445,7 @@ impl Tool for EvalAutoTool {
         })
     }
 
-    async fn execute(&self, args: &Value) -> Result<String, ToolError> {
+    async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
         let code = args
             .get("code")
             .and_then(|c| c.as_str())
@@ -472,6 +473,7 @@ impl Tool for EvalAutoTool {
             .map_err(|_| ToolError::Exec("shell thread has exited".into()))?;
         orx.await
             .map_err(|_| ToolError::Exec("shell thread dropped the response".into()))?
+            .map(ToolOutput::text)
     }
 }
 
@@ -601,7 +603,7 @@ mod tests {
     async fn runs_command_through_shell() {
         let (_thread, tool) = tool("echo", "print text");
         let out = tool.execute(&json!({"args": ["hello-agent"]})).await.unwrap();
-        assert!(out.contains("hello-agent"), "got: {out}");
+        assert!(out.content.contains("hello-agent"), "got: {}", out.content);
     }
 
     /// The core reason for the dedicated-thread design: session state (cwd,
@@ -629,8 +631,10 @@ mod tests {
                 .to_string()
         };
         assert!(
-            norm(&pwd) == norm(&tmp_str),
-            "pwd '{pwd}' should reflect cd into '{tmp_str}'"
+            norm(&pwd.content) == norm(&tmp_str),
+            "pwd '{}' should reflect cd into '{}'",
+            pwd.content,
+            tmp_str
         );
     }
 
@@ -663,12 +667,12 @@ mod tests {
         let t: &dyn Tool = &tool;
         assert_eq!(t.name(), "pwd");
         let out = t.execute(&Value::Null).await.unwrap();
-        assert!(!out.trim().is_empty(), "pwd should return a path");
+        assert!(!out.content.trim().is_empty(), "pwd should return a path");
     }
 
     // ── EvalAutoTool (Plan 029 §6) ─────────────────────────────────────
 
-    async fn eval_auto_run(code: &str) -> Result<String, ToolError> {
+    async fn eval_auto_run(code: &str) -> Result<ToolOutput, ToolError> {
         let thread = AshCommandShellThread::start();
         let tool = EvalAutoTool::new(thread.sender());
         // Drive the async tool call on a one-shot runtime (Shell::new inside
@@ -680,7 +684,7 @@ mod tests {
     #[tokio::test]
     async fn eval_auto_runs_simple_expression() {
         let out = eval_auto_run("1 + 2").await.unwrap();
-        assert!(out.contains('3'), "1+2 should produce 3, got: {out}");
+        assert!(out.content.contains('3'), "1+2 should produce 3, got: {}", out.content);
     }
 
     #[tokio::test]
@@ -688,7 +692,7 @@ mod tests {
         // A string expression returns its value (print() returns nothing, so
         // test a value-producing expression instead).
         let out = eval_auto_run("\"hello-auto\"").await.unwrap();
-        assert!(out.contains("hello-auto"), "got: {out}");
+        assert!(out.content.contains("hello-auto"), "got: {}", out.content);
     }
 
     #[tokio::test]
@@ -696,7 +700,7 @@ mod tests {
         // Define a fn and call it — multi-line AutoLang with control flow.
         let code = "fn greet(name) {\n  return \"hi \" + name\n}\ngreet(\"world\")";
         let out = eval_auto_run(code).await.unwrap();
-        assert!(out.contains("hi world"), "got: {out}");
+        assert!(out.content.contains("hi world"), "got: {}", out.content);
     }
 
     #[tokio::test]
