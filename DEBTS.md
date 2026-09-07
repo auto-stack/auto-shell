@@ -934,3 +934,8 @@ for 循环第二轮的 `system()` 命令串被污染(`find . -maxdepth 1 -name
 自证为 Plan 583 堆池 stale-copy 残留(独立 probe 复现,与本仓 diff 零
 交集)。与 `<obj#…>` 显示红同属引擎侧,待 auto-lang 修复后回归;
 `ash-freeze` 同理,届时一并验证。
+**【2026-09-07 结清③】** auto-lang Plan 585(`829a15852`,persistent
+session 池替换收口 load_strings/flash 常量区恢复 pinned 不变量)根治,
+master `5c8cf5c42` 下游实测:examples_parity 4/4 转绿、probe 三轮串完整
+且 `[P583]` 横幅消失;本仓全套件余红仅 `<obj#…>` 显示红(独立在案)与
+spill flaky,与池缺陷无关。
