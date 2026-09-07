@@ -220,7 +220,7 @@ pub fn apply(op: &PipelineOp, data: &Value) -> Value {
                             out.set(f.as_str(), v);
                         }
                     }
-                    Value::Obj(out)
+                    Value::Obj(Box::new(out))
                 })
                 .collect();
             Value::Array(Array::from_vec(selected))
@@ -275,7 +275,7 @@ pub fn apply(op: &PipelineOp, data: &Value) -> Value {
             for key in &order {
                 out.set(key.as_str(), Value::Array(Array::from_vec(groups[key].clone())));
             }
-            Value::Obj(out)
+            Value::Obj(Box::new(out))
         }
 
         PipelineOp::Sum { field } => {
@@ -396,7 +396,7 @@ mod tests {
         o.set("name", Value::str(name));
         o.set("type", Value::str(ty));
         o.set("size", Value::I64(size));
-        Value::Obj(o)
+        Value::Obj(Box::new(o))
     }
 
     fn sample_list() -> Value {
@@ -607,8 +607,8 @@ mod tests {
         user.set("name", Value::str(name));
         user.set("active", Value::Bool(active));
         let mut o = Obj::new();
-        o.set("user", Value::Obj(user));
-        Value::Obj(o)
+        o.set("user", Value::Obj(Box::new(user)));
+        Value::Obj(Box::new(o))
     }
 
     fn nested_list() -> Value {

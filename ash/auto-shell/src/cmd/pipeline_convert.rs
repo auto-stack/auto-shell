@@ -99,7 +99,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("name", Value::str("test.txt"));
         obj.set("type", Value::str("file"));
-        let arr = auto_val::Array::from(vec![Value::Obj(obj)]);
+        let arr = auto_val::Array::from(vec![Value::Obj(Box::new(obj))]);
         let pd = PipelineData::from_value(Value::Array(arr));
 
         let atom = pipeline_data_to_atom(pd);

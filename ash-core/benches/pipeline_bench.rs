@@ -88,7 +88,7 @@ fn make_row(i: usize) -> Value {
     obj.set("size", Value::Int(size));
     obj.set("type", Value::str(ty));
     obj.set("modified", Value::str("2026-07-30 12:00:00"));
-    Value::Obj(obj)
+    Value::Obj(Box::new(obj))
 }
 
 fn make_rows(n: usize) -> Value {

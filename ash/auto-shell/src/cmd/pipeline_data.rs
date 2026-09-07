@@ -154,7 +154,7 @@ mod tests {
         obj.set("name", Value::str("test"));
         obj.set("count", Value::Int(42));
 
-        let val = Value::Obj(obj);
+        let val = Value::Obj(Box::new(obj));
         let data = PipelineData::from_value(val);
 
         assert!(data.is_value());

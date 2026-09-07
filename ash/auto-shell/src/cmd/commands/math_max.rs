@@ -116,7 +116,7 @@ mod tests {
         obj1.set("score", Value::Int(85));
         let mut obj2 = Obj::new();
         obj2.set("score", Value::Int(92));
-        let arr = Array::from(vec![Value::Obj(obj1), Value::Obj(obj2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj1)), Value::Obj(Box::new(obj2))]);
         let result = find_max(&arr, Some("score")).unwrap();
         assert_eq!(result, Value::Int(92));
     }

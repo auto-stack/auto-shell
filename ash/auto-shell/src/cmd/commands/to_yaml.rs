@@ -217,7 +217,7 @@ mod tests {
         obj.set("name", Value::str("Alice"));
         obj.set("age", Value::Int(30));
 
-        let yaml = value_to_yaml(&Value::Obj(obj), 0);
+        let yaml = value_to_yaml(&Value::Obj(Box::new(obj)), 0);
         assert!(yaml.contains("name: Alice"));
         assert!(yaml.contains("age: 30"));
     }
@@ -229,9 +229,9 @@ mod tests {
         server.set("port", Value::Int(8080));
 
         let mut root = Obj::new();
-        root.set("server", Value::Obj(server));
+        root.set("server", Value::Obj(Box::new(server)));
 
-        let yaml = value_to_yaml(&Value::Obj(root), 0);
+        let yaml = value_to_yaml(&Value::Obj(Box::new(root)), 0);
         assert!(yaml.contains("server:"));
         assert!(yaml.contains("  host: localhost"));
         assert!(yaml.contains("  port: 8080"));
@@ -254,7 +254,7 @@ mod tests {
         let mut obj2 = Obj::new();
         obj2.set("name", Value::str("Bob"));
 
-        let arr = Array::from(vec![Value::Obj(obj1), Value::Obj(obj2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj1)), Value::Obj(Box::new(obj2))]);
         let yaml = value_to_yaml(&Value::Array(arr), 0);
         assert!(yaml.contains("- name: Alice"));
         assert!(yaml.contains("- name: Bob"));
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn test_empty_object() {
         let obj = Obj::new();
-        assert_eq!(value_to_yaml(&Value::Obj(obj), 0), "{}");
+        assert_eq!(value_to_yaml(&Value::Obj(Box::new(obj)), 0), "{}");
     }
 
     #[test]

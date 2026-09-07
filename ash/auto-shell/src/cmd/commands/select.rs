@@ -40,7 +40,7 @@ impl Command for SelectCommand {
                                 new_obj.set(*field, value.clone());
                             }
                         }
-                        result.push(Value::Obj(new_obj));
+                        result.push(Value::Obj(Box::new(new_obj)));
                     }
                 }
                 Ok(PipelineData::from_value(Value::Array(result)))
@@ -52,7 +52,7 @@ impl Command for SelectCommand {
                         new_obj.set(*field, value.clone());
                     }
                 }
-                Ok(PipelineData::from_value(Value::Obj(new_obj)))
+                Ok(PipelineData::from_value(Value::Obj(Box::new(new_obj))))
             }
             PipelineData::Value(_) => {
                 miette::bail!("select: input must be an object or array of objects");

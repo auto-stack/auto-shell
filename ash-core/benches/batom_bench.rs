@@ -17,7 +17,7 @@ fn make_file_entry(name: &str, size: i32) -> Value {
     obj.set("size", Value::Int(size));
     obj.set("type", Value::str("file"));
     obj.set("modified", Value::str("2026-06-11 14:30:00"));
-    Value::Obj(obj)
+    Value::Obj(Box::new(obj))
 }
 
 fn make_file_list(n: usize) -> Atom {
@@ -157,7 +157,7 @@ fn bench_string_dedup(c: &mut Criterion) {
         obj.set("status", Value::str("ok")); // repeated 1000x
         obj.set("ext", Value::str(if i % 3 == 0 { "rs" } else if i % 3 == 1 { "txt" } else { "md" }));
         obj.set("name", Value::str(&format!("file_{}", i)));
-        items.push(Value::Obj(obj));
+        items.push(Value::Obj(Box::new(obj)));
     }
     let atom = Atom::file_list(Value::Array(items.into()));
 

@@ -407,7 +407,7 @@ mod tests {
         b.set("type", Value::str("dir"));
         b.set("size", Value::Void);
 
-        Value::Array(Array::from_vec(vec![Value::Obj(a), Value::Obj(b)]))
+        Value::Array(Array::from_vec(vec![Value::Obj(Box::new(a)), Value::Obj(Box::new(b))]))
     }
 
     fn atom_of(value: Value, atom_type: AtomType) -> AtomPipeline {
@@ -421,7 +421,7 @@ mod tests {
         o.set("size", Value::Int(1));
         o.set("type", Value::str("file"));
         o.set("name", Value::str("x"));
-        let arr = Array::from_vec(vec![Value::Obj(o)]);
+        let arr = Array::from_vec(vec![Value::Obj(Box::new(o))]);
         let cols = collect_columns(&arr);
         assert_eq!(cols, vec!["name", "type", "size"]);
     }
@@ -435,7 +435,7 @@ mod tests {
         o.set("size", Value::Int(1));
         o.set("name", Value::str("x"));
         o.set("modified", Value::str("2026-01-01"));
-        let arr = Array::from_vec(vec![Value::Obj(o)]);
+        let arr = Array::from_vec(vec![Value::Obj(Box::new(o))]);
         let cols = collect_columns(&arr);
         assert_eq!(
             cols,
@@ -508,7 +508,7 @@ mod tests {
         let mut o = Obj::new();
         o.set("total", Value::Int(8192));
         o.set("usage_percent", Value::Int(72));
-        let pipeline = atom_of(Value::Obj(o), AtomType::MemoryInfo);
+        let pipeline = atom_of(Value::Obj(Box::new(o)), AtomType::MemoryInfo);
         let ro = render_pipeline_to_structured(&pipeline).expect("single obj is a record");
         match ro {
             RenderedOutput::Record { fields, atom_type } => {
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn render_empty_obj_returns_none() {
-        let pipeline = atom_of(Value::Obj(Obj::new()), AtomType::Record);
+        let pipeline = atom_of(Value::Obj(Box::new(Obj::new())), AtomType::Record);
         assert!(render_pipeline_to_structured(&pipeline).is_none());
     }
 
@@ -562,7 +562,7 @@ mod tests {
         o.set("type", Value::str("file"));
         o.set("permissions", Value::str("-rw-r--r--"));
         let pipeline = atom_of(
-            Value::Array(Array::from_vec(vec![Value::Obj(o)])),
+            Value::Array(Array::from_vec(vec![Value::Obj(Box::new(o))])),
             AtomType::FileList,
         );
         let ro = render_pipeline_to_structured(&pipeline).unwrap();

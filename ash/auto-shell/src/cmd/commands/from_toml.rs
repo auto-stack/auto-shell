@@ -98,7 +98,7 @@ pub fn parse_toml(text: &str) -> Result<Value> {
         }
     }
 
-    Ok(Value::Obj(root))
+    Ok(Value::Obj(Box::new(root)))
 }
 
 /// Parse a TOML value (string, number, bool, array, inline table).
@@ -147,7 +147,7 @@ fn parse_toml_value(s: &str) -> Result<Value> {
                 }
             }
         }
-        return Ok(Value::Obj(obj));
+        return Ok(Value::Obj(Box::new(obj)));
     }
 
     // Integer
@@ -232,14 +232,14 @@ fn ensure_path(root: &mut Obj, path: &[String]) {
     }
     let first = path[0].as_str();
     if !root.has(first) {
-        root.set(first, Value::Obj(Obj::new()));
+        root.set(first, Value::Obj(Box::new(Obj::new())));
     }
     if path.len() > 1 {
         // Clone, recurse, put back
         let sub = root.get(first).unwrap();
         let mut sub_obj = match sub {
             Value::Obj(o) => o,
-            _ => Obj::new(),
+            _ => Box::new(Obj::new()),
         };
         ensure_path(&mut sub_obj, &path[1..]);
         root.set(first, Value::Obj(sub_obj));
@@ -256,7 +256,7 @@ fn set_in_nested(root: &mut Obj, path: &[String], key: &str, value: Value) {
         } else {
             let mut obj = Obj::new();
             obj.set(key, value);
-            root.set(last, Value::Obj(obj));
+            root.set(last, Value::Obj(Box::new(obj)));
         }
     } else {
         let first = path[0].as_str();
@@ -284,11 +284,11 @@ fn ensure_array_path(root: &mut Obj, path: &[String]) {
         Value::Obj(obj) => obj.get(key),
         _ => None,
     }) {
-        arr.push(Value::Obj(Obj::new()));
+        arr.push(Value::Obj(Box::new(Obj::new())));
         set_array_at_path(root, parent_path, key, arr);
     } else {
         let mut arr = Array::new();
-        arr.push(Value::Obj(Obj::new()));
+        arr.push(Value::Obj(Box::new(Obj::new())));
         set_array_at_path(root, parent_path, key, arr);
     }
 }
@@ -296,7 +296,7 @@ fn ensure_array_path(root: &mut Obj, path: &[String]) {
 /// Get the Obj at a path from root.
 fn get_at_path(root: &Obj, path: &[String]) -> Option<Value> {
     if path.is_empty() {
-        return Some(Value::Obj(root.clone()));
+        return Some(Value::Obj(Box::new(root.clone())));
     }
     let first = path[0].as_str();
     let sub = root.get(first)?;

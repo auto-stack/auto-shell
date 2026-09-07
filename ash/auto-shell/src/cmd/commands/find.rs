@@ -169,7 +169,7 @@ fn find_recursive(
             // (which sets `name`) yields bare filenames (Plan 036 defect-B).
             obj.set("path", Value::str(&rel));
             obj.set("type", Value::str(if is_dir { "dir" } else { "file" }));
-            results.push(Value::Obj(obj));
+            results.push(Value::Obj(Box::new(obj)));
             // Plan 077 E3: live-progress emission (frontend tail preview).
             emit(&rel);
         }

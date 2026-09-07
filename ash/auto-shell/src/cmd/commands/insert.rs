@@ -105,7 +105,7 @@ mod tests {
     fn test_insert_new_field() {
         let mut obj = Obj::new();
         obj.set("name", Value::str("alice"));
-        let arr = Array::from(vec![Value::Obj(obj)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj))]);
         let result = insert_array(&arr, "age", &Value::Int(30));
         for item in result.iter() {
             if let Value::Obj(o) = item {
@@ -119,7 +119,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("name", Value::str("alice"));
         obj.set("age", Value::Int(25));
-        let arr = Array::from(vec![Value::Obj(obj)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj))]);
         let result = insert_array(&arr, "age", &Value::Int(99));
         for item in result.iter() {
             if let Value::Obj(o) = item {

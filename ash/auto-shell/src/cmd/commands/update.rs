@@ -115,7 +115,7 @@ mod tests {
         obj2.set("name", Value::str("bob"));
         obj2.set("age", Value::Int(25));
 
-        let arr = Array::from(vec![Value::Obj(obj1), Value::Obj(obj2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj1)), Value::Obj(Box::new(obj2))]);
         let result = update_array(&arr, "age", &Value::Int(99));
 
         let items: Vec<Value> = result.iter().cloned().collect();

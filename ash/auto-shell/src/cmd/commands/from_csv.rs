@@ -92,7 +92,7 @@ pub fn parse_csv(text: &str, delimiter: &str, has_header: bool) -> Result<Array>
             let key = headers.get(i).cloned().unwrap_or_else(|| format!("col{}", i));
             obj.set(key.as_str(), Value::str(val));
         }
-        result.push(Value::Obj(obj));
+        result.push(Value::Obj(Box::new(obj)));
     }
 
     Ok(result)

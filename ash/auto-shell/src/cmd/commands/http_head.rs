@@ -32,7 +32,7 @@ impl Command for HttpHeadCommand {
     ) -> Result<PipelineData> {
         let url = args.first().ok_or_else(|| miette::miette!("http head: missing URL"))?;
         let obj = curl_head(url, args)?;
-        Ok(PipelineData::from_value(Value::Obj(obj)))
+        Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
     }
 
     fn run_atom(
@@ -44,7 +44,7 @@ impl Command for HttpHeadCommand {
         let url = args.first().ok_or_else(|| miette::miette!("http head: missing URL"))?;
         let obj = curl_head(url, args)?;
         Ok(AtomPipeline::from_atom(Atom::new(
-            Value::Obj(obj),
+            Value::Obj(Box::new(obj)),
             AtomType::Record,
         )))
     }

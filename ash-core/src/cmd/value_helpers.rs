@@ -30,7 +30,7 @@ pub fn build_file_entry(
         obj.set("permissions", Value::str(p));
     }
 
-    Value::Obj(obj)
+    Value::Obj(Box::new(obj))
 }
 
 /// Format a Value for display
@@ -487,7 +487,7 @@ mod tests {
         obj.set("key", Value::str("value"));
         obj.set("count", Value::Int(42));
 
-        let val = Value::Obj(obj);
+        let val = Value::Obj(Box::new(obj));
         let formatted = format_value_for_display(&val);
         // format_obj_as_record outputs "key: \"value\", count: 42"
         assert!(formatted.contains("key:"));
@@ -523,7 +523,7 @@ mod tests {
         let mut o2 = Obj::new();
         o2.set("file", Value::str("f.txt"));
         o2.set("text", Value::str("apricot"));
-        let arr = Array::from(vec![Value::Obj(o1), Value::Obj(o2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(o1)), Value::Obj(Box::new(o2))]);
         let out = format_atom_as_bash(AtomType::MatchList, &Value::Array(arr));
         assert_eq!(out.as_deref(), Some("apple\napricot"));
     }
@@ -534,7 +534,7 @@ mod tests {
         o.set("file", Value::str("f.txt"));
         o.set("line_number", Value::Int(3));
         o.set("text", Value::str("apple"));
-        let arr = Array::from(vec![Value::Obj(o)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(o))]);
         let out = format_atom_as_bash(AtomType::MatchList, &Value::Array(arr));
         assert_eq!(out.as_deref(), Some("3:apple"));
     }
@@ -543,7 +543,7 @@ mod tests {
     fn bash_compat_count_result_obj() {
         let mut o = Obj::new();
         o.set("lines", Value::Int(5));
-        let out = format_atom_as_bash(AtomType::CountResult, &Value::Obj(o));
+        let out = format_atom_as_bash(AtomType::CountResult, &Value::Obj(Box::new(o)));
         assert_eq!(out.as_deref(), Some("5"));
     }
 

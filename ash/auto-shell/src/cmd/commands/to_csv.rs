@@ -154,7 +154,7 @@ mod tests {
         obj2.set("name", Value::str("Bob"));
         obj2.set("age", Value::str("25"));
 
-        let arr = Array::from(vec![Value::Obj(obj1), Value::Obj(obj2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj1)), Value::Obj(Box::new(obj2))]);
         let csv = value_to_csv(&Value::Array(arr), ",", true).unwrap();
 
         let lines: Vec<&str> = csv.lines().collect();
@@ -169,7 +169,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("x", Value::str("1"));
 
-        let arr = Array::from(vec![Value::Obj(obj)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj))]);
         let csv = value_to_csv(&Value::Array(arr), ",", false).unwrap();
         assert_eq!(csv, "1");
     }
@@ -179,7 +179,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("msg", Value::str("hello, world"));
 
-        let arr = Array::from(vec![Value::Obj(obj)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj))]);
         let csv = value_to_csv(&Value::Array(arr), ",", true).unwrap();
         assert!(csv.contains(r#""hello, world""#));
     }
@@ -189,7 +189,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("msg", Value::str(r#"said "hi""#));
 
-        let arr = Array::from(vec![Value::Obj(obj)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj))]);
         let csv = value_to_csv(&Value::Array(arr), ",", true).unwrap();
         assert!(csv.contains(r#""said ""hi"""#));
     }
@@ -200,7 +200,7 @@ mod tests {
         obj.set("a", Value::str("1"));
         obj.set("b", Value::str("2"));
 
-        let arr = Array::from(vec![Value::Obj(obj)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj))]);
         let csv = value_to_csv(&Value::Array(arr), ";", true).unwrap();
         assert_eq!(csv, "a;b\n1;2");
     }
@@ -217,7 +217,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("key", Value::str("val"));
 
-        let csv = value_to_csv(&Value::Obj(obj), ",", true).unwrap();
+        let csv = value_to_csv(&Value::Obj(Box::new(obj)), ",", true).unwrap();
         assert_eq!(csv, "key\nval");
     }
 

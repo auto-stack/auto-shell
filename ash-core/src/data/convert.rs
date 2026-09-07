@@ -128,7 +128,7 @@ pub fn file_entry_to_value(entry: &AshFileEntry) -> Value {
         obj.set("target", Value::str(target));
     }
 
-    Value::Obj(obj)
+    Value::Obj(Box::new(obj))
 }
 
 /// 将 AshFileEntry 列表转换为 Value::Array

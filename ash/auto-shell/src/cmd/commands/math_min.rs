@@ -117,7 +117,7 @@ mod tests {
         obj1.set("age", Value::Int(30));
         let mut obj2 = Obj::new();
         obj2.set("age", Value::Int(20));
-        let arr = Array::from(vec![Value::Obj(obj1), Value::Obj(obj2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj1)), Value::Obj(Box::new(obj2))]);
         let result = find_min(&arr, Some("age")).unwrap();
         assert_eq!(result, Value::Int(20));
     }

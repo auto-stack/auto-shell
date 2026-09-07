@@ -79,7 +79,7 @@ impl Command for DuCommand {
         total_obj.set("path", Value::str("total"));
         total_obj.set("size", Value::str(&format_size(total_bytes, human)));
         total_obj.set("bytes", Value::Str(total_bytes.to_string().into()));
-        entries.push(Value::Obj(total_obj));
+        entries.push(Value::Obj(Box::new(total_obj)));
 
         Ok(PipelineData::from_value(Value::Array(Array::from(entries))))
     }
@@ -161,7 +161,7 @@ fn compute_du(
                 obj.set("path", Value::str(&rel));
                 obj.set("size", Value::str(&format_size(size, human)));
                 obj.set("bytes", Value::Str(size.to_string().into()));
-                entries.push(Value::Obj(obj));
+                entries.push(Value::Obj(Box::new(obj)));
             }
         }
     } else {
@@ -175,7 +175,7 @@ fn compute_du(
         obj.set("path", Value::str(&rel));
         obj.set("size", Value::str(&format_size(total_bytes, human)));
         obj.set("bytes", Value::Str(total_bytes.to_string().into()));
-        entries.push(Value::Obj(obj));
+        entries.push(Value::Obj(Box::new(obj)));
     }
 
     Ok(())

@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn test_empty_object() {
         let obj = Obj::new();
-        assert_eq!(value_to_json(&Value::Obj(obj), 0, 0), "{}");
+        assert_eq!(value_to_json(&Value::Obj(Box::new(obj)), 0, 0), "{}");
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("name", Value::str("Alice"));
         obj.set("age", Value::Int(30));
-        let json = value_to_json(&Value::Obj(obj), 0, 0);
+        let json = value_to_json(&Value::Obj(Box::new(obj)), 0, 0);
         assert!(json.contains(r#""name":"Alice""#));
         assert!(json.contains(r#""age":30"#));
     }
@@ -248,7 +248,7 @@ mod tests {
     fn test_pretty_output() {
         let mut obj = Obj::new();
         obj.set("x", Value::Int(1));
-        let json = value_to_json(&Value::Obj(obj), 2, 0);
+        let json = value_to_json(&Value::Obj(Box::new(obj)), 2, 0);
         assert!(json.contains('\n'));
         assert!(json.contains("  "));
     }
@@ -258,7 +258,7 @@ mod tests {
         let inner = Array::from(vec![Value::Int(1), Value::Int(2)]);
         let mut obj = Obj::new();
         obj.set("nums", Value::Array(inner));
-        let json = value_to_json(&Value::Obj(obj), 0, 0);
+        let json = value_to_json(&Value::Obj(Box::new(obj)), 0, 0);
         assert_eq!(json, r#"{"nums":[1,2]}"#);
     }
 

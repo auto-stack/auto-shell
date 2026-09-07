@@ -832,7 +832,7 @@ impl<'a> BatomDecoder<'a> {
                     let val = self.decode_value()?;
                     obj.set(key_str, val);
                 }
-                Ok(Value::Obj(obj))
+                Ok(Value::Obj(Box::new(obj)))
             }
 
             TAG_PAIR => {
@@ -889,7 +889,7 @@ impl<'a> BatomDecoder<'a> {
                     }
                     data.push(row);
                 }
-                Ok(Value::Grid(auto_val::Grid { head, data }))
+                Ok(Value::Grid(Box::new(auto_val::Grid { head, data })))
             }
 
             TAG_RANGE => {
@@ -1214,7 +1214,7 @@ mod tests {
         let mut obj = auto_val::Obj::new();
         obj.set("name", Value::str("test.txt"));
         obj.set("size", Value::Int(1024));
-        let atom = Atom::new(Value::Obj(obj), AtomType::FileEntry);
+        let atom = Atom::new(Value::Obj(Box::new(obj)), AtomType::FileEntry);
         let bytes = encode_atom(&atom).unwrap();
         let decoded = decode_atom(&bytes).unwrap();
         assert_eq!(decoded.atom_type, AtomType::FileEntry);
@@ -1278,7 +1278,7 @@ mod tests {
             entry.set("name", Value::str(&format!("file{}.txt", i)));
             entry.set("size", Value::Int(i * 100));
             entry.set("type", Value::str("file"));
-            items.push(Value::Obj(entry));
+            items.push(Value::Obj(Box::new(entry)));
         }
         let atom = Atom::file_list(Value::Array(items.into()));
         let bytes = encode_atom(&atom).unwrap();
@@ -1296,7 +1296,7 @@ mod tests {
             let mut entry = auto_val::Obj::new();
             entry.set("type", Value::str("file")); // repeated
             entry.set("status", Value::str("ok")); // repeated
-            items.push(Value::Obj(entry));
+            items.push(Value::Obj(Box::new(entry)));
         }
         let atom = Atom::file_list(Value::Array(items.into()));
         let bytes = encode_atom(&atom).unwrap();

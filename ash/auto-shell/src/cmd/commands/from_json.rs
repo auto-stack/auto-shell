@@ -131,7 +131,7 @@ impl<'a> JsonParser<'a> {
         self.skip_whitespace();
         if self.peek() == Some(b'}') {
             self.pos += 1;
-            return Ok(Value::Obj(obj));
+            return Ok(Value::Obj(Box::new(obj)));
         }
 
         loop {
@@ -157,7 +157,7 @@ impl<'a> JsonParser<'a> {
             }
         }
 
-        Ok(Value::Obj(obj))
+        Ok(Value::Obj(Box::new(obj)))
     }
 
     fn parse_array(&mut self) -> Result<Value> {

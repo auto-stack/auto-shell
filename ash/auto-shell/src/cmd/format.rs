@@ -195,7 +195,7 @@ mod tests {
         let mut o = Obj::new();
         o.set("name", Value::str("alice"));
         o.set("age", Value::Int(30));
-        Value::Obj(o)
+        Value::Obj(Box::new(o))
     }
 
     // ── JSON ──
@@ -281,7 +281,7 @@ mod tests {
         b.set("name", Value::str("bob"));
         b.set("age", Value::Int(25));
         let table = Value::Array(
-            [Value::Obj(a), Value::Obj(b)]
+            [Value::Obj(Box::new(a)), Value::Obj(Box::new(b))]
                 .into_iter()
                 .collect::<Vec<_>>()
                 .into(),

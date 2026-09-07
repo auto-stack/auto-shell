@@ -112,7 +112,7 @@ fn chunks_to_array(chunks: &[Vec<&str>]) -> Array {
         obj.set("index", Value::Int(idx as i32));
         obj.set("lines", Value::Int(chunk.len() as i32));
         obj.set("content", Value::str(&chunk.join("\n")));
-        arr.push(Value::Obj(obj));
+        arr.push(Value::Obj(Box::new(obj)));
     }
     arr
 }

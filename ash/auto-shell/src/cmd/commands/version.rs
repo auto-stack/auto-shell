@@ -32,7 +32,7 @@ impl Command for VersionCommand {
         _shell: &mut dyn ShellContext,
     ) -> Result<PipelineData> {
         let obj = build_version_record();
-        Ok(PipelineData::from_value(Value::Obj(obj)))
+        Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
     }
 
     fn run_atom(
@@ -43,7 +43,7 @@ impl Command for VersionCommand {
     ) -> Result<AtomPipeline> {
         let obj = build_version_record();
         Ok(AtomPipeline::from_atom(Atom::new(
-            Value::Obj(obj),
+            Value::Obj(Box::new(obj)),
             AtomType::Record,
         )))
     }

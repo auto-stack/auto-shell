@@ -49,13 +49,13 @@ impl Command for WcCommand {
                     // Special case: just counting elements (like "ls | wc -l")
                     let mut obj = Obj::new();
                     obj.set("lines", Value::Int(arr.len() as i32));
-                    Ok(PipelineData::from_value(Value::Obj(obj)))
+                    Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
                 } else if count_all {
                     // When counting all and array contains objects (like ls output),
                     // just count the array elements
                     let mut obj = Obj::new();
                     obj.set("lines", Value::Int(arr.len() as i32));
-                    Ok(PipelineData::from_value(Value::Obj(obj)))
+                    Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
                 } else {
                     // Count text content in each element
                     let mut results = Vec::new();
@@ -91,7 +91,7 @@ impl Command for WcCommand {
                                 obj.set("index", Value::Int(index as i32));
                             }
 
-                            results.push(Value::Obj(obj));
+                            results.push(Value::Obj(Box::new(obj)));
                         }
                     }
 
@@ -134,14 +134,14 @@ impl Command for WcCommand {
                         }
                         total.set("file", Value::str("total"));
 
-                        results.push(Value::Obj(total));
+                        results.push(Value::Obj(Box::new(total)));
                     }
 
                     if results.is_empty() {
                         // If no text elements found, just return element count
                         let mut obj = Obj::new();
                         obj.set("lines", Value::Int(arr.len() as i32));
-                        Ok(PipelineData::from_value(Value::Obj(obj)))
+                        Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
                     } else {
                         Ok(PipelineData::from_value(Value::Array(Array::from(results))))
                     }
@@ -171,7 +171,7 @@ impl Command for WcCommand {
                     obj.set("chars", Value::Int(chars as i32));
                 }
 
-                Ok(PipelineData::from_value(Value::Obj(obj)))
+                Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
             }
             PipelineData::Value(Value::Obj(obj)) => {
                 // If it's an object with a "content" field, count that
@@ -203,7 +203,7 @@ impl Command for WcCommand {
                         result.set("file", filename.clone());
                     }
 
-                    Ok(PipelineData::from_value(Value::Obj(result)))
+                    Ok(PipelineData::from_value(Value::Obj(Box::new(result))))
                 } else {
                     miette::bail!("wc: cannot count non-text object");
                 }
@@ -232,7 +232,7 @@ impl Command for WcCommand {
                     obj.set("chars", Value::Int(chars as i32));
                 }
 
-                Ok(PipelineData::from_value(Value::Obj(obj)))
+                Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
             }
             PipelineData::Value(_) => {
                 miette::bail!("wc: input must be text, string, or array of texts");
@@ -311,7 +311,7 @@ fn wc_files(
             obj.set("chars", Value::Int(chars));
         }
         obj.set("file", Value::str(file_arg));
-        results.push(Value::Obj(obj));
+        results.push(Value::Obj(Box::new(obj)));
     }
 
     // If multiple files, add a "total" row (POSIX behavior).
@@ -330,7 +330,7 @@ fn wc_files(
             total.set("chars", Value::Int(total_chars));
         }
         total.set("file", Value::str("total"));
-        results.push(Value::Obj(total));
+        results.push(Value::Obj(Box::new(total)));
     }
 
     // Single file → return a single object; multiple → array.
@@ -423,9 +423,9 @@ mod tests {
         let mut obj3 = Obj::new();
         obj3.set("name", Value::str("file3.txt"));
 
-        arr.push(Value::Obj(obj1));
-        arr.push(Value::Obj(obj2));
-        arr.push(Value::Obj(obj3));
+        arr.push(Value::Obj(Box::new(obj1)));
+        arr.push(Value::Obj(Box::new(obj2)));
+        arr.push(Value::Obj(Box::new(obj3)));
 
         let input = PipelineData::from_value(Value::Array(arr));
         let result = wc.run(&args, input, &mut Shell::new()).unwrap();

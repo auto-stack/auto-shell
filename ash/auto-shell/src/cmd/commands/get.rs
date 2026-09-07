@@ -51,7 +51,7 @@ impl Command for GetCommand {
                                     new_obj.set(field.as_ref(), value.clone());
                                 }
                             }
-                            result.push(Value::Obj(new_obj));
+                            result.push(Value::Obj(Box::new(new_obj)));
                         }
                     }
                 }
@@ -75,7 +75,7 @@ impl Command for GetCommand {
                             new_obj.set(field.as_ref(), value.clone());
                         }
                     }
-                    Ok(PipelineData::from_value(Value::Obj(new_obj)))
+                    Ok(PipelineData::from_value(Value::Obj(Box::new(new_obj))))
                 }
             }
             PipelineData::Value(_) => {

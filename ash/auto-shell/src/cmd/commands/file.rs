@@ -56,7 +56,7 @@ impl Command for FileCommand {
             obj.set("path", Value::str(arg));
             obj.set("type", Value::str(&file_type));
             obj.set("mime", Value::str(&mime));
-            results.push(Value::Obj(obj));
+            results.push(Value::Obj(Box::new(obj)));
         }
 
         Ok(PipelineData::from_value(Value::Array(Array::from(results))))

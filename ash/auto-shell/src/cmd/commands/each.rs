@@ -80,7 +80,7 @@ mod tests {
         obj2.set("name", Value::str("bob"));
         obj2.set("age", Value::Int(25));
 
-        let arr = Array::from(vec![Value::Obj(obj1), Value::Obj(obj2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj1)), Value::Obj(Box::new(obj2))]);
         let result = extract_field(&arr, "name");
 
         let names: Vec<String> = result.iter().map(|v| v.as_str().to_string()).collect();
@@ -94,7 +94,7 @@ mod tests {
         let mut obj2 = Obj::new();
         obj2.set("age", Value::Int(25));
 
-        let arr = Array::from(vec![Value::Obj(obj1), Value::Obj(obj2)]);
+        let arr = Array::from(vec![Value::Obj(Box::new(obj1)), Value::Obj(Box::new(obj2))]);
         let result = extract_field(&arr, "name");
 
         // Only first object has "name"

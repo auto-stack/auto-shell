@@ -139,28 +139,28 @@ mod tests {
         obj.set("name", Value::str(name));
         obj.set("type", Value::str(file_type));
         obj.set("size", Value::Int(100));
-        Value::Obj(obj)
+        Value::Obj(Box::new(obj))
     }
 
     fn make_process_entry_obj(pid: i32, name: &str) -> Value {
         let mut obj = Obj::new();
         obj.set("pid", Value::Int(pid));
         obj.set("name", Value::str(name));
-        Value::Obj(obj)
+        Value::Obj(Box::new(obj))
     }
 
     fn make_system_info_obj() -> Value {
         let mut obj = Obj::new();
         obj.set("cpu", Value::str("x86"));
         obj.set("memory", Value::Int(8192));
-        Value::Obj(obj)
+        Value::Obj(Box::new(obj))
     }
 
     fn make_generic_obj() -> Value {
         let mut obj = Obj::new();
         obj.set("foo", Value::Int(1));
         obj.set("bar", Value::Int(2));
-        Value::Obj(obj)
+        Value::Obj(Box::new(obj))
     }
 
     #[test]

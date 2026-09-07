@@ -208,7 +208,7 @@ impl GrepCommand {
                         obj.set("line_number", Value::Int((line_num + 1) as i32));
                     }
                     obj.set("text", Value::str(line.trim()));
-                    results.push(Value::Obj(obj));
+                    results.push(Value::Obj(Box::new(obj)));
                 }
             }
         }
@@ -217,7 +217,7 @@ impl GrepCommand {
             let mut obj = Obj::new();
             obj.set("file", Value::str("<stdin>"));
             obj.set("count", Value::Int(match_count as i32));
-            results.push(Value::Obj(obj));
+            results.push(Value::Obj(Box::new(obj)));
         }
 
         Ok(AtomPipeline::from_atom(Atom::new(
@@ -379,7 +379,7 @@ fn search_text(
                 }
 
                 obj.set("text", Value::str(line.trim()));
-                results.push(Value::Obj(obj));
+                results.push(Value::Obj(Box::new(obj)));
             }
         }
     }
@@ -388,7 +388,7 @@ fn search_text(
         let mut obj = Obj::new();
         obj.set("file", Value::str(path));
         obj.set("count", Value::Int(match_count as i32));
-        results.push(Value::Obj(obj));
+        results.push(Value::Obj(Box::new(obj)));
     }
 
     Ok(results)
@@ -426,7 +426,7 @@ fn search_directory(
                     if files_with_matches && !file_results.is_empty() {
                         let mut obj = Obj::new();
                         obj.set("file", Value::str(&path_str));
-                        all_results.push(Value::Obj(obj));
+                        all_results.push(Value::Obj(Box::new(obj)));
                     } else {
                         all_results.extend(file_results);
                     }
@@ -485,7 +485,7 @@ fn search_directory_recursive(
                     if files_with_matches && !file_results.is_empty() {
                         let mut obj = Obj::new();
                         obj.set("file", Value::str(&path_str));
-                        all_results.push(Value::Obj(obj));
+                        all_results.push(Value::Obj(Box::new(obj)));
                     } else {
                         all_results.extend(file_results);
                     }
@@ -575,9 +575,9 @@ mod tests {
         obj3.set("size", Value::I64(512));
 
         let arr = Array { values: vec![
-            Value::Obj(obj1),
-            Value::Obj(obj2),
-            Value::Obj(obj3),
+            Value::Obj(Box::new(obj1)),
+            Value::Obj(Box::new(obj2)),
+            Value::Obj(Box::new(obj3)),
         ]};
 
         let results = search_object_array(&arr, &re, false).unwrap();
@@ -604,8 +604,8 @@ mod tests {
         obj2.set("name", Value::str("other_file.txt"));
 
         let arr = Array { values: vec![
-            Value::Obj(obj1),
-            Value::Obj(obj2),
+            Value::Obj(Box::new(obj1)),
+            Value::Obj(Box::new(obj2)),
         ]};
 
         let results = search_object_array(&arr, &re, true).unwrap();

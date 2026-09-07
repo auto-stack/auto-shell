@@ -896,3 +896,22 @@ Init 直提)仍未验 —— 本环境浏览器工具(IAB webview)持续不可�
 - **接受理由**:单用户本地工具;文件仅为转录摘要的补充取回路径,丢失无语义
   影响;阈值内(默认 ≤100 行)不落文件。
 - **推翻条件**:出现 temp 目录堆积投诉(届时加会话退出清理或保留最近 N 份)。
+
+## auto-lang 566 Value 装箱迁移与 auto-ai 偏斜(auto-lang-dev 分支,2026-09-07)
+
+### 装箱迁移(auto-lang Plan 566 下游适配,本分支已完成)
+
+auto-lang master 已合入 Value 胖变体装箱(13 变体 `Box<T>`,296B→40B)。
+本仓已全量迁移:ash-core(8 构造点+benches/测试 52 处建议)、ash 工作区
+auto-shell/ash 成员(~120 处)、to_xml.rs owned-Box 克隆形态 1 处。
+ash-core 411+1 测试全绿;装箱面零残留(见下行偏斜为唯一余红)。
+分支 `auto-lang-dev`(基于 db183fc)待与 auto-lang master 同步验证后折回。
+
+### auto-ai 偏斜(非装箱引入,控制实验实证在 master 干净态同败)
+
+ash 工作区对 auto-ai master(d294f5d)存在 10 错偏斜:`StreamEvent::`
+`TurnStart/TurnEnd` 臂缺失(ask.rs:119)、`ToolOutput` content/details
+分离后 `execute` trait 签名/`Display`/`contains`/`trim` 族
+(ash_command_tool.rs 169/233/419/604/632/666/677)。全部为 auto-ai 自有
+类型,与 auto-lang 装箱无关;属 auto-shell 需吸收 auto-ai PLAN-029/064
+变更的独立事项(444/446"下游回传"同模式)。

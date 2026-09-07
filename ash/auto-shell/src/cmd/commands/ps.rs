@@ -90,7 +90,7 @@ impl PsCommand {
             if let Some(cmd) = &p.command {
                 obj.set("command", Value::str(cmd));
             }
-            Value::Obj(obj)
+            Value::Obj(Box::new(obj))
         }).collect();
 
         Ok(Value::Array(auto_val::Array { values }))

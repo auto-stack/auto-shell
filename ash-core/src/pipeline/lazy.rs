@@ -387,7 +387,7 @@ fn project(item: &Value, fields: &[String]) -> Value {
             out.set(f.as_str(), v);
         }
     }
-    Value::Obj(out)
+    Value::Obj(Box::new(out))
 }
 
 /// Compute an aggregate over all rows, mirroring eager `apply` semantics.
@@ -421,7 +421,7 @@ fn run_aggregate(op: &AggOp, rows: &[Value]) -> Value {
             for key in &order {
                 out.set(key.as_str(), Value::Array(Array::from_vec(groups[key].clone())));
             }
-            Value::Obj(out)
+            Value::Obj(Box::new(out))
         }
         AggOp::Sum(field) => {
             let total: f64 = rows.iter().filter_map(|v| as_f64(&get_field(v, field))).sum();
@@ -458,7 +458,7 @@ mod tests {
         let mut o = Obj::new();
         o.set("name", Value::str(name));
         o.set("size", Value::Int(size));
-        Value::Obj(o)
+        Value::Obj(Box::new(o))
     }
 
     fn sample_rows() -> Vec<Value> {

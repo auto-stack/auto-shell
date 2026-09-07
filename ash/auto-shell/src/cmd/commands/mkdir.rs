@@ -87,7 +87,7 @@ impl Command for MkdirCommand {
             result_obj.set("success", Value::Bool(true));
         }
 
-        Ok(PipelineData::from_value(Value::Obj(result_obj)))
+        Ok(PipelineData::from_value(Value::Obj(Box::new(result_obj))))
     }
 
     fn run_atom(

@@ -87,7 +87,7 @@ pub fn value_to_xml(value: &Value, root_name: &str, indent: usize, depth: usize)
             let attrs = obj
                 .get("attrs")
                 .and_then(|v| match v {
-                    Value::Obj(o) => Some(o.clone()),
+                    Value::Obj(o) => Some((*o).clone()),
                     _ => None,
                 })
                 .unwrap_or_else(Obj::new);
@@ -205,12 +205,12 @@ mod tests {
     fn make_element(tag: &str, text: Option<&str>) -> Value {
         let mut obj = Obj::new();
         obj.set("tag", Value::str(tag));
-        obj.set("attrs", Value::Obj(Obj::new()));
+        obj.set("attrs", Value::Obj(Box::new(Obj::new())));
         obj.set("children", Value::Array(Array::new()));
         if let Some(t) = text {
             obj.set("text", Value::str(t));
         }
-        Value::Obj(obj)
+        Value::Obj(Box::new(obj))
     }
 
     #[test]
@@ -234,11 +234,11 @@ mod tests {
 
         let mut obj = Obj::new();
         obj.set("tag", Value::str("div"));
-        obj.set("attrs", Value::Obj(attrs));
+        obj.set("attrs", Value::Obj(Box::new(attrs)));
         obj.set("children", Value::Array(Array::new()));
         obj.set("text", Value::str("content"));
 
-        let xml = value_to_xml(&Value::Obj(obj), "root", 2, 0);
+        let xml = value_to_xml(&Value::Obj(Box::new(obj)), "root", 2, 0);
         assert!(xml.contains("class=\"main\""));
         assert!(xml.contains(">content</div>"));
     }
@@ -251,10 +251,10 @@ mod tests {
 
         let mut obj = Obj::new();
         obj.set("tag", Value::str("parent"));
-        obj.set("attrs", Value::Obj(Obj::new()));
+        obj.set("attrs", Value::Obj(Box::new(Obj::new())));
         obj.set("children", Value::Array(children));
 
-        let xml = value_to_xml(&Value::Obj(obj), "root", 2, 0);
+        let xml = value_to_xml(&Value::Obj(Box::new(obj)), "root", 2, 0);
         assert!(xml.contains("<parent>"));
         assert!(xml.contains("  <child>inner</child>"));
         assert!(xml.contains("</parent>"));
@@ -283,10 +283,10 @@ mod tests {
 
         let mut obj = Obj::new();
         obj.set("tag", Value::str("list"));
-        obj.set("attrs", Value::Obj(Obj::new()));
+        obj.set("attrs", Value::Obj(Box::new(Obj::new())));
         obj.set("children", Value::Array(children));
 
-        let xml = value_to_xml(&Value::Obj(obj), "root", 2, 0);
+        let xml = value_to_xml(&Value::Obj(Box::new(obj)), "root", 2, 0);
         let lines: Vec<&str> = xml.lines().collect();
         assert!(lines[0].contains("<list>"));
         assert!(lines[1].contains("<item>a</item>"));

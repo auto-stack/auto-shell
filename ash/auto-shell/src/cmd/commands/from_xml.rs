@@ -113,9 +113,9 @@ impl<'a> XmlParser<'a> {
                 // Self-closing element
                 let mut obj = Obj::new();
                 obj.set("tag", Value::str(&tag));
-                obj.set("attrs", Value::Obj(attrs));
+                obj.set("attrs", Value::Obj(Box::new(attrs)));
                 obj.set("children", Value::Array(Array::new()));
-                return Ok(Value::Obj(obj));
+                return Ok(Value::Obj(Box::new(obj)));
             }
             if self.starts_with(">") {
                 self.pos += 1;
@@ -178,13 +178,13 @@ impl<'a> XmlParser<'a> {
 
         let mut obj = Obj::new();
         obj.set("tag", Value::str(&tag));
-        obj.set("attrs", Value::Obj(attrs));
+        obj.set("attrs", Value::Obj(Box::new(attrs)));
         obj.set("children", Value::Array(children));
         if !text_content.trim().is_empty() {
             obj.set("text", Value::str(text_content.trim()));
         }
 
-        Ok(Value::Obj(obj))
+        Ok(Value::Obj(Box::new(obj)))
     }
 
     fn parse_name(&mut self) -> Result<String> {

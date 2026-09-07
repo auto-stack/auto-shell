@@ -192,7 +192,7 @@ mod tests {
         obj.set("count", Value::Int(42));
         obj.set("active", Value::Bool(true));
 
-        let toml = value_to_toml(&Value::Obj(obj), &[], 0);
+        let toml = value_to_toml(&Value::Obj(Box::new(obj)), &[], 0);
         assert!(toml.contains("title = \"Test\""));
         assert!(toml.contains("count = 42"));
         assert!(toml.contains("active = true"));
@@ -206,9 +206,9 @@ mod tests {
 
         let mut root = Obj::new();
         root.set("title", Value::str("My App"));
-        root.set("server", Value::Obj(server));
+        root.set("server", Value::Obj(Box::new(server)));
 
-        let toml = value_to_toml(&Value::Obj(root), &[], 0);
+        let toml = value_to_toml(&Value::Obj(Box::new(root)), &[], 0);
         assert!(toml.contains("[server]"));
         assert!(toml.contains("host = \"localhost\""));
     }
@@ -218,7 +218,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("ports", Value::Array(Array::from(vec![Value::Int(80), Value::Int(443)])));
 
-        let toml = value_to_toml(&Value::Obj(obj), &[], 0);
+        let toml = value_to_toml(&Value::Obj(Box::new(obj)), &[], 0);
         assert!(toml.contains("ports = [80, 443]"));
     }
 
@@ -227,7 +227,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("msg", Value::str("hello\nworld"));
 
-        let toml = value_to_toml(&Value::Obj(obj), &[], 0);
+        let toml = value_to_toml(&Value::Obj(Box::new(obj)), &[], 0);
         assert!(toml.contains("msg = \"hello\\nworld\""));
     }
 
@@ -236,7 +236,7 @@ mod tests {
         let mut obj = Obj::new();
         obj.set("pi", Value::Float(3.14));
 
-        let toml = value_to_toml(&Value::Obj(obj), &[], 0);
+        let toml = value_to_toml(&Value::Obj(Box::new(obj)), &[], 0);
         assert!(toml.contains("pi = 3.14"));
     }
 
@@ -247,9 +247,9 @@ mod tests {
         point.set("y", Value::Int(2));
 
         let mut root = Obj::new();
-        root.set("origin", Value::Obj(point));
+        root.set("origin", Value::Obj(Box::new(point)));
 
-        let toml = value_to_toml(&Value::Obj(root), &[], 0);
+        let toml = value_to_toml(&Value::Obj(Box::new(root)), &[], 0);
         // A single-object nested gets a section header
         assert!(toml.contains("x = 1"));
         assert!(toml.contains("y = 2"));

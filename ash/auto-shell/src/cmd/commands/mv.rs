@@ -84,7 +84,7 @@ impl Command for MvCommand {
         result.set("destination", Value::str(dest));
         result.set("success", Value::Bool(true));
 
-        Ok(PipelineData::from_value(Value::Obj(result)))
+        Ok(PipelineData::from_value(Value::Obj(Box::new(result))))
     }
 
     fn run_atom(

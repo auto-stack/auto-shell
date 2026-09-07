@@ -202,7 +202,7 @@ fn parse_mapping(lines: &[YamlLine], start_idx: usize, min_indent: usize) -> Res
         }
     }
 
-    Ok((Value::Obj(obj), idx))
+    Ok((Value::Obj(Box::new(obj)), idx))
 }
 
 /// Find the colon that separates key from value in a mapping line.

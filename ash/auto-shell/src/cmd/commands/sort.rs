@@ -365,14 +365,14 @@ mod tests {
         for (k, v) in pairs {
             o.set(*k, Value::str(*v));
         }
-        Value::Obj(o)
+        Value::Obj(Box::new(o))
     }
 
     fn rec_with_size(name: &str, size: i32) -> Value {
         let mut o = Obj::new();
         o.set("name", Value::str(name));
         o.set("size", Value::Int(size));
-        Value::Obj(o)
+        Value::Obj(Box::new(o))
     }
 
     #[test]

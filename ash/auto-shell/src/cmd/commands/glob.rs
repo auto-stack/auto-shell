@@ -76,7 +76,7 @@ impl Command for GlobCommand {
                 obj.set("path", Value::str(&rel));
                 obj.set("name", Value::str(&file_name));
                 obj.set("type", Value::str(if is_dir { "dir" } else { "file" }));
-                results.push(Value::Obj(obj));
+                results.push(Value::Obj(Box::new(obj)));
             }
         }
 

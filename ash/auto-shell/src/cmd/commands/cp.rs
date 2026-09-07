@@ -74,7 +74,7 @@ impl Command for CpCommand {
         result.set("files_copied", Value::I64(copied as i64));
         result.set("success", Value::Bool(true));
 
-        Ok(PipelineData::from_value(Value::Obj(result)))
+        Ok(PipelineData::from_value(Value::Obj(Box::new(result))))
     }
 
     fn run_atom(

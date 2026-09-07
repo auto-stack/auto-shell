@@ -97,7 +97,7 @@ impl Command for StatCommand {
         obj.set("permissions", Value::str(&permissions));
         obj.set("readonly", Value::Bool(readonly));
 
-        Ok(PipelineData::from_value(Value::Obj(obj)))
+        Ok(PipelineData::from_value(Value::Obj(Box::new(obj))))
     }
 
     fn run_atom(

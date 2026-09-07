@@ -67,7 +67,7 @@ fn build_disks() -> Result<Value> {
         obj.set("total", Value::Int(disk.total_space() as i32));
         obj.set("free", Value::Int(disk.available_space() as i32));
         obj.set("removable", Value::Bool(disk.is_removable()));
-        Value::Obj(obj)
+        Value::Obj(Box::new(obj))
     }).collect();
     Ok(Value::Array(auto_val::Array { values }))
 }
@@ -83,7 +83,7 @@ fn build_cpu() -> Result<Value> {
         obj.set("brand", Value::str(cpu.brand()));
         obj.set("frequency", Value::Int(cpu.frequency() as i32));
         obj.set("usage", Value::Float(cpu.cpu_usage() as f64));
-        Value::Obj(obj)
+        Value::Obj(Box::new(obj))
     }).collect();
     Ok(Value::Array(auto_val::Array { values: cpus }))
 }
@@ -103,7 +103,7 @@ fn build_mem() -> Result<Value> {
     obj.set("available", Value::I64(available));
     obj.set("used", Value::I64(used));
     obj.set("usage_percent", Value::Float(usage_percent));
-    Ok(Value::Obj(obj))
+    Ok(Value::Obj(Box::new(obj)))
 }
 
 fn build_all() -> Result<Value> {
@@ -116,7 +116,7 @@ fn build_all() -> Result<Value> {
         d.set("mount", Value::str(&disk.mount_point().to_string_lossy().to_string()));
         d.set("total", Value::Int(disk.total_space() as i32));
         d.set("free", Value::Int(disk.available_space() as i32));
-        Value::Obj(d)
+        Value::Obj(Box::new(d))
     }).collect();
     obj.set("disks", Value::Array(auto_val::Array { values: disk_values }));
 
@@ -125,5 +125,5 @@ fn build_all() -> Result<Value> {
     obj.set("total_memory", Value::Int(sys.total_memory() as i32));
     obj.set("free_memory", Value::Int(sys.free_memory() as i32));
 
-    Ok(Value::Obj(obj))
+    Ok(Value::Obj(Box::new(obj)))
 }
