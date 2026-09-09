@@ -939,3 +939,37 @@ session 池替换收口 load_strings/flash 常量区恢复 pinned 不变量)根�
 master `5c8cf5c42` 下游实测:examples_parity 4/4 转绿、probe 三轮串完整
 且 `[P583]` 横幅消失;本仓全套件余红仅 `<obj#…>` 显示红(独立在案)与
 spill flaky,与池缺陷无关。
+
+## Auto 单源化前置——a2r 引擎侧(Plan 080 L0,2026-09-09)
+
+> 域外欠账登记:以下条目属 **auto-lang 仓**(其 plan 体系自管),本条目仅
+> 作指针与判据,判据全达 = designs/037 L1 出口。设计背景见
+> `designs/037-auto-native-rewrite.md`,行为网见 `tests/auto-parity/`。
+
+### E1 a2r 字符串转义发射缺失(2026-09-09 在册,001-escape 复现)
+
+.at 源中 `\"` 转义,VM 正确解释为引号;a2r 发射 Rust 字符串字面量时
+未重转义,产出非法 Rust(`println!("{"pong": true}")`)→ 编译失败。
+最小复现:`tests/auto-parity/cases/ping/001-escape.at`,
+`python tests/auto-parity/run.py --side a2r --case 001-escape`。
+**判据**:该用例 a2r 通道绿(转义往返保真)。
+
+### E2 codegen API_FUNCTIONS 硬编码(承 Plan 065 在册)
+
+auto-lang codegen 仍硬编码旧 demo `API_FUNCTIONS` 列表,不产
+`lib/api.ts`;本仓以 `restore-vue-assets.py` 兜底。单源化后端产线
+(a2r 生成 Rust 后端)依赖 codegen 修完。
+**判据**:codegen 从 api.at 契约真实产出,restore 脚本仅剩 shadcn 原语。
+
+### E3 a2r 容器热路径性能未实测(待 Plan 080 T7 附录 A 出数)
+
+`a2r_std::List` 为 RefCell 内可变容器、字符串走 AutoStr;解析/补全
+热路径的衰减比未实测。designs/037 §2.4 暂定 1.5-3 倍区间为达标线。
+**判据**:附录 A 数据落稿;超标项在 auto-lang 侧立优化计划。
+
+### E4 `#[no_mangle]` extern 导出发射未验证(L4 前置)
+
+ash-server 5 处 `#[no_mangle] extern "Rust"` cdylib 导出(a2r 无对应
+发射验证)。designs/037 §2.3 已定"壳永留"兜底,此项仅影响 L4 上移幅度。
+**判据**:L4 立项前完成发射设计定稿或确认壳方案。
+
