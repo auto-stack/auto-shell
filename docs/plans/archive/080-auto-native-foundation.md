@@ -1,10 +1,10 @@
 ---
 plan_id: PLAN-080
-status: reviewed
+status: archived
 feature_name: Auto 单源化迁移——设计、分期路线图与地基(对齐框架+quote 试点)
 author: [zhaopuming]
 created_at: 2026-09-07
-updated_at: 2026-09-07
+updated_at: 2026-09-09
 
 # 以下留给 /auto-plan:review 填写
 supersedes_spec_components: []
@@ -302,6 +302,26 @@ run-20260909-133010(a2r 干净基线:ping✓/escape✗E1/quote30✗E7);
 cargo test ash-core 413/0;审计在主检出计划文件与 worktree 提交链
 | next: /auto-plan:merge(沉淀 designs/037+auto-parity+DEBTS;worktree
 plan-080-dev 经 wt-guard 后拆除)
+
+stage: merge | PLAN-080:r<立项稿+执行证据> | outcome: pass(delivered) |
+2026-09-09 | prepared: 复审基线复核(main 33e10f3 整合基 + worktree
+plan-080-dev 9605c87);spec 增量按复审裁定为空(本仓无 docs/specs 体系,
+ls 核实;持久载体 designs/037+DEBTS E1-E7 已随 T1/T8 入 worktree 提交),
+无需新增规范编辑,交付提交即 9605c87 | landed: 合并提交 a7502ca
+(Merge branch 'plan-080-dev',110 文件/4930 行,worktree 3 提交与 main 侧
+990cc88/0080f6f 计划面零交集,ort 无冲突);祖先链 merge-base --is-ancestor
+9605c87 main ✓;主检出烟测 cargo test -p ash-core --test
+quote_parity_fixture → parity_emit 1/1 绿(expected.json 复现,2 处 lib
+warning 为在册存量非新增) | ledger_refreshed: 核实 no-op——本仓无
+docs/specs 体系亦无派生台账 schema,登记面仅 NEXT.md(归档时同步);
+无规范增量即无台账写入,与复审"三字段留空"裁定一致 | archived:
+git mv docs/plans/archive/080-auto-native-foundation.md +
+status:archived(本提交),completion_kind: delivered |
+cleanup: 待补记(wt-guard 复验后拆除 .worktrees/plan-080-dev 与分支
+plan-080-dev;.worktrees/ 顶层 auto-lang、auto-ai 依赖 junction 为
+plan 060 §M3 机制,不在拆除面内) |
+next: 计划完成——后续由 designs/037 路线图承接:L1(auto-lang 仓引擎侧
+清偿,优先序 E7>E1>E6>E5)→ L2-L5 逐期迁移
 
 ## 待澄清事项
 
