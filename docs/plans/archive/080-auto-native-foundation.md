@@ -317,9 +317,11 @@ docs/specs 体系亦无派生台账 schema,登记面仅 NEXT.md(归档时同步)
 无规范增量即无台账写入,与复审"三字段留空"裁定一致 | archived:
 git mv docs/plans/archive/080-auto-native-foundation.md +
 status:archived(本提交),completion_kind: delivered |
-cleanup: 待补记(wt-guard 复验后拆除 .worktrees/plan-080-dev 与分支
-plan-080-dev;.worktrees/ 顶层 auto-lang、auto-ai 依赖 junction 为
-plan 060 §M3 机制,不在拆除面内) |
+cleanup: 已拆除(2026-09-09)——git worktree list 属主复核 + fresh
+wt-guard clean 后 `git worktree remove .worktrees/plan-080-dev` +
+`git branch -d plan-080-dev`(was 9605c87,完全并入);拆除后仅余主检出,
+.worktrees/ 顶层 auto-lang、auto-ai 依赖 junction(plan 060 §M3 机制)
+保留未涉;cleaned 随本收据更新提交入库 |
 next: 计划完成——后续由 designs/037 路线图承接:L1(auto-lang 仓引擎侧
 清偿,优先序 E7>E1>E6>E5)→ L2-L5 逐期迁移
 
