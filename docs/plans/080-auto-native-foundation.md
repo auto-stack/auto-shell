@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-080
-status: execution_done
+status: reviewed
 feature_name: Auto 单源化迁移——设计、分期路线图与地基(对齐框架+quote 试点)
 author: [zhaopuming]
 created_at: 2026-09-07
@@ -273,6 +273,35 @@ C3✓(A.1-A.3 数据 + A.4 结论)C4✓(DEBTS E1-E7 + NEXT 081)
 C5✓(ash-core --all-targets 0 新增警告;ash/ash-server 未触碰)
 | blockers: 无(引擎侧欠账为域外 L1 输入,非本计划阻塞)
 | next: /auto-plan:review(复审后 merge;worktree .worktrees/plan-080-dev 保留)
+
+stage: review | PLAN-080 | plan_revision=立项稿+执行证据(无后续语义修订)
+| outcome: **pass** | reviewed_commit: 990cc88(main 计划面)+ 9605c87
+(worktree 代码端,base 33e10f3) | dependency_revisions:
+auto-lang 主检出(debug auto.exe,trans/run 入口实测同执行期)
+| spec_inputs: 本仓无 docs/specs 体系(ls 核实不存在);设计文档之家为
+designs/(README 约定,Plan 079 同惯例)
+| acceptance_results(全部独立重跑复现,非采信执行摘要):
+C1 pass——designs/037 L0-L5 表 6 行/7 节/准入退役标准/风险登记,引用无悬空;
+C2 pass——rust 32/32 ✓、vm 32/32 ✓、a2r 恒等 000-ping ✓(三方绿),
+红项 001-escape=E1、quote 30/30=E7,逐条对应 DEBTS 在册;
+C3 pass——附录 A.1-A.4 落稿,"待填"占位 0,A.3 为阻塞状态记录+补数路径;
+C4 pass——DEBTS E1-E7(7 条判据+最小复现),NEXT=081;
+C5 pass——ash-core 全套 413 测试 0 败、0 新增警告(相对路径口径),
+diff 与 ash/auto-shell/ash-gui/ash-server 产品代码零交集
+| findings(均 nonblocking):
+F-1[观察/已在册] a2r-release 性能数据因 E7 阻塞顺延,附录 A.3 为状态
+记录;E3 判据含"补数后落稿",无悬空承诺。
+F-2[改进建议] a2r 通道无瞬态故障重试:本轮复审首遇 psm build-script
+崩溃(0x80000003)被放大为全量 32 红,重试即绿(复现 2 次);建议下次
+触及 run.py 时为 cargo 步骤加单次重试+完整错误留存。不属本计划验收面。
+| spec 增量裁定:三字段留空——理由:本仓无 docs/specs 规范体系,本计划
+的持久知识载体即 designs/037(路线图/原则)+ DEBTS E1-E7(L1 判据),
+均已成文入库;无被取代组件 | evidence: report/run-20260909-131412(rust/vm
+复跑+首遇 flake)、run-20260909-131433/131435(ping 重试×2 绿)、
+run-20260909-133010(a2r 干净基线:ping✓/escape✗E1/quote30✗E7);
+cargo test ash-core 413/0;审计在主检出计划文件与 worktree 提交链
+| next: /auto-plan:merge(沉淀 designs/037+auto-parity+DEBTS;worktree
+plan-080-dev 经 wt-guard 后拆除)
 
 ## 待澄清事项
 
