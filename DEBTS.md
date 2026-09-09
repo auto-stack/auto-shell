@@ -939,3 +939,73 @@ session 池替换收口 load_strings/flash 常量区恢复 pinned 不变量)根�
 master `5c8cf5c42` 下游实测:examples_parity 4/4 转绿、probe 三轮串完整
 且 `[P583]` 横幅消失;本仓全套件余红仅 `<obj#…>` 显示红(独立在案)与
 spill flaky,与池缺陷无关。
+
+## Auto 单源化前置——a2r 引擎侧(Plan 080 L0,2026-09-09)
+
+> 域外欠账登记:以下条目属 **auto-lang 仓**(其 plan 体系自管),本条目仅
+> 作指针与判据,判据全达 = designs/037 L1 出口。设计背景见
+> `designs/037-auto-native-rewrite.md`,行为网见 `tests/auto-parity/`。
+
+### E1 a2r 顶层 print 字符串字面量转义丢失(2026-09-09 在册,001-escape 常驻复现)
+
+.at 顶层 `print("...\"...\"...")`(裸字面量实参)发射为 `println!("...`"`...")`
+——字面量内容未按 Rust 规则重转义,产物非法 Rust。注:fn main 内的
+表达式实参走 `{}` 占位符路径,转义完好(quote 用例字面量均正确发射);
+仅顶层语句路径丢失。
+最小复现:`tests/auto-parity/cases/ping/001-escape.at`,
+`python tests/auto-parity/run.py --side a2r --case 001-escape`。
+**判据**:该用例 a2r 通道绿(顶层与函数体两条路径转义往返均保真)。
+
+### E5 字符级迭代原语缺失(chars() 出码点/无 chr()/substring 字节语义)
+
+`str.chars()` 返回 i32 码点列表(引擎 engine.rs "chars" 分支 `ch as i32`),
+无码点→字符逆函数;`substring(start, end)` 按字节切片。移植任何 Rust
+char 迭代代码只能以字节级 substring 近似(ASCII 等价,非 ASCII 拆 UTF-8
+序列)。复现:tests/auto-parity/cases/quote/_impl.at 头注释与 30 用例
+(全 ASCII 规避)。
+**判据**:VM 提供字符级迭代与 chr() 等价物(或 a2r/VM 双侧语义一致的
+替代原语),_impl.at 移除"字节近似"限制注释后 30 用例仍全绿。
+
+### E6 a2r substring 端点二元表达式 cast 优先级错误(2026-09-09 在册)
+
+`s.substring(i, i + 1)` 发射为 `&s[i as usize..i + 1 as usize]`——
+`as usize` 只作用于 `1`(i64+usize 类型错,16 处编译错/文件)。端点为
+简单变量时发射正确(`j as usize`),.at 侧以"索引先落 var"适配规避
+(quote/_impl.at 已用此风格,bug 本体未修)。
+最小复现:`fn f(s str) str { return s.substring(0, 1 + 0) }` 经
+`auto trans --path <f> rust` 产物 `&s[0 as usize..1 + 0 as usize]`。
+**判据**:该探针产物为 `(1 + 0) as usize` 形状(或等价正确类型)。
+
+### E7 a2r 自定义函数调用点 owned→引用适配缺失(Vec→&[T]/String→&str)
+
+跨自定义函数传参:形参发射为引用(`items: &[String]`/`s: &str`),调用点
+传 owned 值(Vec 变量、索引取值 String)不加 `&`/`.as_str()`,类型错。
+嵌套 str 调用有 `.as_str()` 适配(部分覆盖),Vec→slice 与索引取值→&str
+均缺失;变量提升不能绕过(`listy(lst)` 裸传)。
+最小复现:`fn listy(items []str) str { return "#" }` +
+`var lst = ["a"]` + `print(listy(lst))`,产物 `listy(lst)` 传给
+`&[String]` 形参。影响:quote 试点 a2r 通道 30/30 编译失败全由此阻塞。
+**判据**:上述探针编译通过;quote 用例集 a2r 通道编译面清零。
+
+### E2 codegen API_FUNCTIONS 硬编码(承 Plan 065 在册)
+
+auto-lang codegen 仍硬编码旧 demo `API_FUNCTIONS` 列表,不产
+`lib/api.ts`;本仓以 `restore-vue-assets.py` 兜底。单源化后端产线
+(a2r 生成 Rust 后端)依赖 codegen 修完。
+**判据**:codegen 从 api.at 契约真实产出,restore 脚本仅剩 shadcn 原语。
+
+### E3 a2r 容器热路径性能未实测(附录 A 已出部分数据)
+
+`a2r_std::List` 为 RefCell 内可变容器、字符串走 AutoStr;解析/补全
+热路径的衰减比未实测。designs/037 §2.4 暂定 1.5-3 倍区间为达标线。
+**2026-09-09 附录 A(T7)**:手写基线 0.25-0.55 µs/op;VM 解释 ≈801 µs/op
+(≈3200×,开发形态佐证);a2r 产物**不可测——编译面被 E7 阻塞**,E3 出数
+顺延至 E7 清偿后由 run.py --side a2r 直接补数。
+**判据**:附录 A.3 补数落稿;超标项在 auto-lang 侧立优化计划。
+
+### E4 `#[no_mangle]` extern 导出发射未验证(L4 前置)
+
+ash-server 5 处 `#[no_mangle] extern "Rust"` cdylib 导出(a2r 无对应
+发射验证)。designs/037 §2.3 已定"壳永留"兜底,此项仅影响 L4 上移幅度。
+**判据**:L4 立项前完成发射设计定稿或确认壳方案。
+

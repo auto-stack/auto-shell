@@ -1,0 +1,4 @@
+// 000-ping — auto-parity 框架自测用例:恒等输出,验证三条通道(runner/rust
+// fixture/vm/a2r)本身无 bug。输出取 JSON 数字:合法 JSON 且零转义
+// (转义路径由 001-escape 承担)。
+print(42)

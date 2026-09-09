@@ -1,0 +1,13 @@
+[package]
+name = "a2r-shell"
+version = "0.1.0"
+edition = "2021"
+description = "auto-parity a2r 通道最小壳 — 编译 auto trans 产物作为 bin 运行(Plan 080 L0)"
+
+[dependencies]
+# a2r 产物可能引用 a2r_std(List/May/AutoStr 等),经 auto-lang 提供;
+# 与本仓其他 crate 同款兄弟布局相对路径。
+auto-lang = { path = "../../../../auto-lang/crates/auto-lang" }
+
+# 独立 workspace:依赖图不合入 ash 各 workspace(同 ash-server 惯例)。
+[workspace]

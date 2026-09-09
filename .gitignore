@@ -56,3 +56,8 @@ __pycache__/
 
 # Windows recycle-bin artifact that occasionally appears at repo root (system-protected, undeletable without admin)
 $RECYCLE.BIN/
+
+# auto-parity(Plan 080):运行报告与 a2r 生成用例 bin(run.py 经 auto trans
+# 产出到 a2r-shell/src/bin/,构建再生;报告含计时数据,结论抄录 designs/037)
+/tests/auto-parity/report/
+/tests/auto-parity/a2r-shell/src/bin/

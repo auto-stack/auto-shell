@@ -40,3 +40,9 @@ harness = false
 [[bench]]
 name = "pipeline_bench"
 harness = false
+
+# Plan 080 T7: quote 热路径基准(Auto 单源化试点性能基线,对照
+# tests/auto-parity/cases/quote/_bench-*.at 的 VM 差分计时)。
+[[bench]]
+name = "quote_bench"
+harness = false

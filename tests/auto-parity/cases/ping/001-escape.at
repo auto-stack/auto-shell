@@ -1,0 +1,5 @@
+// 001-escape — a2r 字符串转义发射 bug 的最小复现(Plan 080 L0 在册发现):
+// .at 源中 \" 转义,VM 正确解释为引号;但 a2r 发射 Rust 字面量时未重转义,
+// 产出 println!("{"pong": true}") 非法 Rust → 编译失败。
+// 复现:auto trans --path 001-escape.at rust && cat 001-escape.a2r.rs
+print("{\"pong\": true}")

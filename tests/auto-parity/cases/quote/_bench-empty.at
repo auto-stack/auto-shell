@@ -1,0 +1,10 @@
+// _bench-empty.at — VM 侧基准基线(Plan 080 T7):与 _bench-loop.at 同为
+// 2000 轮纯循环开销,差值即 parse_args 的 VM 每-op 成本(剥离进程启动与
+// 循环自身)。
+var t = 0
+var i = 0
+while i < 2000 {
+    t = t + 4
+    i = i + 1
+}
+print(t)

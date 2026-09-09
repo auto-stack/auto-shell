@@ -1,0 +1,3 @@
+// 022-consecutive_quotes — parse_args × 2 输入(语义对应 quote.rs 同名单测;输入以 cmd.json 为单源,本文件为可读镜像)
+print(to_json_strlist(parse_args("\"\"\"\"")))
+print(to_json_strlist(parse_args("''''")))
