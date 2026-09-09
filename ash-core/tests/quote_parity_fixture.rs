@@ -24,6 +24,30 @@ fn dispatch(fn_name: &str, _args: &[String]) -> Result<serde_json::Value, String
         "ping" => Ok(serde_json::json!(42)),
         // 001-escape:含 \" 的 JSON 输出(a2r 转义发射 bug 的基准侧)。
         "ping_json" => Ok(serde_json::json!({ "pong": true })),
+        // quote 试点:对每个输入调用同名手写 API;载荷形状与 runner 的输出
+        // 归一对齐(1 输入 → 单结果数组;N 输入 → 每输入一行的数组)。
+        "parse_args" => {
+            let rows: Vec<Vec<String>> =
+                _args.iter().map(|a| ash_core::parser::quote::parse_args(a)).collect();
+            let payload = if rows.len() == 1 {
+                serde_json::to_value(&rows[0])
+            } else {
+                serde_json::to_value(&rows)
+            };
+            payload.map_err(|e| e.to_string())
+        }
+        "parse_args_preserve_quotes" => {
+            let rows: Vec<Vec<String>> = _args
+                .iter()
+                .map(|a| ash_core::parser::quote::parse_args_preserve_quotes(a))
+                .collect();
+            let payload = if rows.len() == 1 {
+                serde_json::to_value(&rows[0])
+            } else {
+                serde_json::to_value(&rows)
+            };
+            payload.map_err(|e| e.to_string())
+        }
         _ => Err(format!("unknown fn: {fn_name}")),
     }
 }

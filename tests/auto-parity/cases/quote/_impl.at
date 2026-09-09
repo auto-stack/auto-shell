@@ -1,0 +1,191 @@
+// _impl.at — ash-core/src/parser/quote.rs 的 AutoLang 移植(Plan 080 L0 试点)。
+//
+// 行为契约:与手写 Rust 版逐分支对齐(30 单测语义由同目录 NNN-*.at 用例锁
+// 定,expected.json 由 rust 基准侧生成)。迁移要点:
+//  - 裸文本反斜杠保持字面(Plan 002:Windows 路径 C:\Users\foo 完整到达命令);
+//  - 双引号内反斜杠为转义序列(\n \t \r \\ \");
+//  - 单引号内反斜杠字面,例外 \' 仍转义;
+//  - 引号紧贴前文(echo"test")视为普通字符。
+//
+// 已知限制(引擎侧,DEBTS E5):AutoLang 缺字符级迭代原语——chars() 返回
+// 码点 int 列表且无 chr() 逆函数,substring 为字节语义。本移植以
+// substring(i, j) 逐"字节"迭代,与 Rust 的 char 迭代在 ASCII 输入上等价
+// (本用例集全 ASCII);非 ASCII 输入会拆开 UTF-8 序列,属试点范围外。
+// 风格适配(引擎侧,DEBTS E6):substring 端点先落 var 再传——a2r 对二元
+// 表达式端点发射 `i + 1 as usize`(优先级缺陷),简单变量端点发射正确。
+
+fn parse_args(input str) []str {
+    var n = input.len()
+    var args = []
+    var current = ""
+    var in_single = false
+    var in_double = false
+    var escape_next = false
+    var quoted = false
+    var i = 0
+    while i < n {
+        var j = i + 1
+        var c = input.substring(i, j)
+        if escape_next {
+            if c == "n" {
+                current = current + "\n"
+            } else if c == "t" {
+                current = current + "\t"
+            } else if c == "r" {
+                current = current + "\r"
+            } else {
+                current = current + c
+            }
+            escape_next = false
+        } else if c == "\\" {
+            if in_single {
+                var p = i + 1
+                var q = i + 2
+                if p < n && input.substring(p, q) == "'" {
+                    escape_next = true
+                } else {
+                    current = current + c
+                }
+            } else if in_double {
+                escape_next = true
+            } else {
+                current = current + c
+            }
+        } else if in_single {
+            if c == "'" {
+                in_single = false
+            } else {
+                current = current + c
+            }
+        } else if in_double {
+            if c == "\"" {
+                in_double = false
+            } else {
+                current = current + c
+            }
+        } else {
+            if c == "'" {
+                if current.len() > 0 {
+                    current = current + c
+                } else {
+                    in_single = true
+                    quoted = true
+                }
+            } else if c == "\"" {
+                if current.len() > 0 {
+                    current = current + c
+                } else {
+                    in_double = true
+                    quoted = true
+                }
+            } else if c == " " || c == "\t" || c == "\n" {
+                if current.len() > 0 || quoted {
+                    args.push(current)
+                    current = ""
+                    quoted = false
+                }
+            } else {
+                current = current + c
+            }
+        }
+        i = i + 1
+    }
+    if current.len() > 0 || quoted {
+        args.push(current)
+    }
+    if args.len() == 0 && input.trim().len() == 0 {
+        return []
+    }
+    return args
+}
+
+fn parse_args_preserve_quotes(input str) []str {
+    var n = input.len()
+    var args = []
+    var current = ""
+    var in_single = false
+    var in_double = false
+    var escape_next = false
+    var i = 0
+    while i < n {
+        var j = i + 1
+        var c = input.substring(i, j)
+        if escape_next {
+            current = current + c
+            escape_next = false
+        } else if c == "\\" {
+            escape_next = true
+            current = current + c
+        } else if in_single {
+            current = current + c
+            if c == "'" {
+                in_single = false
+            }
+        } else if in_double {
+            current = current + c
+            if c == "\"" {
+                in_double = false
+            }
+        } else {
+            if c == "'" {
+                in_single = true
+                current = current + c
+            } else if c == "\"" {
+                in_double = true
+                current = current + c
+            } else if c == " " || c == "\t" || c == "\n" {
+                if current.len() > 0 {
+                    args.push(current)
+                    current = ""
+                }
+            } else {
+                current = current + c
+            }
+        }
+        i = i + 1
+    }
+    if current.len() > 0 {
+        args.push(current)
+    }
+    return args
+}
+
+// ── parity 输出助手(非 quote 语义)──────────────────────────────────
+
+fn json_escape(s str) str {
+    var n = s.len()
+    var out = ""
+    var i = 0
+    while i < n {
+        var j = i + 1
+        var c = s.substring(i, j)
+        if c == "\\" {
+            out = out + "\\\\"
+        } else if c == "\"" {
+            out = out + "\\\""
+        } else if c == "\n" {
+            out = out + "\\n"
+        } else if c == "\t" {
+            out = out + "\\t"
+        } else if c == "\r" {
+            out = out + "\\r"
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn to_json_strlist(items []str) str {
+    var out = "["
+    var i = 0
+    while i < items.len() {
+        if i > 0 {
+            out = out + ","
+        }
+        out = out + "\"" + json_escape(items[i]) + "\""
+        i = i + 1
+    }
+    return out + "]"
+}

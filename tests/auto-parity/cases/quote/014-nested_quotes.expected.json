@@ -1,0 +1,10 @@
+[
+  [
+    "echo",
+    "it's a test"
+  ],
+  [
+    "echo",
+    "say \"hello\""
+  ]
+]

@@ -43,11 +43,28 @@ def discover_cases(name_filter):
     if not CASES_ROOT.is_dir():
         return out
     for at in sorted(CASES_ROOT.glob("*/*.at")):
+        if at.stem.startswith("_"):
+            continue  # _impl.at 等共享实现文件,非用例
         cid = at.stem
         if name_filter and cid != name_filter:
             continue
         out.append((cid, at))
     return out
+
+
+def assemble_program(at_path: Path) -> str:
+    """用例 → 可执行程序文本。同目录存在 _impl.at 时拼装(单文件脚本模式
+    无模块解析,use 仅项目模式);否则用例文件自身即完整程序。"""
+    impl = at_path.parent / "_impl.at"
+    body = at_path.read_text(encoding="utf-8").strip()
+    if impl.is_file():
+        return (
+            impl.read_text(encoding="utf-8").rstrip()
+            + "\n\nfn main() {\n"
+            + body
+            + "\n}\n"
+        )
+    return body + "\n"
 
 
 def load_case(at_path: Path):
@@ -128,10 +145,13 @@ def run_side_rust(case_ids, update_golden: bool):
 
 def run_side_vm(case_id: str, at_path: Path, args):
     auto = Path(os.environ.get("AUTO_BIN", str(DEFAULT_AUTO)))
+    prog = REPORT_DIR / "tmp-vm" / at_path.parent.name / f"{case_id}.at"
+    prog.parent.mkdir(parents=True, exist_ok=True)
+    prog.write_text(assemble_program(at_path), encoding="utf-8")
     t0 = time.perf_counter()
     proc = subprocess.run(
-        [str(auto), str(at_path)] + args,
-        capture_output=True, text=True, cwd=str(at_path.parent), timeout=120,
+        [str(auto), str(prog)] + args,
+        capture_output=True, text=True, cwd=str(prog.parent), timeout=120,
     )
     ms = (time.perf_counter() - t0) * 1000
     return {
@@ -155,11 +175,8 @@ def run_side_a2r(case_id: str, at_path: Path, args):
     if tmp_dir.is_dir():
         shutil.rmtree(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    # 整目录拷贝(用例可能 use 同目录模块,如 quote.at)
-    for f in at_path.parent.iterdir():
-        if f.is_file():
-            shutil.copy2(f, tmp_dir / f.name)
-    tmp_at = tmp_dir / at_path.name
+    tmp_at = tmp_dir / f"{case_id}.at"
+    tmp_at.write_text(assemble_program(at_path), encoding="utf-8")
     t_trans = time.perf_counter()
     proc = subprocess.run(
         [str(auto), "trans", "--path", tmp_at.name, "rust"],

@@ -946,13 +946,46 @@ spill flaky,与池缺陷无关。
 > 作指针与判据,判据全达 = designs/037 L1 出口。设计背景见
 > `designs/037-auto-native-rewrite.md`,行为网见 `tests/auto-parity/`。
 
-### E1 a2r 字符串转义发射缺失(2026-09-09 在册,001-escape 复现)
+### E1 a2r 顶层 print 字符串字面量转义丢失(2026-09-09 在册,001-escape 常驻复现)
 
-.at 源中 `\"` 转义,VM 正确解释为引号;a2r 发射 Rust 字符串字面量时
-未重转义,产出非法 Rust(`println!("{"pong": true}")`)→ 编译失败。
+.at 顶层 `print("...\"...\"...")`(裸字面量实参)发射为 `println!("...`"`...")`
+——字面量内容未按 Rust 规则重转义,产物非法 Rust。注:fn main 内的
+表达式实参走 `{}` 占位符路径,转义完好(quote 用例字面量均正确发射);
+仅顶层语句路径丢失。
 最小复现:`tests/auto-parity/cases/ping/001-escape.at`,
 `python tests/auto-parity/run.py --side a2r --case 001-escape`。
-**判据**:该用例 a2r 通道绿(转义往返保真)。
+**判据**:该用例 a2r 通道绿(顶层与函数体两条路径转义往返均保真)。
+
+### E5 字符级迭代原语缺失(chars() 出码点/无 chr()/substring 字节语义)
+
+`str.chars()` 返回 i32 码点列表(引擎 engine.rs "chars" 分支 `ch as i32`),
+无码点→字符逆函数;`substring(start, end)` 按字节切片。移植任何 Rust
+char 迭代代码只能以字节级 substring 近似(ASCII 等价,非 ASCII 拆 UTF-8
+序列)。复现:tests/auto-parity/cases/quote/_impl.at 头注释与 30 用例
+(全 ASCII 规避)。
+**判据**:VM 提供字符级迭代与 chr() 等价物(或 a2r/VM 双侧语义一致的
+替代原语),_impl.at 移除"字节近似"限制注释后 30 用例仍全绿。
+
+### E6 a2r substring 端点二元表达式 cast 优先级错误(2026-09-09 在册)
+
+`s.substring(i, i + 1)` 发射为 `&s[i as usize..i + 1 as usize]`——
+`as usize` 只作用于 `1`(i64+usize 类型错,16 处编译错/文件)。端点为
+简单变量时发射正确(`j as usize`),.at 侧以"索引先落 var"适配规避
+(quote/_impl.at 已用此风格,bug 本体未修)。
+最小复现:`fn f(s str) str { return s.substring(0, 1 + 0) }` 经
+`auto trans --path <f> rust` 产物 `&s[0 as usize..1 + 0 as usize]`。
+**判据**:该探针产物为 `(1 + 0) as usize` 形状(或等价正确类型)。
+
+### E7 a2r 自定义函数调用点 owned→引用适配缺失(Vec→&[T]/String→&str)
+
+跨自定义函数传参:形参发射为引用(`items: &[String]`/`s: &str`),调用点
+传 owned 值(Vec 变量、索引取值 String)不加 `&`/`.as_str()`,类型错。
+嵌套 str 调用有 `.as_str()` 适配(部分覆盖),Vec→slice 与索引取值→&str
+均缺失;变量提升不能绕过(`listy(lst)` 裸传)。
+最小复现:`fn listy(items []str) str { return "#" }` +
+`var lst = ["a"]` + `print(listy(lst))`,产物 `listy(lst)` 传给
+`&[String]` 形参。影响:quote 试点 a2r 通道 30/30 编译失败全由此阻塞。
+**判据**:上述探针编译通过;quote 用例集 a2r 通道编译面清零。
 
 ### E2 codegen API_FUNCTIONS 硬编码(承 Plan 065 在册)
 

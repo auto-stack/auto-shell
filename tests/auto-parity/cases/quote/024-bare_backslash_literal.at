@@ -1,0 +1,2 @@
+// 024-bare_backslash_literal — parse_args × 1 输入(语义对应 quote.rs 同名单测;输入以 cmd.json 为单源,本文件为可读镜像)
+print(to_json_strlist(parse_args("open C:\\Users\\zhaop\\data.csv")))
