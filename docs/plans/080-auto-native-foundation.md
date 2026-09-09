@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-080
-status: drafting
+status: execution_done
 feature_name: Auto 单源化迁移——设计、分期路线图与地基(对齐框架+quote 试点)
 author: [zhaopuming]
 created_at: 2026-09-07
@@ -11,7 +11,7 @@ supersedes_spec_components: []
 new_spec_components: []
 touched_goals: []
 
-current_step: 0
+current_step: 8
 total_steps: 8
 ---
 
@@ -185,10 +185,13 @@ API_FUNCTIONS 硬编码清偿、`#[no_mangle]` 发射设计定稿——各附 au
 
 ## 执行步骤
 
-- [ ] **T1** 写 `designs/037-auto-native-rewrite.md`(按架构方案节骨架,附录 A
+- [x] **T1** 写 `designs/037-auto-native-rewrite.md`(按架构方案节骨架,附录 A
   占位"待 T7 填数");`docs/plans/NEXT.md` 080→081 并登记 080 条目。
   验证:`ls designs/037-auto-native-rewrite.md && grep -c "L5" designs/037-auto-native-rewrite.md`
   (≥1);`grep "081" docs/plans/NEXT.md`。
+  [✅ 已完成] worktree plan-080-dev(基线 33e10f3):designs/037 成稿(单源化原则
+  5 条/L0-L5 表/准入退役标准/6 项风险登记,附录 A 占位);NEXT 登记 081 于立项
+  提交 33e10f3 完成。验证实测:L5×4、NEXT 含 081。
 - [ ] **T2** 建 `tests/auto-parity/` 骨架:README.md(用例格式/三方运行/
   --update-golden 规则)、run.py(argparse:--case/--side/--update-golden;
   通道函数 run_rust/run_vm/run_a2r 先落 ping 通路)、cases/ping/(000-ping
@@ -202,31 +205,74 @@ API_FUNCTIONS 硬编码清偿、`#[no_mangle]` 发射设计定稿——各附 au
   serde_json pretty 写出/校验 `expected.json`。
   验证:`cargo test --manifest-path ash-core/Cargo.toml --test quote_parity_fixture`
   (T4 有用例后为实跑;T3 时以 ping 类自例先通管线)。
-- [ ] **T4** 用例转写:对照 `ash-core/src/parser/quote.rs` 的 30 个 `#[test]`,
+- [x] **T4** 用例转写:对照 `ash-core/src/parser/quote.rs` 的 30 个 `#[test]`,
   逐个写 `cases/quote/NNN-<name>.at + .cmd.json`(语义=输入断言对),
   runner `--update-golden --side rust` 生成全部 expected.json。
   验证:`ls tests/auto-parity/cases/quote/*.at | wc -l` ≥ 30;
   `python tests/auto-parity/run.py --side rust` 全绿。
-- [ ] **T5** VM 通道打通:run.py 调 `auto run <case>`(AUTO_BIN 环境变量可覆写,
+  [✅ 已完成] 30 cmd.json + 30 case .at + 30 expected.json;rust 通道 32/32 绿
+  (含 ping 2)。**执行调整**①:单文件脚本模式无模块解析(use 仅项目模式),
+  改为 runner 拼装 `_impl.at`(quote.rs 的 .at 移植,parse_args/
+  parse_args_preserve_quotes + json 助手)+ case body 进 fn main;
+  cmd.json 仍为输入单源(rust 侧直读)。②多断言单测(6 个)合并为单用例
+  多输入(payload=行数组),fixture 与 runner 归一规则一致(1 输入解包)。
+- [x] **T5** VM 通道打通:run.py 调 `auto run <case>`(AUTO_BIN 环境变量可覆写,
   默认 auto-lang 主检出),输出归一后与 expected.json 比对;逐用例记录差异。
   验证:`python tests/auto-parity/run.py --side vm` 报告落 report/,绿/红清点
   与 DEBTS.md 新增条目(vm 差异)一致。
-- [ ] **T6** a2r 通道打通:run.py 调 `auto trans rust --path cases/quote/quote.at`
+  [✅ 已完成] VM 通道 **32/32 全绿**(quote 30 + ping 2)——.at 移植版与手写
+  Rust 行为完全一致。执行调整:通道实际命令为 `AUTO_BIN <case.at>`(非
+  `auto run`);拼装程序落 report/tmp-vm/。**发现 E5**(VM 字符迭代原语缺失:
+  chars() 出码点/无 chr()/substring 字节语义)——首版 chars() 移植全红
+  (字符串+int 拼接致双重 ASCII 编码),改 substring(i,j) 字节迭代后全绿,
+  限制与适配记入 _impl.at 头注释与 DEBTS E5;vm 侧无残留差异。
+- [x] **T6** a2r 通道打通:run.py 调 `auto trans rust --path cases/quote/quote.at`
   产物落 `a2r-shell/src/gen/`,`cargo build --release` 后逐用例执行比对。
   验证:`python tests/auto-parity/run.py --side a2r` 报告落 report/;红项全部
   进 DEBTS.md(a2r 差异,标注"L1 引擎侧")。
-- [ ] **T7** 性能基线:新增 `ash-core/benches/quote_bench.rs`(criterion,
+  [✅ 已完成] a2r 通道 000-ping 绿;quote 30/30 编译失败 + 001-escape 红,
+  全部在册:**E1**(顶层 print 字面量转义丢失,001-escape 常驻复现)、
+  **E6**(substring 端点二元表达式 cast 优先级——.at 侧"索引先落 var"
+  风格适配后 16 错→2 错,bug 本体登记)、**E7**(自定义函数调用点
+  owned→引用适配缺失:Vec→&[T]/索引取值→&str 不加 &,变量提升不可绕,
+  30/30 编译阻塞的根因)。执行调整:trans 实参顺序 `trans --path <f> rust`,
+  产物 `<stem>.a2r.rs` 落输入同目录(runner 经 report/tmp-trans/ 副本转译);
+  生成 bin 落 a2r-shell/src/bin/(gitignore)。判据与最小复现均入 DEBTS。
+- [x] **T7** 性能基线:新增 `ash-core/benches/quote_bench.rs`(criterion,
   引用 benchs 现有 harness 惯例);runner 增计时;三方耗时表抄入
   designs/037 附录 A 并写结论段。
   验证:`cargo bench --manifest-path ash-core/Cargo.toml --bench quote_bench`
   出数;附录 A 无"待填"占位。
-- [ ] **T8** 收尾:DEBTS.md 定稿"Auto 单源化前置(a2r 引擎侧)"条目(合并 T5/T6
+  [✅ 已完成] criterion 8 档出数(0.17–0.55 µs/op);VM 侧无计时原语,改
+  `_bench-loop/_bench-empty.at` 差分计时(5 轮取最小)≈801 µs/op(≈3200×,
+  VM 为 debug 构建);a2r 侧 E7 编译阻塞不可测——附录 A.1-A.4 全落稿
+  (结论:VM 仅开发形态;L1 优先序 E7>E1>E6>E5)。
+- [x] **T8** 收尾:DEBTS.md 定稿"Auto 单源化前置(a2r 引擎侧)"条目(合并 T5/T6
   红项与既有 plan 065 codegen 欠账指针);全文引用核对(设计文档↔计划↔DEBTS)。
   验证:三文件 grep 互指无悬空;`git status` 仅预期新增/修改文件。
+  [✅ 已完成] DEBTS E1-E7 定稿(判据+最小复现,E3 同步附录 A 结论);
+  互指核对:designs/037↔DEBTS↔tests/auto-parity 引用齐(附录 A.3 引
+  run.py 补数路径);worktree git status 仅预期文件。**执行事故记录**:
+  会话早期清理误删 `.worktrees/auto-lang`/`auto-ai` junction(worktree 内
+  path 依赖解析需要,plan 060 §M3 机制),已于当日以 mklink /J 恢复并
+  验证(ash-core worktree 内 cargo test 恢复绿)。
 
 ## 复审记录
 
-(留空,/auto-plan:review 填写)
+stage: work | PLAN-080 | 修订=立项稿+执行证据(T1-T8) | outcome: pass |
+code_commit: plan-080-dev 4941b85(T1+T2)→ f31105c(T4-T6)→ 9605c87(T7+T8),
+基线 main 33e10f3 | task_ids: T1-T8 全勾 |
+evidence: ①T2 000-ping 三方绿(runner/fixture/vm/a2r 自测);
+②T4 rust 通道 32/32;③T5 VM 通道 32/32 全绿(quote 移植与手写 Rust 行为
+完全一致);④T6 a2r:ping 绿,quote 30/30 编译阻塞,E1/E5/E6/E7 判据与
+最小复现入 DEBTS;⑤T7 附录 A 四节落稿(含 L1 优先序 E7>E1>E6>E5);
+⑥T8 引用核对 + 事故记录(junction 误删已恢复)。
+C1-C5 自检:C1✓(designs/037 含路线图/准入退役/风险/附录 A)
+C2✓(恒等用例三方绿;quote 用例 rust/vm 全绿,a2r 红全部在册)
+C3✓(A.1-A.3 数据 + A.4 结论)C4✓(DEBTS E1-E7 + NEXT 081)
+C5✓(ash-core --all-targets 0 新增警告;ash/ash-server 未触碰)
+| blockers: 无(引擎侧欠账为域外 L1 输入,非本计划阻塞)
+| next: /auto-plan:review(复审后 merge;worktree .worktrees/plan-080-dev 保留)
 
 ## 待澄清事项
 
