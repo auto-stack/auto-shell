@@ -994,11 +994,14 @@ auto-lang codegen 仍硬编码旧 demo `API_FUNCTIONS` 列表,不产
 (a2r 生成 Rust 后端)依赖 codegen 修完。
 **判据**:codegen 从 api.at 契约真实产出,restore 脚本仅剩 shadcn 原语。
 
-### E3 a2r 容器热路径性能未实测(待 Plan 080 T7 附录 A 出数)
+### E3 a2r 容器热路径性能未实测(附录 A 已出部分数据)
 
 `a2r_std::List` 为 RefCell 内可变容器、字符串走 AutoStr;解析/补全
 热路径的衰减比未实测。designs/037 §2.4 暂定 1.5-3 倍区间为达标线。
-**判据**:附录 A 数据落稿;超标项在 auto-lang 侧立优化计划。
+**2026-09-09 附录 A(T7)**:手写基线 0.25-0.55 µs/op;VM 解释 ≈801 µs/op
+(≈3200×,开发形态佐证);a2r 产物**不可测——编译面被 E7 阻塞**,E3 出数
+顺延至 E7 清偿后由 run.py --side a2r 直接补数。
+**判据**:附录 A.3 补数落稿;超标项在 auto-lang 侧立优化计划。
 
 ### E4 `#[no_mangle]` extern 导出发射未验证(L4 前置)
 

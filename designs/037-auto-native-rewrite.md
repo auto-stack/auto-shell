@@ -110,7 +110,40 @@ L5 最后。
 | 行为对齐验证成本被低估 | 中 | 每模块准入先估用例数;quote 试点校准人时比 |
 | VM 与 a2r 语义分叉(引擎 bug) | 中 | 差异一律在册转 auto-lang;不在业务侧写分叉 |
 
-## 附录 A — quote 试点性能基线(Plan 080 T7 填入)
+## 附录 A — quote 试点性能基线(Plan 080 T7,2026-09-09)
 
-> 待填:手写 Rust(criterion)/ AutoLang VM / a2r-release 三列,含机器与
-> 编译参数、每用例耗时与比值结论。
+环境:本机 dev 机(Windows);Rust 手写侧 criterion `--release`
+(`cargo bench --manifest-path ash-core/Cargo.toml --bench quote_bench`);
+VM 侧为 auto-lang **debug** 构建 `auto.exe`,差分计时
+(`cases/quote/_bench-loop.at` − `_bench-empty.at`,各 5 轮取最小墙钟,
+2000 次/op);a2r 侧为 `cargo build --release`。
+
+### A.1 手写 Rust(发布基线)
+
+| 输入档 | parse_args | parse_args_preserve_quotes |
+|---|---|---|
+| simple(echo hello world) | 296 ns | 170 ns |
+| quoted(cmd "arg with spaces" another) | 250 ns | 253 ns |
+| winpath(open C:\Users\…\data.csv) | 250 ns | 219 ns |
+| mixed(引号+转义+变量混合) | 545 ns | 405 ns |
+
+### A.2 AutoLang VM(解释执行)
+
+parse_args(quoted 档)≈ **801 µs/op**(差分:(1693.3 − 91.5) ms / 2000)。
+相对手写 Rust 同档(250 ns)约 **3200×**——解释器 + 逐字节 substring
+分配的复合开销,且 VM 引擎为 debug 构建(发布版会收窄但不改量级)。
+
+### A.3 a2r 编译产物
+
+**不可测**:30/30 用例编译阻塞于 E7(自定义函数调用点 owned→引用适配
+缺失,DEBTS 在册)。E7 清偿后由 `tests/auto-parity/run.py --side a2r`
+直接补数,本附录留待更新。
+
+### A.4 结论
+
+1. VM 直跑只适合开发/调试形态;quote 这类逐键热路径(补全、逐行解析)
+   生产形态必须走 a2r 编译——与 designs/037 §1 的终局图一致。
+2. a2r 产物的达标线锚定 A.1(0.25–0.55 µs/op 档),designs/037 §2.4 的
+   1.5–3× 暂定区间**维持**,待 A.3 出数后定稿(E3 判据不变)。
+3. L1 清偿的优先序由本次实测固化:**E7 > E1 > E6 > E5**(E7 阻塞整个
+   a2r 通道的编译面,是单点闸门)。

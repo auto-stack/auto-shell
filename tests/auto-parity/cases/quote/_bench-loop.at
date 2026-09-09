@@ -1,0 +1,12 @@
+// _bench-loop.at — VM 侧热路径基准(Plan 080 T7,差分计时的工作负载)。
+// 与 _bench-empty.at 同轮次数相减得 parse_args 的 VM 每-op 开销;
+// 对照手写侧 ash-core/benches/quote_bench.rs(criterion)。结果抄录
+// designs/037 附录 A。
+var t = 0
+var i = 0
+while i < 2000 {
+    var r = parse_args("cmd \"arg with spaces\" another")
+    t = t + r.len()
+    i = i + 1
+}
+print(t)
