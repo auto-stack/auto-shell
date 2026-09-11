@@ -191,6 +191,11 @@ pub struct Shell {
     /// (print + `Ok(None)`), but agent callers (`execute_for_agent`) must see
     /// them as errors — otherwise the model reads "ran fine, empty output".
     last_denial: Option<String>,
+    /// PLAN-081 T-01: when true, `execute()`'s policy-denial arm suppresses
+    /// its own `Error: ...` eprintln so an agent surface (execute_for_agent)
+    /// emits exactly ONE stderr line per denial. Interactive paths never set
+    /// it — the REPL keeps its immediate print.
+    suppress_denial_print: bool,
     /// Plan 074 E2: when set, single external commands run with piped
     /// stdout/stderr and stream their lines to this channel (the frontend's
     /// live tail preview). Set/cleared around `execute()` by the REPL.
@@ -424,6 +429,7 @@ impl Shell {
             bash_compat: false,
             policy,
             last_denial: None,
+            suppress_denial_print: false,
             live_tail_tx: None,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
@@ -810,7 +816,13 @@ impl Shell {
                 return Ok(None);
             }
             Err(e) => {
-                eprintln!("Error: {}", e);
+                // PLAN-081 T-01 (single-line denial): the agent surface
+                // (execute_for_agent) re-surfaces this denial as an error, so
+                // it suppresses the interactive print to avoid the historic
+                // double line ("Error: security: ..." twice, once doubled).
+                if !self.suppress_denial_print {
+                    eprintln!("Error: {}", e);
+                }
                 self.last_exit_code = 1;
                 self.last_denial = Some(format!("{e}")); // Plan 072 M2
                 self.policy.audit(&ash_core::security::AuditRecord {
@@ -1138,14 +1150,21 @@ impl Shell {
     ) -> Result<Option<String>> {
         self.json_output = json_mode;
         self.bash_compat = bash_compat;
+        // PLAN-081 T-01 (single-line denial): the denial is surfaced as this
+        // function's return error — the caller (main.rs) prints it once with
+        // the `Error: ` prefix. Suppress execute()'s own eprintln; the reason
+        // already carries its `security:`/`sandbox:` prefix (auto-ai's
+        // DENIED_MARKERS substring contract), so no second prefix is added.
+        self.suppress_denial_print = true;
         let result = self.execute(input);
+        self.suppress_denial_print = false;
         self.json_output = false; // always reset (interactive default)
         self.bash_compat = false;
         // Plan 072 M2 (S-5): interactive `execute` prints a policy denial and
         // returns Ok(None); the agent caller must see it as an error instead
         // of "ran fine, empty output".
         if let Some(reason) = self.last_denial.take() {
-            return Err(miette::miette!("security: {reason}"));
+            return Err(miette::miette!("{reason}"));
         }
         result
     }
@@ -1430,7 +1449,10 @@ impl Shell {
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    // PLAN-081 T-01: single-line denial under agent surfaces.
+                    if !self.suppress_denial_print {
+                        eprintln!("Error: {}", e);
+                    }
                     self.last_exit_code = 1;
                     self.last_denial = Some(format!("{e}")); // Plan 072 M2
                     return Ok(None);
@@ -4310,7 +4332,10 @@ impl Shell {
                     return Ok(None);
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    // PLAN-081 T-01: single-line denial under agent surfaces.
+                    if !self.suppress_denial_print {
+                        eprintln!("Error: {}", e);
+                    }
                     self.last_exit_code = 1;
                     self.last_denial = Some(format!("{e}")); // Plan 072 M2
                     return Ok(None);
@@ -5325,6 +5350,52 @@ mod tests {
         let mut shell = Shell::new();
         let out = shell.execute_for_agent("ls", true, false).unwrap_or(None).unwrap_or_default();
         assert!(out.starts_with('['), "ls --json should be a JSON array: {out}");
+    }
+
+    // ---- PLAN-081 T-01: single-line denial under agent surfaces ----
+
+    #[test]
+    fn denial_error_carries_exactly_one_security_prefix() {
+        // Historic bug: execute_for_agent wrapped the reason (which already
+        // starts with "security: ") in another "security: ", producing
+        // "security: security: ..." on stderr (pinned by auto-ai's fixture as
+        // a *substring* tolerance — never a shape to reproduce).
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            deny: vec!["rm".into()],
+            ..Default::default()
+        });
+        let err = shell
+            .execute_for_agent("rm secret.txt", false, false)
+            .expect_err("denied command must error for agent callers");
+        let msg = format!("{err}");
+        assert!(msg.starts_with("security: "), "must keep the security: prefix: {msg}");
+        assert!(
+            !msg.starts_with("security: security:"),
+            "double prefix must be gone: {msg}"
+        );
+        assert_eq!(msg, "security: 'rm' is denied by --deny");
+        // Denial must still mark failure for the -c exit-code path.
+        assert_eq!(shell.last_exit_code(), 1);
+    }
+
+    #[test]
+    fn denial_suppress_flag_resets_after_agent_call() {
+        // After execute_for_agent clears the suppression flag, interactive
+        // execute() must record denials again (flag restored to false).
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            deny: vec!["rm".into()],
+            ..Default::default()
+        });
+        let _ = shell.execute_for_agent("rm a.txt", false, false);
+        // Flag is private; observable behavior: a subsequent interactive
+        // denial still records last_denial and Ok(None) — and execute_for_agent
+        // on the SAME denial string stays single-prefixed.
+        let _ = shell.execute("rm b.txt");
+        assert_eq!(shell.last_denial.as_deref(), Some("security: 'rm' is denied by --deny"));
+        let err = shell.execute_for_agent("rm c.txt", false, false).unwrap_err();
+        assert_eq!(format!("{err}"), "security: 'rm' is denied by --deny");
     }
 
     #[test]
