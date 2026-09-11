@@ -133,12 +133,52 @@ for file in output["data"]["value"]:
 # 路径限制 + 禁网络 + 审计
 ash --sandbox /project --no-network --audit /var/log/ash.jsonl
 
+# 多路径可写白名单（Plan 081）：本项目目录可写、其余只读、读不受限
+ash --writable /project/src --writable /project/docs --no-network
+
+# 策略文件（Plan 081）：由 agent 侧按"内置默认(cwd) < 项目配置 < 会话审批"
+# 合并后生成；ash 只加载执行。路径必须是 OS 原生形（不做 MSYS/URL 转换）
+ash --policy-file /tmp/agent-policy.json
+
 # 白名单（只允许 ls/cat/grep）
 ash --allow ls --allow cat --allow grep
 
 # 完全只读
 ash --read-only
 ```
+
+### 语义矩阵（Plan 081，R1）
+
+| 输入 | 读 | 写 | cd |
+|---|---|---|---|
+| 无安全 flag | 放开 | 放开 | 放开 |
+| 仅 `--sandbox D` | 限 D | 限 D | 限 D |
+| 仅 `--writable W…`（可重复） | 放开 | **默认拒绝**，仅 W 内放行 | 放开 |
+| 两者同时 | 限 D | 限 (D ∩ W) | 限 D |
+
+策略三层优先级：config `[security]` < `--policy-file`（JSON v1，
+`schema_version` 必须为 `"1"`）< CLI flags；布尔取 OR、名单取并集、
+sandbox/audit 单值被更具体层覆盖。writable 根不存在启动即报错（exit 2）。
+
+### 退出码与 stderr 契约（Plan 081 修复后）
+
+- 策略拒绝：exit ≠ 0，stderr 以 `Error: security:` 或 `Error: sandbox:`
+  开头（子串契约，auto-ai FailureClassifier 依赖）；
+- 每个拒绝行尾附机器段 **`[rule=<id> path=<p>]`**（正则
+  `\[rule=(\S+?)(?: path=(.+?))?\]` 可提取）。rule_id 全集：
+  `deny-list` / `allow-list` / `no-exec` / `no-network` / `read-only` /
+  `dangerous-pattern` / `sandbox-invalid` / `sandbox-outside` /
+  `writable-outside`；
+- 脚本（`ash script.at` / `-s`）失败 exit 1（未定义函数保持
+  `Error: Undefined function: ...` 文案）；显式 `exit(N)` 优先；
+- 拒绝输出恒为**一行**（不再出现双行/`security: security:` 双前缀）。
+
+### 覆盖边界（如实声明）
+
+路径级判定约束**内建文件命令**（cat/cp/grep/head/ln/mv/rm/touch）与
+**输出重定向**（`> f`）；外部命令（git/cargo 等自行写盘）只有命令名级
+拦截，不受路径白名单约束——OS 级强制为后续计划（designs/038 §5.5）。
+在 R5 落地前，对不可信命令建议叠加 `--no-exec` 或 allow-list 兜底。
 
 这些 flag 对 Agent 透明——Agent 正常调 `ash agent run`，ash 内部按 policy 拦截。
 
