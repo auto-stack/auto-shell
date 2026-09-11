@@ -1,16 +1,22 @@
 ---
 plan_id: PLAN-081
-status: drafting
+status: execution_done
 feature_name: ash 多路径可写白名单 + 项目/会话级策略关联
 author: [agent]
 created_at: 2026-09-11T00:00:00Z
 updated_at: 2026-09-11T00:00:00Z
 plan_revision: 1
-current_step: 0
+current_step: 8
 total_steps: 8
 supersedes_spec_components: []
 new_spec_components: []
 touched_goals: []
+worktree: D:/autostack/auto-shell/.worktrees/plan-081-dev
+worktree_branch: plan-081-dev
+worktree_base_commit: e930134
+worktree_head_commit: 57eef86
+dependency_commits:
+  - repo: auto-lang, commit: d8971f4b1 (master, T-07 R4③ 单文件 scoped)
 dependency_snapshots:
   - repo: auto-ai, ref: PLAN-033 (archived, 46d169a), 消费方契约 crates/auto-ai-cli/src/shell_exec.rs
   - repo: auto-lang, ref: master (junction 只读依赖), R4③ 单文件改动点 vm/engine.rs:2602
@@ -219,66 +225,73 @@ auto-ai 033(消费方,archived)。详见 designs/038 §3。
 
 ## 8. 执行步骤
 
-> 均在 worktree(约定 `.worktrees/plan-081-dev`)执行;auto-lang 为
-> junction 只读依赖,T-07 需按仓规约单独处理(见任务注记)。
+> 均在 worktree `.worktrees/plan-081-dev`(分支 plan-081-dev,base e930134)执行;
+> T-07 在 auto-lang 仓主检出 scoped 提交。
 
-**T-01 R4① 拒绝单行单前缀** — deps: 无
-- 文件:`ash/auto-shell/src/shell.rs`(execute_for_agent ~:1133、
-  execute 错臂 ~:812);新单测
-- 内容:抑制标志 + 去掉二次 `security:` 前缀;断言单行
-- 验证:`cargo test --workspace`(ash/)+ 冒烟一行断言 → AC-07
+**T-01 [x] R4① 拒绝单行单前缀** — commit `0f05302`
+- 实现:execute() 三个拒绝臂(单命令/管道阶段/后台)加 `suppress_denial_print`
+  守卫;execute_for_agent 置位抑制交互打印且不再二次包 `security:` 前缀
+- 证据:单测 2 项(denial_error_carries_exactly_one_security_prefix /
+  denial_suppress_flag_resets_after_agent_call)绿;活体冒烟恰一行
+  `Error: security: 'rm' is denied by --deny`,exit 1 → AC-07
 
-**T-02 R4② 脚本失败退出码** — deps: 无
-- 文件:`ash/auto-shell/src/shell.rs`(flush_auto_block ~:2959、
-  `> cmd` 错臂 ~:2764、新字段 script_had_error);`ash/ash/src/main.rs`
-  (脚本路径 ~:249、-s 路径 ~:167)
-- 内容:锁存置位 + main 退出判定;文案(`Undefined function:` 等)不动
-- 验证:单元锁存用例 + 冒烟 exit 1 断言 → AC-08
+**T-02 [x] R4② 脚本失败退出码** — commit `fb3abb7`
+- 实现:`script_had_error` 锁存(flush_auto_block / `> cmd` 错臂 /
+  capture 赋值失败三处置位,跑完不中断);main.rs 脚本与 -s 路径无显式
+  exit 时按锁存 exit 1
+- 证据:单测 3 项绿;活体冒烟:未定义函数 exit 1(原 0,文案保持)/
+  缺失命令 exit 1/干净脚本 exit 0/`exit(7)` 仍优先 → AC-08
 
-**T-03 R1 writable_roots 策略模型** — deps: 无
-- 文件:`ash-core/src/security.rs`(字段/active/summarize + 单测);
-  `ash/auto-shell/src/shell.rs`(resolve_path ~:1567 多根判定 + root
-  canonicalize 缓存 + cd 不变确认);config.rs(`SecurityConfig.writable`
-  可随后 T-04)
-- 内容:语义矩阵实现;根不存在启动期报错
-- 验证:`cargo test -p ash-core` + `cargo test --workspace` → AC-01,
+**T-03 [x] R1 writable_roots 策略模型** — commit `1bba099`
+- 实现:SecurityPolicy.writable_roots + active()/summarize()
+  (writable_roots_count 只暴露计数);Shell canon 缓存
+  (canon_writable_roots,set_policy/new 共用);resolve_path 多根写判定
+  (sandbox 后 any(starts_with),读放开,cd 不变);config
+  `[security].writable` CSV 双轨接 to_policy
+- 证据:ash-core 单测 2 + auto-shell 3(含正交交集矩阵)绿 → AC-01,
   AC-02, AC-03
 
-**T-04 R2a CLI --writable + config CSV** — deps: T-03
-- 文件:`ash/ash/src/main.rs`(预扫描 ~:291、值式跳过表 ~:105、help
-  ~:205);`ash/auto-shell/src/config.rs`(config.at ~:199 / toml ~:274
-  双轨)
-- 内容:可重复解析;help SECURITY 节追加(保留 `--sandbox` 字样)
-- 验证:冒烟双根 + help 文本断言 → AC-04
+**T-04 [x] R2a CLI --writable + help + 根校验** — commit `152c2eb`
+- 实现:--writable 可重复(去重并集);--help SECURITY 节追加(保留
+  `--sandbox` 字样);validate_writable_roots 启动校验(不存在/非目录
+  exit 2)
+- 证据:冒烟双根写放行 exit 0/越界拒绝 exit 1/坏根 exit 2/help 含
+  `--sandbox`+`--writable` → AC-04
 
-**T-05 R2b --policy-file(JSON v1)** — deps: T-04
-- 文件:新 `ash/auto-shell/src/policy_file.rs`(serde_json 解析 +
-  schema_version 校验 + 三层合并);`ash/ash/src/main.rs`(--policy-file
-  接线);config.rs 合并入口
-- 内容:§5.2 全量;坏文件明确报错
-- 验证:单元 + 冒烟合并断言 → AC-05
+**T-05 [x] R2b --policy-file JSON v1** — commit `5b470da`
+- 实现:新模块 auto-shell/policy_file.rs(load + merge_over;
+  schema_version≠"1"/坏 JSON/缺文件硬错;布尔 OR/名单并集/单值路径覆盖);
+  parse_security_flags 重构三层装配 config < policy-file < CLI;
+  serde derive 入 auto-shell 清单(树内已有,非新三方)
+- 证据:单测 4 绿;冒烟文件策略写放行/deny/no_network 生效 + CLI 并集 +
+  坏文件 exit 2 → AC-05
 
-**T-06 R3 结构化拒绝原因** — deps: T-03
-- 文件:`ash-core/src/security.rs`(DeniedReason + rule_id 表);
-  `ash/auto-shell/src/shell.rs`(resolve_path/sandbox 错误升级);
-  `docs/for-agents.md`(契约段更新)
-- 内容:stderr 追加 `[rule=... path=...]`;take_denial 携带结构
-- 验证:Display 单元 + 冒烟 grep + 前缀保持断言 → AC-06
+**T-06 [x] R3 结构化拒绝原因** — commit `1ff2b56`
+- 实现:ash-core DeniedReason{rule_id,path,message}(Display 追加
+  `[rule=<id>[ path=<p>]]`,文案主体逐字保持);check() 六类 + resolve_path
+  /cd 四类路径规则全部结构化;last_denial/take_denial 自动携带
+- 证据:单测更新/新增绿;活体冒烟 deny-list/writable-outside/
+  sandbox-outside 三类段格式正确、前缀保持 → AC-06
 
-**T-07 R4③ auto-lang 栈回溯守卫** — deps: 无(独立)
-- 文件:auto-lang 仓 `crates/auto-lang/src/vm/engine.rs:~2602`(+ 其仓
-  单测)
-- 内容:补 ExitRequested 守卫;帧名/行号 best-effort
-- 注记:worktree 内 auto-lang 为 junction;落地方式 = 在 auto-lang 仓
-  主检出单独小改+提交(遵循其规约),或 fallback:本仓 DEBTS 条目
-  (有意识接受 + 推翻条件),复审记录注明选择 → AC-09
+**T-07 [x] R4③ auto-lang 栈回溯守卫** — auto-lang commit `d8971f4b1`(master)
+- 实现:engine.rs 栈回溯块补 `!matches!(e, VMError::ExitRequested(_))`
+  守卫(与上方 Task Error 行 Plan 011 守卫对齐);Q2 决策=主检出 scoped
+  小改,fallback 未触发
+- 证据:auto-lang vm:: 469 测试 0 失败;活体冒烟 `exit(7)`/嵌套 `exit(5)`
+  无 Stack trace 行且退出码保持,真实错误仍报 Error → AC-09
+- ⚠ 事故记录:首次提交误并入并发会话(Plan 394)在 engine.rs 的未提交
+  WIP(112 insertions);已拆分修复——soft reset 后在纯净版重放守卫单独
+  提交(+9/-2),Plan 394 WIP 完整还原为其未提交态并验证编译通过。
+  关联:见 §9。
 
-**T-08 文档 + 跨仓复核 + 全量回归** — deps: T-01~T-07
-- 文件:`docs/for-agents.md`(新 flag/覆盖边界/退出码契约);
-  `designs/038`(若有实现期偏差回写)
-- 内容:auto-ai 判据人工对照(§6.4)结论写入 §9;两仓回归命令执行
-- 验证:`cargo test --workspace`(ash/)与 `cargo test -p ash-core`
-  0 失败 0 新警告 → AC-10, AC-11
+**T-08 [x] 文档 + 跨仓复核 + 全量回归** — commit `57eef86`
+- 实现:for-agents.md 语义矩阵/三层优先级/契约(rule_id 全集+退出码+单行
+  原则)/覆盖边界
+- 证据:auto-ai shell_exec 判据 17/17(只读);ash-core 415/0;workspace
+  940/0(排除两个基线预存失败:shell::tests::test_auto_expression_execution
+  与 frontend::tail_cmd::tests::spill_writes_readable_unique_files,均在
+  主检出 e930134 复现,与 081 无关——前者 auto-lang junction 漂移,后者
+  毫秒唯一名时序 flake)→ AC-10, AC-11
 
 ## 9. 复审记录
 
@@ -290,11 +303,42 @@ auto-ai 033(消费方,archived)。详见 designs/038 §3。
   已带默认决策,不阻塞。next: **work**。
   变更任务/验收集:T-01~T-08,AC-01~AC-11(初次建立)。
 
+- 2026-09-11 work 完成(stage: work,rev:1,outcome: **pass** →
+  status: execution_done,next: **review**):
+  - code_commit: worktree plan-081-dev @ `57eef86`(T-01 0f05302 / T-02
+    fb3abb7 / T-03 1bba099 / T-04 152c2eb / T-05 5b470da / T-06 1ff2b56 /
+    T-08 57eef86);依赖仓 auto-lang @ `d8971f4b1`(T-07)。
+  - task_ids: T-01~T-08 全部 [x];AC-01~AC-11 全部有落点(§8 证据列)。
+  - evidence:
+    - 单测:ash-core 415/0;auto-shell lib 722 中除 1 基线预存外全绿
+      (081 新增/更新 18 项全绿);auto-lang vm:: 469/0;auto-ai
+      shell_exec 判据 17/17(只读复核,零代码改动)。
+    - 全量:ash workspace 940/0(排除两个基线预存失败:
+      test_auto_expression_execution = auto-lang junction 漂移
+      `<obj#...>`,spill_writes_readable_unique_files = 毫秒唯一名时序
+      flake;两者在主检出 e930134 均复现,建议后续 DEBTS/独立小修)。
+    - 活体冒烟:v0.1.0 debug 二进制逐条验证语义矩阵四行/双根并集/
+      坏根 exit 2/policy-file 坏文件 exit 2/三类拒绝 [rule=...] 段/
+      单行单前缀/脚本失败 exit 1/exit(7) 无栈回溯,输出见各任务证据。
+    - AC-10(R5 仅设计):designs/038 §5.5 已含两平台对比与结论;
+      实现期零偏差,无需回写。
+  - 事故记录(T-07 所有权):首次在 auto-lang 提交时误并入并发会话
+    (Plan 394)在 engine.rs 的未提交 WIP;当场发现(112 insertions 与
+    3 行守卫不符),soft reset 后纯净版重放单独提交(+9/-2 =
+    d8971f4b1),Plan 394 WIP 完整还原未提交态且 auto-lang 编译恢复。
+    教训:auto-lang master 存在活跃并发会话,跨仓 scoped 提交前必须
+    先核对目标文件的既有 diff(`git diff --stat -- <file>`),而不是
+    只看 status 头几行。
+  - blockers: 无。
+  - next: review(auto-plan-review;worktree 保留供复审与 merge;
+    auto-lang d8971f4b1 的归属合并路径由 review/merge 阶段确认)。
+
 ## 10. 待澄清事项
 
 | # | 事项 | 当前默认决策(不阻塞 work) | owner/next |
 |---|---|---|---|
 | Q1 | auto-ai 侧跟进(writable_roots 通道 + probe 升级)的时点与本计划的先后 | 本计划只保证契约可用;auto-ai 跟进由其仓另立计划 | auto-ai 侧维护者 |
-| Q2 | T-07 的 auto-lang 变更走主检出小改还是 DEBTS fallback | 优先主检出小改(约 3 行 + 守卫单测);协调不成即 fallback,不阻塞主线 | work 阶段开头决策,复审记录留痕 |
+| Q2 | ~~T-07 的 auto-lang 变更走主检出小改还是 DEBTS fallback~~ | **已决**:主检出 scoped 小改落地(auto-lang `d8971f4b1`),fallback 未触发;遗留:该提交并入 auto-lang master 的常规流由其仓惯例吸收(未见阻塞性约束) | 已闭环 |
 | Q3 | 策略文件是否需要 atom(Auto/Atom)形态 | v1 仅 JSON(auto-ai 生成方便 + auto-shell 已有 serde_json);atom 形态留待 ash 配置体系统一(config.at)时再评估 | 后续计划 |
-| Q4 | writable 根在 sandbox 外时的行为(交集为空集) | 按矩阵:直接拒绝写并给 `writable-outside`;文档明示,不做特殊报错 | 已定,复审确认 |
+| Q4 | writable 根在 sandbox 外时的行为(交集为空集) | 按矩阵:直接拒绝写并给 `writable-outside`;文档明示,不做特殊报错 | 已定(实现与冒烟一致) |
+| Q5 | 基线预存失败两项(test_auto_expression_execution / spill_writes flake)的修复归属 | 本计划不修(射程外,基线在案);建议各自立独立小修或入 DEBTS | 仓维护者 |
