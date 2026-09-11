@@ -238,6 +238,17 @@ pub struct Shell {
     output_hook: Option<Box<dyn OutputHook>>,
 }
 
+/// PLAN-081 (R3): structured path-scoped denial — keeps the human message
+/// verbatim and attaches the machine-parseable `[rule=... path=...]` segment
+/// (see `ash_core::security::DeniedReason`).
+fn denied_path(rule_id: &'static str, path: Option<PathBuf>, message: String) -> miette::Report {
+    miette::miette!(ash_core::security::DeniedReason {
+        rule_id,
+        path,
+        message
+    })
+}
+
 /// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
 /// itself doesn't exist (e.g. a file about to be created), canonicalize the
 /// nearest existing ancestor and append the remaining components. This lets
@@ -1642,26 +1653,34 @@ impl Shell {
         // command-name level check — this catches commands that write via
         // std::fs internally).
         if for_write && self.policy.read_only {
-            miette::bail!(
-                "security: write to '{}' blocked by --read-only",
-                joined.display()
-            );
+            return Err(denied_path(
+                "read-only",
+                Some(joined.clone()),
+                format!("security: write to '{}' blocked by --read-only", joined.display()),
+            ));
         }
         // Canonicalize, resolving symlinks. For paths that don't yet exist
         // (e.g. `touch newfile`), fall back to canonicalizing the parent and
         // appending the file name.
         let canonical = canonicalize_or_parent(&joined)?;
         if let Some(ref sandbox) = self.policy.sandbox_dir {
-            let sandbox_canon = sandbox
-                .canonicalize()
-                .into_diagnostic()
-                .map_err(|e| miette::miette!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e))?;
+            let sandbox_canon = sandbox.canonicalize().into_diagnostic().map_err(|e| {
+                denied_path(
+                    "sandbox-invalid",
+                    Some(sandbox.clone()),
+                    format!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e),
+                )
+            })?;
             if !canonical.starts_with(&sandbox_canon) {
-                miette::bail!(
-                    "sandbox: {} is outside sandbox {}",
-                    canonical.display(),
-                    sandbox_canon.display()
-                );
+                return Err(denied_path(
+                    "sandbox-outside",
+                    Some(canonical.clone()),
+                    format!(
+                        "sandbox: {} is outside sandbox {}",
+                        canonical.display(),
+                        sandbox_canon.display()
+                    ),
+                ));
             }
         }
         // PLAN-081 (R1): multi-root writable whitelist. When active, a write
@@ -1674,10 +1693,14 @@ impl Shell {
                 .iter()
                 .any(|root| canonical.starts_with(root));
             if !allowed {
-                miette::bail!(
-                    "sandbox: write to '{}' denied: not under any --writable root",
-                    canonical.display()
-                );
+                return Err(denied_path(
+                    "writable-outside",
+                    Some(canonical.clone()),
+                    format!(
+                        "sandbox: write to '{}' denied: not under any --writable root",
+                        canonical.display()
+                    ),
+                ));
             }
         }
         Ok(canonical)
@@ -1718,16 +1741,23 @@ impl Shell {
 
         // Plan 009: sandbox check — cd must not escape the sandbox root.
         if let Some(ref sandbox) = self.policy.sandbox_dir {
-            let sandbox_canon = sandbox
-                .canonicalize()
-                .into_diagnostic()
-                .map_err(|e| miette::miette!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e))?;
+            let sandbox_canon = sandbox.canonicalize().into_diagnostic().map_err(|e| {
+                denied_path(
+                    "sandbox-invalid",
+                    Some(sandbox.clone()),
+                    format!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e),
+                )
+            })?;
             if !canonical.starts_with(&sandbox_canon) {
-                miette::bail!(
-                    "sandbox: cd to {} is outside sandbox {}",
-                    canonical.display(),
-                    sandbox_canon.display()
-                );
+                return Err(denied_path(
+                    "sandbox-outside",
+                    Some(canonical.clone()),
+                    format!(
+                        "sandbox: cd to {} is outside sandbox {}",
+                        canonical.display(),
+                        sandbox_canon.display()
+                    ),
+                ));
             }
         }
 
@@ -5449,7 +5479,11 @@ mod tests {
             !msg.starts_with("security: security:"),
             "double prefix must be gone: {msg}"
         );
-        assert_eq!(msg, "security: 'rm' is denied by --deny");
+        // PLAN-081 (R3): the denial now carries the machine segment too.
+        assert_eq!(
+            msg,
+            "security: 'rm' is denied by --deny [rule=deny-list]"
+        );
         // Denial must still mark failure for the -c exit-code path.
         assert_eq!(shell.last_exit_code(), 1);
     }
@@ -5468,9 +5502,15 @@ mod tests {
         // denial still records last_denial and Ok(None) — and execute_for_agent
         // on the SAME denial string stays single-prefixed.
         let _ = shell.execute("rm b.txt");
-        assert_eq!(shell.last_denial.as_deref(), Some("security: 'rm' is denied by --deny"));
+        assert_eq!(
+            shell.last_denial.as_deref(),
+            Some("security: 'rm' is denied by --deny [rule=deny-list]")
+        );
         let err = shell.execute_for_agent("rm c.txt", false, false).unwrap_err();
-        assert_eq!(format!("{err}"), "security: 'rm' is denied by --deny");
+        assert_eq!(
+            format!("{err}"),
+            "security: 'rm' is denied by --deny [rule=deny-list]"
+        );
     }
 
     #[test]
