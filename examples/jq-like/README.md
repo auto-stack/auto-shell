@@ -13,7 +13,7 @@ ash examples/jq-like/jq-like.ash data.json
 ## ash 版本亮点
 
 - 用 `cat file | from_json | select .field` 原生 pipeline,无需安装 jq
-- `from_json` 把 JSON 转结构化 Table,后续可 `filter`/`select`/`sort`/`to_json`
+- `from_json` 把 JSON 转结构化 Table,后续可 `where`/`select`/`sort`/`to_json`
 - AutoLang 包装:参数处理 + 多步查询组合
 
 ## bash 对照
