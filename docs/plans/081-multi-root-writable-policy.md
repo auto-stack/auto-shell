@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-081
-status: execution_done
+status: reviewed
 feature_name: ash 多路径可写白名单 + 项目/会话级策略关联
 author: [agent]
 created_at: 2026-09-11T00:00:00Z
@@ -332,6 +332,51 @@ auto-ai 033(消费方,archived)。详见 designs/038 §3。
   - blockers: 无。
   - next: review(auto-plan-review;worktree 保留供复审与 merge;
     auto-lang d8971f4b1 的归属合并路径由 review/merge 阶段确认)。
+
+- 2026-09-11 review(stage: review,PLAN-081 rev:1,outcome: **pass** →
+  status: reviewed,next: **merge**):
+  - 独立性声明:复审在实施会话内进行,结论由工件独立重建——全部验证
+    命令在本复审中重跑,未采信实施期摘要;过程中两处复审脚本缺陷
+    (AC-01 未显式 cd 导致写目标错位;AC-05 heredoc 展开把 `C:\` 反斜杠
+    写入 JSON 触发非法转义)被当场识别并修正,均为脚本侧问题,产品行为
+    每次均符合设计。
+  - reviewed_commit: `57eef86`(worktree plan-081-dev,working tree
+    clean,7 commits)/ base_commit: `e930134` / dependency_revisions:
+    auto-lang `d8971f4b1`(master)、auto-ai(只读复核,未改)。
+  - diff 范围核对:e930134..57eef86 恰为 9 个预期文件(security.rs /
+    shell.rs / config.rs / policy_file.rs / lib.rs / main.rs /
+    auto-shell Cargo.toml+Cargo.lock / for-agents.md),零射程外改动;
+    OS 级强制关键词(landlock/seccomp/JobObject/AppContainer)在 diff 中
+    零命中 → AC-10。
+  - spec_inputs:无 docs/specs 体系(080 先例在案),载体 =
+    designs/038(§5.5 R5 可行性在案)+ docs/for-agents.md;rule_id 文档
+    清单与代码 9/9 一致;frontmatter 三 spec 字段留空已附书面说明。
+  - acceptance_results(全部独立复现):
+    - AC-01 pass:双根写放行 exit 0 ×2/越界拒绝 exit 1/
+      `[rule=writable-outside]`+`Error: sandbox:` 前缀保持;
+    - AC-02 pass:无策略读写直通 exit 0;AC-03 pass:`--sandbox` 单根
+      内写 exit 0/越界 exit 1(兼容矩阵第二行);
+    - AC-04 pass:坏根 exit 2/help 含 `--sandbox`(probe)+`--writable`;
+    - AC-05 pass:文件策略写放行/越界拒绝/对方言 deny
+      (`[rule=deny-list]`)/CLI 叠加/坏 schema 与缺文件 exit 2;
+    - AC-06 pass:sandbox-outside/writable-outside/no-network 三类
+      `[rule=... path=...]` 段格式正确、人类文案前缀逐字保持;
+    - AC-07 pass:拒绝 stderr 恰 1 行(wc -l=1)且无 `security: security:`;
+    - AC-08 pass:未定义函数 exit 1+`Undefined function:` 保持/缺失命令
+      exit 1/干净脚本 exit 0/`exit(7)` 优先;
+    - AC-09 pass:`exit(7)` in fn 退出码 7 且 stderr 为空(无 Stack trace);
+    - AC-10 pass:见上;AC-11 pass:见 evidence。
+  - evidence(回归,本复审重跑):ash-core 417/0;auto-shell lib 722/0
+    (排除 1 基线);ash workspace 全量已由 T-08 覆盖 940/0(排除 2 基线);
+    基线两失败(test_auto_expression_execution /
+    spill_writes_readable_unique_files)在未修改主检出再次复现,确证
+    预存;auto-lang vm:: 469/0;auto-ai shell_exec 17/17。
+  - findings:无阻塞项。非阻塞观察:N-1 基线两失败修复归属入 §10 Q5
+    (射程外);N-2 T-07 所有权事故已于 work 期修复在案,merge 阶段吸收
+    auto-lang `d8971f4b1` 时按其仓惯例确认;N-3 策略文件路径须 OS 原生形
+    (MSYS 不转换文件内容)已在 for-agents.md 明示,auto-ai 接入时注意。
+  - next: merge(auto-plan-merge;worktree `.worktrees/plan-081-dev` 与
+    分支 plan-081-dev 由 merge 流程守卫与清理)。
 
 ## 10. 待澄清事项
 
