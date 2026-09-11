@@ -196,6 +196,12 @@ pub struct Shell {
     /// emits exactly ONE stderr line per denial. Interactive paths never set
     /// it — the REPL keeps its immediate print.
     suppress_denial_print: bool,
+    /// PLAN-081 T-02: latch set when script execution hits an error the loop
+    /// otherwise swallows (AutoLang block error, `> cmd` failure, capture
+    /// assignment failure). Scripts keep running to completion (bash-style),
+    /// but main.rs exits non-zero so agents can reliably judge script
+    /// success. Explicit `exit(N)` still takes precedence.
+    script_had_error: bool,
     /// Plan 074 E2: when set, single external commands run with piped
     /// stdout/stderr and stream their lines to this channel (the frontend's
     /// live tail preview). Set/cleared around `execute()` by the REPL.
@@ -430,6 +436,7 @@ impl Shell {
             policy,
             last_denial: None,
             suppress_denial_print: false,
+            script_had_error: false,
             live_tail_tx: None,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
@@ -601,6 +608,15 @@ impl Shell {
     /// Plan 011 (MS3-B): The exit code requested by the last `exit()`.
     pub fn script_exit_code(&self) -> i32 {
         self.host.exit_code()
+    }
+
+    /// PLAN-081 T-02: true when script execution hit an error the loop
+    /// swallowed (AutoLang block failure, `> cmd` failure, capture-assignment
+    /// failure). main.rs checks this after `execute_script_*` and exits 1 —
+    /// fixing the historic "script failed but exit 0" contract gap that made
+    /// auto-ai's FailureClassifier classify failed scripts as RanOk.
+    pub fn script_had_error(&self) -> bool {
+        self.script_had_error
     }
 
     /// Plan 008: Classify whether a command name will resolve to an external
@@ -2786,7 +2802,12 @@ impl Shell {
                 match self.execute(&cmd) {
                     Ok(Some(output)) => self.print_or_emit(&output),
                     Ok(None) => {}
-                    Err(e) => eprintln!("Error: {}", e),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        // PLAN-081 T-02: latch shell-line failures too (a
+                        // missing external used to leave the process at 0).
+                        self.script_had_error = true;
+                    }
                 }
                 continue;
             }
@@ -2825,7 +2846,12 @@ impl Shell {
                 }
             } else if let Some(captured) = self.try_capture_assignment(trimmed) {
                 self.flush_auto_block(&mut auto_block)?;
-                let _ = self.session_run(&captured);
+                // PLAN-081 T-02: a failing capture assignment also latches.
+                if let Err(e) = self.session_run(&captured) {
+                    eprintln!("Error: {}", e);
+                    self.script_had_error = true;
+                    self.last_exit_code = 1;
+                }
                 continue;
             }
 
@@ -2987,6 +3013,11 @@ impl Shell {
         let result = self.session_run(block);
         if let Err(e) = result {
             eprintln!("Error: {}", e);
+            // PLAN-081 T-02: latch the failure (historic bug: swallowed here,
+            // so a script with a runtime error like an undefined function
+            // exited 0 and agents classified it as success).
+            self.script_had_error = true;
+            self.last_exit_code = 1;
         }
         block.clear();
         Ok(())
@@ -5673,6 +5704,40 @@ mod tests {
         let _ = shell.execute_script_content(script);
         assert!(shell.script_exit_requested(), "exit() must set the flag");
         assert_eq!(shell.script_exit_code(), 7);
+    }
+
+    // ---- PLAN-081 T-02: script failure must latch (was exit 0) ----
+
+    #[test]
+    fn script_undefined_function_latches_error() {
+        // Historic bug: a runtime error in an AutoLang block was swallowed by
+        // flush_auto_block — the process exited 0 and auto-ai classified the
+        // run as RanOk. The latch must now be observable.
+        let mut shell = Shell::new();
+        let script = "no_such_fn_xyz()\n";
+        let result = shell.execute_script_content(script);
+        assert!(result.is_ok(), "the script loop still runs to completion");
+        assert!(shell.script_had_error(), "undefined fn must latch script_had_error");
+        assert_eq!(shell.last_exit_code(), 1);
+    }
+
+    #[test]
+    fn script_failing_shell_line_latches_error() {
+        // `> cmd` whose external is missing used to be swallowed as well.
+        let mut shell = Shell::new();
+        let script = "> definitely_not_a_cmd_xyz_081\n";
+        let _ = shell.execute_script_content(script);
+        assert!(shell.script_had_error(), "missing external must latch");
+    }
+
+    #[test]
+    fn script_success_does_not_latch() {
+        // A clean script must stay error-free (exit 0 contract).
+        let mut shell = Shell::new();
+        let script = "var x = 1\n> echo ok\n";
+        let _ = shell.execute_script_content(script);
+        assert!(!shell.script_had_error(), "clean script must not latch");
+        assert_eq!(shell.last_exit_code(), 0);
     }
 }
 

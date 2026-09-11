@@ -169,6 +169,11 @@ fn main() -> Result<()> {
                 if shell.script_exit_requested() {
                     std::process::exit(shell.script_exit_code());
                 }
+                // PLAN-081 T-02: a script whose commands/blocks failed must
+                // not exit 0 (agents judge scripts by the process exit code).
+                if shell.script_had_error() {
+                    std::process::exit(1);
+                }
                 return Ok(());
             }
             "-l" | "--login" => {
@@ -250,6 +255,11 @@ fn main() -> Result<()> {
         // Plan 011: honor AutoLang `exit(code)`.
         if shell.script_exit_requested() {
             std::process::exit(shell.script_exit_code());
+        }
+        // PLAN-081 T-02: script failure must propagate (was exit 0 — the gap
+        // auto-ai's FailureClassifier models as PreExecFailure/RanFailed).
+        if shell.script_had_error() {
+            std::process::exit(1);
         }
         return Ok(());
     }
