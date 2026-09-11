@@ -397,8 +397,14 @@ auto-ai 033(消费方,archived)。详见 designs/038 §3。
 - 依赖归属:auto-lang `d8971f4b1`(T-07)已在其 master,消费方 c05d690
   依赖经 junction 生效;该提交在其仓未推送,推送归属 auto-lang 仓惯例
   (非本仓 merge 射程)。
-- `archived`:见下(本次提交)。
-- `cleaned`:见后续补记。
+- `archived`:**`a380202`**(git mv archive/+status:archived+
+  completion_kind:delivered+合并收据同批入库;初版 `b635b8f` 因收据内容
+  未入暂存被 amend 取代,修正过程留档于此)。
+- `cleaned`:worktree 状态 clean + HEAD `57eef86` 已完全并入
+  (merge-base --is-ancestor)→ `wt-guard.sh` 报告 clean(无 reparse
+  point)→ worktree `.worktrees/plan-081-dev` 与分支 `plan-081-dev`
+  已删除(worktree list 仅余主检出;`.worktrees/` 下依赖 junction
+  auto-ai/auto-lang 按惯例保留)。本补记提交于 archive 路径。
 
 ## 10. 待澄清事项
 
