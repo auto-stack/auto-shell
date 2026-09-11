@@ -58,6 +58,12 @@ fn main() -> Result<()> {
     // Plan 008 (MS2-A): parse security flags anywhere on the command line.
     // They augment the policy loaded from config (`[security]` section).
     let mut policy = parse_security_flags(&args);
+    // PLAN-081 (R1): writable whitelist roots must exist — a typo would
+    // otherwise silently deny every write (fail loudly, not silently).
+    if let Err(msg) = validate_writable_roots(&policy) {
+        eprintln!("ash: {msg}");
+        std::process::exit(2); // usage/config error
+    }
 
     while i < args.len() {
         let arg = &args[i];
@@ -102,7 +108,7 @@ fn main() -> Result<()> {
                 i += 1;
                 continue;
             }
-            "--allow" | "--deny" | "--audit" | "--sandbox" => {
+            "--allow" | "--deny" | "--audit" | "--sandbox" | "--writable" => {
                 // Consumed by parse_security_flags; skip value here.
                 i += 2;
                 continue;
@@ -208,6 +214,9 @@ fn main() -> Result<()> {
                 println!("  --no-network      Block network commands (http_*, curl, wget, ssh...)");
                 println!("  --read-only       Block write commands (rm/mv/cp/mkdir/touch...)");
                 println!("  --sandbox <dir>   Confine all file operations to <dir> (Plan 009)");
+                println!("  --writable <dir>  Writable whitelist root (repeatable). Writes outside");
+                println!("                    every root are denied; reads stay open (Plan 081)");
+                println!("  --policy-file <f> Load security policy from a JSON file (Plan 081)");
                 println!("  --dry-run         Print what would run, don't execute writes/spawns");
                 println!("  --audit <file>    Append each command to a JSON-lines audit log");
                 println!();
@@ -340,6 +349,16 @@ fn parse_security_flags(args: &[String]) -> ash_core::security::SecurityPolicy {
                     continue;
                 }
             }
+            "--writable" => {
+                // PLAN-081 (R1): repeatable; roots union across CLI/config.
+                if let Some(val) = args.get(i + 1) {
+                    if !policy.writable_roots.iter().any(|w| w == val) {
+                        policy.writable_roots.push(PathBuf::from(val));
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
             "--no-exec" => policy.no_exec = true,
             "--no-network" => policy.no_network = true,
             "--read-only" => policy.read_only = true,
@@ -349,5 +368,28 @@ fn parse_security_flags(args: &[String]) -> ash_core::security::SecurityPolicy {
         i += 1;
     }
     policy
+}
+
+/// PLAN-081 (R1): every writable whitelist root must exist (and be a
+/// directory) — canonicalization is the existence check. A silently-typoed
+/// root would deny every write; refuse to start instead (usage error, exit 2).
+fn validate_writable_roots(
+    policy: &ash_core::security::SecurityPolicy,
+) -> Result<(), String> {
+    for root in &policy.writable_roots {
+        match root.canonicalize() {
+            Ok(canon) if canon.is_dir() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "--writable {}: not a directory",
+                    root.display()
+                ));
+            }
+            Err(e) => {
+                return Err(format!("--writable {}: {}", root.display(), e));
+            }
+        }
+    }
+    Ok(())
 }
 
