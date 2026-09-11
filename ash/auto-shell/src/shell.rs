@@ -202,6 +202,13 @@ pub struct Shell {
     /// but main.rs exits non-zero so agents can reliably judge script
     /// success. Explicit `exit(N)` still takes precedence.
     script_had_error: bool,
+    /// PLAN-081 (R1): canonicalized forms of `policy.writable_roots`,
+    /// computed once in `set_policy` so `resolve_path` does not re-canonicalize
+    /// the roots on every write. Roots that fail to canonicalize (missing
+    /// directory) are kept verbatim — the binary validates them at startup
+    /// (exit 2), so this only affects library callers; a non-canonical form
+    /// fails the prefix match, which fails closed.
+    writable_roots_canon: Vec<PathBuf>,
     /// Plan 074 E2: when set, single external commands run with piped
     /// stdout/stderr and stream their lines to this channel (the frontend's
     /// live tail preview). Set/cleared around `execute()` by the REPL.
@@ -409,6 +416,9 @@ impl Shell {
         let cfg = crate::config::AshShellConfig::load();
         let ls_icons = cfg.ls_icons;
         let policy = cfg.security.to_policy();
+        // PLAN-081 (R1): canonicalize writable roots once (same rule as
+        // set_policy — see canon_writable_roots).
+        let writable_roots_canon = Self::canon_writable_roots(&policy);
 
         let mut shell = Self {
             current_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
@@ -437,6 +447,7 @@ impl Shell {
             last_denial: None,
             suppress_denial_print: false,
             script_had_error: false,
+            writable_roots_canon,
             live_tail_tx: None,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
@@ -583,7 +594,24 @@ impl Shell {
 
     /// Plan 008 (MS2-A): Replace the security policy (used by CLI flags).
     pub fn set_policy(&mut self, policy: ash_core::security::SecurityPolicy) {
+        // PLAN-081 (R1): canonicalize writable roots once, up front, so every
+        // later `resolve_path(for_write)` compares canonical-to-canonical
+        // (Windows `\\?\` forms) without per-command filesystem IO.
+        self.writable_roots_canon = Self::canon_writable_roots(&policy);
         self.policy = policy;
+    }
+
+    /// PLAN-081 (R1): canonicalize each writable whitelist root. A root that
+    /// fails to canonicalize (missing directory) is kept verbatim — the ash
+    /// binary validates roots at startup (exit 2), so this only affects
+    /// library callers; a non-canonical form fails the prefix match, which
+    /// fails closed.
+    fn canon_writable_roots(policy: &ash_core::security::SecurityPolicy) -> Vec<PathBuf> {
+        policy
+            .writable_roots
+            .iter()
+            .map(|r| r.canonicalize().unwrap_or_else(|_| r.clone()))
+            .collect()
     }
 
     /// Plan 034 Bug 2: Set positional args for script execution.
@@ -1633,6 +1661,22 @@ impl Shell {
                     "sandbox: {} is outside sandbox {}",
                     canonical.display(),
                     sandbox_canon.display()
+                );
+            }
+        }
+        // PLAN-081 (R1): multi-root writable whitelist. When active, a write
+        // must land inside one of the whitelist roots (symlink escapes are
+        // already resolved by canonicalize_or_parent above — the same Plan
+        // 009 semantics, extended from one root to many). Reads stay open.
+        if for_write && !self.policy.writable_roots.is_empty() {
+            let allowed = self
+                .writable_roots_canon
+                .iter()
+                .any(|root| canonical.starts_with(root));
+            if !allowed {
+                miette::bail!(
+                    "sandbox: write to '{}' denied: not under any --writable root",
+                    canonical.display()
                 );
             }
         }
@@ -5635,6 +5679,80 @@ mod tests {
         // Read (for_write=false) is fine.
         let _ = shell.resolve_path("readable.txt", false).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- PLAN-081 (R1): multi-root writable whitelist ----
+
+    #[test]
+    fn writable_root_allows_write_inside() {
+        // Core R1 semantics: writes inside ANY listed root succeed.
+        let mut shell = Shell::new();
+        let dir_a = sandbox_tmp("wr-a");
+        let dir_b = sandbox_tmp("wr-b");
+        shell.current_dir = dir_a.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            writable_roots: vec![dir_a.clone(), dir_b.clone()],
+            ..Default::default()
+        });
+        let resolved = shell.resolve_path("new_file.txt", true).unwrap();
+        assert!(resolved.starts_with(dir_a.canonicalize().unwrap()));
+        // Reads stay open regardless of the whitelist.
+        let _ = shell.resolve_path("also_new.txt", false).unwrap();
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
+    }
+
+    #[test]
+    fn writable_root_denies_write_outside() {
+        // Write outside every root → denied with the R1 reason.
+        let mut shell = Shell::new();
+        let allowed = sandbox_tmp("wr-in");
+        let outside = sandbox_tmp("wr-out");
+        shell.current_dir = outside.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            writable_roots: vec![allowed.clone()],
+            ..Default::default()
+        });
+        let err = shell.resolve_path("out.txt", true).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not under any --writable root"),
+            "unexpected denial message: {msg}"
+        );
+        // Reads outside the whitelist remain allowed (read-open by design).
+        let _ = shell.resolve_path("out.txt", false).unwrap();
+        let _ = std::fs::remove_dir_all(&allowed);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn sandbox_and_writable_intersect() {
+        // Orthogonal switches: a write must satisfy BOTH. sandbox=dirA,
+        // writable=dirB → writes to dirB are denied by the sandbox arm.
+        let mut shell = Shell::new();
+        let dir_a = sandbox_tmp("wr-sbox");
+        let dir_b = sandbox_tmp("wr-wr");
+        shell.current_dir = dir_b.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            sandbox_dir: Some(dir_a.clone()),
+            writable_roots: vec![dir_b.clone()],
+            ..Default::default()
+        });
+        let err = shell.resolve_path("f.txt", true).unwrap_err();
+        assert!(
+            format!("{err}").contains("outside sandbox"),
+            "sandbox arm must fire first: {err}"
+        );
+        // Write inside the sandbox root (also whitelisted? no — dir_a is not
+        // in writable_roots) → passes sandbox, denied by whitelist.
+        shell.current_dir = dir_a.clone();
+        let err = shell.resolve_path("g.txt", true).unwrap_err();
+        assert!(
+            format!("{err}").contains("not under any --writable root"),
+            "whitelist arm must fire: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
     }
 
     #[test]

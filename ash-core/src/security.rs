@@ -66,6 +66,14 @@ pub struct SecurityPolicy {
     /// cd) are confined to this directory (after canonicalization). Symlinks
     /// that resolve outside the sandbox are refused. CLI `--sandbox <dir>`.
     pub sandbox_dir: Option<PathBuf>,
+    /// PLAN-081 (R1): multi-root writable whitelist. When non-empty, write
+    /// operations (the `resolve_path(for_write=true)` surface) are denied by
+    /// default and allowed only inside one of these roots; reads stay open.
+    /// Orthogonal to `sandbox_dir` (full confinement): when both are set a
+    /// write must satisfy both. Roots are canonicalized by the enforcing
+    /// Shell before prefix comparison (same `\\?\` form as targets). CLI
+    /// `--writable <dir>` (repeatable); policy-file `writable` array.
+    pub writable_roots: Vec<PathBuf>,
 }
 
 /// The outcome of a policy check for a single command.
@@ -91,6 +99,7 @@ impl SecurityPolicy {
             || self.dry_run
             || self.audit_file.is_some()
             || self.sandbox_dir.is_some()
+            || !self.writable_roots.is_empty()
     }
 
     /// Check a command against the policy **before** it runs.
@@ -191,6 +200,7 @@ impl SecurityPolicy {
             dry_run: self.dry_run,
             sandboxed: self.sandbox_dir.is_some(),
             audit_enabled: self.audit_file.is_some(),
+            writable_roots_count: self.writable_roots.len(),
         }
     }
 }
@@ -356,6 +366,9 @@ pub struct PolicySummary {
     pub sandboxed: bool,
     /// `--audit <file>` active: every command logged (file not exposed).
     pub audit_enabled: bool,
+    /// PLAN-081 (R1): number of writable whitelist roots (paths not exposed,
+    /// same capability-only principle as `sandboxed`).
+    pub writable_roots_count: usize,
 }
 
 #[cfg(test)]
@@ -646,6 +659,7 @@ mod tests {
         assert!(!s.dry_run);
         assert!(!s.sandboxed);
         assert!(!s.audit_enabled);
+        assert_eq!(s.writable_roots_count, 0);
     }
 
     #[test]
@@ -666,5 +680,35 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("/sandbox"), "summary leaked sandbox path: {}", json);
         assert!(!json.contains("\"rm\""), "summary leaked deny-list contents: {}", json);
+    }
+
+    // ---- PLAN-081 (R1): writable_roots policy model ----
+
+    #[test]
+    fn writable_only_policy_is_active() {
+        // Same principle as 072 S-6 (sandbox-only must be active): a
+        // whitelist-only policy must not be silently dropped as inactive.
+        let p = crate::security::SecurityPolicy {
+            writable_roots: vec![std::path::PathBuf::from("/tmp/proj")],
+            ..Default::default()
+        };
+        assert!(p.active(), "writable-only policy must count as active");
+    }
+
+    #[test]
+    fn summarize_exposes_only_writable_count() {
+        let p = crate::security::SecurityPolicy {
+            writable_roots: vec![
+                std::path::PathBuf::from("/tmp/a"),
+                std::path::PathBuf::from("/tmp/b"),
+            ],
+            ..Default::default()
+        };
+        let s = p.summarize();
+        assert_eq!(s.writable_roots_count, 2);
+        // Root paths must NOT leak into the capability summary.
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("/tmp/a"), "summary leaked writable root: {}", json);
+        assert!(!json.contains("/tmp/b"), "summary leaked writable root: {}", json);
     }
 }
