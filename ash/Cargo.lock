@@ -386,6 +386,7 @@ dependencies = [
  "pretty_assertions",
  "rayon",
  "regex",
+ "serde",
  "serde_json",
  "syntect",
  "sysinfo 0.35.2",

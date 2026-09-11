@@ -58,6 +58,12 @@ fn main() -> Result<()> {
     // Plan 008 (MS2-A): parse security flags anywhere on the command line.
     // They augment the policy loaded from config (`[security]` section).
     let mut policy = parse_security_flags(&args);
+    // PLAN-081 (R1): writable whitelist roots must exist — a typo would
+    // otherwise silently deny every write (fail loudly, not silently).
+    if let Err(msg) = validate_writable_roots(&policy) {
+        eprintln!("ash: {msg}");
+        std::process::exit(2); // usage/config error
+    }
 
     while i < args.len() {
         let arg = &args[i];
@@ -102,7 +108,8 @@ fn main() -> Result<()> {
                 i += 1;
                 continue;
             }
-            "--allow" | "--deny" | "--audit" | "--sandbox" => {
+            "--allow" | "--deny" | "--audit" | "--sandbox" | "--writable"
+            | "--policy-file" => {
                 // Consumed by parse_security_flags; skip value here.
                 i += 2;
                 continue;
@@ -169,6 +176,11 @@ fn main() -> Result<()> {
                 if shell.script_exit_requested() {
                     std::process::exit(shell.script_exit_code());
                 }
+                // PLAN-081 T-02: a script whose commands/blocks failed must
+                // not exit 0 (agents judge scripts by the process exit code).
+                if shell.script_had_error() {
+                    std::process::exit(1);
+                }
                 return Ok(());
             }
             "-l" | "--login" => {
@@ -203,6 +215,9 @@ fn main() -> Result<()> {
                 println!("  --no-network      Block network commands (http_*, curl, wget, ssh...)");
                 println!("  --read-only       Block write commands (rm/mv/cp/mkdir/touch...)");
                 println!("  --sandbox <dir>   Confine all file operations to <dir> (Plan 009)");
+                println!("  --writable <dir>  Writable whitelist root (repeatable). Writes outside");
+                println!("                    every root are denied; reads stay open (Plan 081)");
+                println!("  --policy-file <f> Load security policy from a JSON file (Plan 081)");
                 println!("  --dry-run         Print what would run, don't execute writes/spawns");
                 println!("  --audit <file>    Append each command to a JSON-lines audit log");
                 println!();
@@ -251,6 +266,11 @@ fn main() -> Result<()> {
         if shell.script_exit_requested() {
             std::process::exit(shell.script_exit_code());
         }
+        // PLAN-081 T-02: script failure must propagate (was exit 0 — the gap
+        // auto-ai's FailureClassifier models as PreExecFailure/RanFailed).
+        if shell.script_had_error() {
+            std::process::exit(1);
+        }
         return Ok(());
     }
 
@@ -285,23 +305,72 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// PLAN-081 (R2): CLI security flags, scanned first, applied last.
+///
+/// Precedence across the three policy layers is: config `[security]` <
+/// `--policy-file` < CLI flags. Each layer only ever adds restrictions
+/// (booleans OR, lists union) or relocates single-value paths (sandbox /
+/// audit) — a more specific layer never weakens a broader one.
+#[derive(Default)]
+struct CliSecurity {
+    allow: Vec<String>,
+    deny: Vec<String>,
+    writable: Vec<PathBuf>,
+    audit: Option<PathBuf>,
+    sandbox: Option<PathBuf>,
+    no_exec: bool,
+    no_network: bool,
+    read_only: bool,
+    dry_run: bool,
+    policy_file: Option<PathBuf>,
+}
+
+impl CliSecurity {
+    fn merge_over(self, policy: &mut ash_core::security::SecurityPolicy) {
+        for a in self.allow {
+            if !policy.allow.contains(&a) {
+                policy.allow.push(a);
+            }
+        }
+        for d in self.deny {
+            if !policy.deny.contains(&d) {
+                policy.deny.push(d);
+            }
+        }
+        for w in self.writable {
+            if !policy.writable_roots.contains(&w) {
+                policy.writable_roots.push(w);
+            }
+        }
+        if self.audit.is_some() {
+            policy.audit_file = self.audit;
+        }
+        if self.sandbox.is_some() {
+            policy.sandbox_dir = self.sandbox;
+        }
+        policy.no_exec |= self.no_exec;
+        policy.no_network |= self.no_network;
+        policy.read_only |= self.read_only;
+        policy.dry_run |= self.dry_run;
+    }
+}
+
 /// Plan 008 (MS2-A): Pre-scan command-line args for security flags and build
-/// a policy that augments the config-loaded policy. Returns a default (no-op)
-/// policy when no security flags are present.
+/// the assembled policy: config base ← policy file ← CLI flags (PLAN-081
+/// R2). Returns a default (no-op) policy when nothing is configured.
 fn parse_security_flags(args: &[String]) -> ash_core::security::SecurityPolicy {
-    // Start from the config-loaded policy so config `[security]` settings form
-    // the base; CLI flags then turn additional restrictions on.
+    // Layer 1: config-loaded policy (`[security]` section) as the base.
     let cfg = auto_shell::config::AshShellConfig::load();
     let mut policy = cfg.security.to_policy();
 
+    let mut cli = CliSecurity::default();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--allow" => {
                 if let Some(val) = args.get(i + 1) {
-                    // CLI --allow replaces the config allow-list (more specific).
-                    if !policy.allow.iter().any(|a| a == val) {
-                        policy.allow.push(val.clone());
+                    if !cli.allow.contains(val) {
+                        cli.allow.push(val.clone());
                     }
                     i += 2;
                     continue;
@@ -309,8 +378,8 @@ fn parse_security_flags(args: &[String]) -> ash_core::security::SecurityPolicy {
             }
             "--deny" => {
                 if let Some(val) = args.get(i + 1) {
-                    if !policy.deny.iter().any(|d| d == val) {
-                        policy.deny.push(val.clone());
+                    if !cli.deny.contains(val) {
+                        cli.deny.push(val.clone());
                     }
                     i += 2;
                     continue;
@@ -318,26 +387,85 @@ fn parse_security_flags(args: &[String]) -> ash_core::security::SecurityPolicy {
             }
             "--audit" => {
                 if let Some(val) = args.get(i + 1) {
-                    policy.audit_file = Some(PathBuf::from(val));
+                    cli.audit = Some(PathBuf::from(val));
                     i += 2;
                     continue;
                 }
             }
             "--sandbox" => {
                 if let Some(val) = args.get(i + 1) {
-                    policy.sandbox_dir = Some(PathBuf::from(val));
+                    cli.sandbox = Some(PathBuf::from(val));
                     i += 2;
                     continue;
                 }
             }
-            "--no-exec" => policy.no_exec = true,
-            "--no-network" => policy.no_network = true,
-            "--read-only" => policy.read_only = true,
-            "--dry-run" => policy.dry_run = true,
+            "--writable" => {
+                // PLAN-081 (R1): repeatable; roots union across layers.
+                if let Some(val) = args.get(i + 1) {
+                    let val = PathBuf::from(val);
+                    if !cli.writable.contains(&val) {
+                        cli.writable.push(val);
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+            "--policy-file" => {
+                // PLAN-081 (R2): JSON policy file, merged over config,
+                // overridden by CLI flags.
+                if let Some(val) = args.get(i + 1) {
+                    cli.policy_file = Some(PathBuf::from(val));
+                    i += 2;
+                    continue;
+                }
+            }
+            "--no-exec" => cli.no_exec = true,
+            "--no-network" => cli.no_network = true,
+            "--read-only" => cli.read_only = true,
+            "--dry-run" => cli.dry_run = true,
             _ => {}
         }
         i += 1;
     }
+
+    // Layer 2: policy file over config. A load failure is fatal (exit 2) —
+    // running with a partially-applied security config is worse than not
+    // starting (072 S-6 lesson).
+    if let Some(pf_path) = &cli.policy_file {
+        match auto_shell::policy_file::PolicyFile::load(pf_path) {
+            Ok(pf) => pf.merge_over(&mut policy),
+            Err(e) => {
+                eprintln!("ash: {e}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    // Layer 3: CLI flags over everything.
+    cli.merge_over(&mut policy);
     policy
+}
+
+/// PLAN-081 (R1): every writable whitelist root must exist (and be a
+/// directory) — canonicalization is the existence check. A silently-typoed
+/// root would deny every write; refuse to start instead (usage error, exit 2).
+fn validate_writable_roots(
+    policy: &ash_core::security::SecurityPolicy,
+) -> Result<(), String> {
+    for root in &policy.writable_roots {
+        match root.canonicalize() {
+            Ok(canon) if canon.is_dir() => {}
+            Ok(_) => {
+                return Err(format!(
+                    "--writable {}: not a directory",
+                    root.display()
+                ));
+            }
+            Err(e) => {
+                return Err(format!("--writable {}: {}", root.display(), e));
+            }
+        }
+    }
+    Ok(())
 }
 

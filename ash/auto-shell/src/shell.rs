@@ -191,6 +191,24 @@ pub struct Shell {
     /// (print + `Ok(None)`), but agent callers (`execute_for_agent`) must see
     /// them as errors — otherwise the model reads "ran fine, empty output".
     last_denial: Option<String>,
+    /// PLAN-081 T-01: when true, `execute()`'s policy-denial arm suppresses
+    /// its own `Error: ...` eprintln so an agent surface (execute_for_agent)
+    /// emits exactly ONE stderr line per denial. Interactive paths never set
+    /// it — the REPL keeps its immediate print.
+    suppress_denial_print: bool,
+    /// PLAN-081 T-02: latch set when script execution hits an error the loop
+    /// otherwise swallows (AutoLang block error, `> cmd` failure, capture
+    /// assignment failure). Scripts keep running to completion (bash-style),
+    /// but main.rs exits non-zero so agents can reliably judge script
+    /// success. Explicit `exit(N)` still takes precedence.
+    script_had_error: bool,
+    /// PLAN-081 (R1): canonicalized forms of `policy.writable_roots`,
+    /// computed once in `set_policy` so `resolve_path` does not re-canonicalize
+    /// the roots on every write. Roots that fail to canonicalize (missing
+    /// directory) are kept verbatim — the binary validates them at startup
+    /// (exit 2), so this only affects library callers; a non-canonical form
+    /// fails the prefix match, which fails closed.
+    writable_roots_canon: Vec<PathBuf>,
     /// Plan 074 E2: when set, single external commands run with piped
     /// stdout/stderr and stream their lines to this channel (the frontend's
     /// live tail preview). Set/cleared around `execute()` by the REPL.
@@ -218,6 +236,17 @@ pub struct Shell {
     /// bodies). `None` (default) prints to stdout via `print_command_output`;
     /// a frontend (ash-gui-vue worker) injects a hook to capture it instead.
     output_hook: Option<Box<dyn OutputHook>>,
+}
+
+/// PLAN-081 (R3): structured path-scoped denial — keeps the human message
+/// verbatim and attaches the machine-parseable `[rule=... path=...]` segment
+/// (see `ash_core::security::DeniedReason`).
+fn denied_path(rule_id: &'static str, path: Option<PathBuf>, message: String) -> miette::Report {
+    miette::miette!(ash_core::security::DeniedReason {
+        rule_id,
+        path,
+        message
+    })
 }
 
 /// Plan 009 (MS2-B): Canonicalize a path, resolving symlinks. If the path
@@ -398,6 +427,9 @@ impl Shell {
         let cfg = crate::config::AshShellConfig::load();
         let ls_icons = cfg.ls_icons;
         let policy = cfg.security.to_policy();
+        // PLAN-081 (R1): canonicalize writable roots once (same rule as
+        // set_policy — see canon_writable_roots).
+        let writable_roots_canon = Self::canon_writable_roots(&policy);
 
         let mut shell = Self {
             current_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
@@ -424,6 +456,9 @@ impl Shell {
             bash_compat: false,
             policy,
             last_denial: None,
+            suppress_denial_print: false,
+            script_had_error: false,
+            writable_roots_canon,
             live_tail_tx: None,
             host: crate::host::ShellHostImpl::new(),
             is_pipeline_last: true, // standalone commands act as pipeline-final
@@ -570,7 +605,24 @@ impl Shell {
 
     /// Plan 008 (MS2-A): Replace the security policy (used by CLI flags).
     pub fn set_policy(&mut self, policy: ash_core::security::SecurityPolicy) {
+        // PLAN-081 (R1): canonicalize writable roots once, up front, so every
+        // later `resolve_path(for_write)` compares canonical-to-canonical
+        // (Windows `\\?\` forms) without per-command filesystem IO.
+        self.writable_roots_canon = Self::canon_writable_roots(&policy);
         self.policy = policy;
+    }
+
+    /// PLAN-081 (R1): canonicalize each writable whitelist root. A root that
+    /// fails to canonicalize (missing directory) is kept verbatim — the ash
+    /// binary validates roots at startup (exit 2), so this only affects
+    /// library callers; a non-canonical form fails the prefix match, which
+    /// fails closed.
+    fn canon_writable_roots(policy: &ash_core::security::SecurityPolicy) -> Vec<PathBuf> {
+        policy
+            .writable_roots
+            .iter()
+            .map(|r| r.canonicalize().unwrap_or_else(|_| r.clone()))
+            .collect()
     }
 
     /// Plan 034 Bug 2: Set positional args for script execution.
@@ -595,6 +647,15 @@ impl Shell {
     /// Plan 011 (MS3-B): The exit code requested by the last `exit()`.
     pub fn script_exit_code(&self) -> i32 {
         self.host.exit_code()
+    }
+
+    /// PLAN-081 T-02: true when script execution hit an error the loop
+    /// swallowed (AutoLang block failure, `> cmd` failure, capture-assignment
+    /// failure). main.rs checks this after `execute_script_*` and exits 1 —
+    /// fixing the historic "script failed but exit 0" contract gap that made
+    /// auto-ai's FailureClassifier classify failed scripts as RanOk.
+    pub fn script_had_error(&self) -> bool {
+        self.script_had_error
     }
 
     /// Plan 008: Classify whether a command name will resolve to an external
@@ -810,7 +871,13 @@ impl Shell {
                 return Ok(None);
             }
             Err(e) => {
-                eprintln!("Error: {}", e);
+                // PLAN-081 T-01 (single-line denial): the agent surface
+                // (execute_for_agent) re-surfaces this denial as an error, so
+                // it suppresses the interactive print to avoid the historic
+                // double line ("Error: security: ..." twice, once doubled).
+                if !self.suppress_denial_print {
+                    eprintln!("Error: {}", e);
+                }
                 self.last_exit_code = 1;
                 self.last_denial = Some(format!("{e}")); // Plan 072 M2
                 self.policy.audit(&ash_core::security::AuditRecord {
@@ -1138,14 +1205,21 @@ impl Shell {
     ) -> Result<Option<String>> {
         self.json_output = json_mode;
         self.bash_compat = bash_compat;
+        // PLAN-081 T-01 (single-line denial): the denial is surfaced as this
+        // function's return error — the caller (main.rs) prints it once with
+        // the `Error: ` prefix. Suppress execute()'s own eprintln; the reason
+        // already carries its `security:`/`sandbox:` prefix (auto-ai's
+        // DENIED_MARKERS substring contract), so no second prefix is added.
+        self.suppress_denial_print = true;
         let result = self.execute(input);
+        self.suppress_denial_print = false;
         self.json_output = false; // always reset (interactive default)
         self.bash_compat = false;
         // Plan 072 M2 (S-5): interactive `execute` prints a policy denial and
         // returns Ok(None); the agent caller must see it as an error instead
         // of "ran fine, empty output".
         if let Some(reason) = self.last_denial.take() {
-            return Err(miette::miette!("security: {reason}"));
+            return Err(miette::miette!("{reason}"));
         }
         result
     }
@@ -1430,7 +1504,10 @@ impl Shell {
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    // PLAN-081 T-01: single-line denial under agent surfaces.
+                    if !self.suppress_denial_print {
+                        eprintln!("Error: {}", e);
+                    }
                     self.last_exit_code = 1;
                     self.last_denial = Some(format!("{e}")); // Plan 072 M2
                     return Ok(None);
@@ -1576,26 +1653,54 @@ impl Shell {
         // command-name level check — this catches commands that write via
         // std::fs internally).
         if for_write && self.policy.read_only {
-            miette::bail!(
-                "security: write to '{}' blocked by --read-only",
-                joined.display()
-            );
+            return Err(denied_path(
+                "read-only",
+                Some(joined.clone()),
+                format!("security: write to '{}' blocked by --read-only", joined.display()),
+            ));
         }
         // Canonicalize, resolving symlinks. For paths that don't yet exist
         // (e.g. `touch newfile`), fall back to canonicalizing the parent and
         // appending the file name.
         let canonical = canonicalize_or_parent(&joined)?;
         if let Some(ref sandbox) = self.policy.sandbox_dir {
-            let sandbox_canon = sandbox
-                .canonicalize()
-                .into_diagnostic()
-                .map_err(|e| miette::miette!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e))?;
+            let sandbox_canon = sandbox.canonicalize().into_diagnostic().map_err(|e| {
+                denied_path(
+                    "sandbox-invalid",
+                    Some(sandbox.clone()),
+                    format!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e),
+                )
+            })?;
             if !canonical.starts_with(&sandbox_canon) {
-                miette::bail!(
-                    "sandbox: {} is outside sandbox {}",
-                    canonical.display(),
-                    sandbox_canon.display()
-                );
+                return Err(denied_path(
+                    "sandbox-outside",
+                    Some(canonical.clone()),
+                    format!(
+                        "sandbox: {} is outside sandbox {}",
+                        canonical.display(),
+                        sandbox_canon.display()
+                    ),
+                ));
+            }
+        }
+        // PLAN-081 (R1): multi-root writable whitelist. When active, a write
+        // must land inside one of the whitelist roots (symlink escapes are
+        // already resolved by canonicalize_or_parent above — the same Plan
+        // 009 semantics, extended from one root to many). Reads stay open.
+        if for_write && !self.policy.writable_roots.is_empty() {
+            let allowed = self
+                .writable_roots_canon
+                .iter()
+                .any(|root| canonical.starts_with(root));
+            if !allowed {
+                return Err(denied_path(
+                    "writable-outside",
+                    Some(canonical.clone()),
+                    format!(
+                        "sandbox: write to '{}' denied: not under any --writable root",
+                        canonical.display()
+                    ),
+                ));
             }
         }
         Ok(canonical)
@@ -1636,16 +1741,23 @@ impl Shell {
 
         // Plan 009: sandbox check — cd must not escape the sandbox root.
         if let Some(ref sandbox) = self.policy.sandbox_dir {
-            let sandbox_canon = sandbox
-                .canonicalize()
-                .into_diagnostic()
-                .map_err(|e| miette::miette!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e))?;
+            let sandbox_canon = sandbox.canonicalize().into_diagnostic().map_err(|e| {
+                denied_path(
+                    "sandbox-invalid",
+                    Some(sandbox.clone()),
+                    format!("sandbox: invalid --sandbox {}: {}", sandbox.display(), e),
+                )
+            })?;
             if !canonical.starts_with(&sandbox_canon) {
-                miette::bail!(
-                    "sandbox: cd to {} is outside sandbox {}",
-                    canonical.display(),
-                    sandbox_canon.display()
-                );
+                return Err(denied_path(
+                    "sandbox-outside",
+                    Some(canonical.clone()),
+                    format!(
+                        "sandbox: cd to {} is outside sandbox {}",
+                        canonical.display(),
+                        sandbox_canon.display()
+                    ),
+                ));
             }
         }
 
@@ -2764,7 +2876,12 @@ impl Shell {
                 match self.execute(&cmd) {
                     Ok(Some(output)) => self.print_or_emit(&output),
                     Ok(None) => {}
-                    Err(e) => eprintln!("Error: {}", e),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        // PLAN-081 T-02: latch shell-line failures too (a
+                        // missing external used to leave the process at 0).
+                        self.script_had_error = true;
+                    }
                 }
                 continue;
             }
@@ -2803,7 +2920,12 @@ impl Shell {
                 }
             } else if let Some(captured) = self.try_capture_assignment(trimmed) {
                 self.flush_auto_block(&mut auto_block)?;
-                let _ = self.session_run(&captured);
+                // PLAN-081 T-02: a failing capture assignment also latches.
+                if let Err(e) = self.session_run(&captured) {
+                    eprintln!("Error: {}", e);
+                    self.script_had_error = true;
+                    self.last_exit_code = 1;
+                }
                 continue;
             }
 
@@ -2965,6 +3087,11 @@ impl Shell {
         let result = self.session_run(block);
         if let Err(e) = result {
             eprintln!("Error: {}", e);
+            // PLAN-081 T-02: latch the failure (historic bug: swallowed here,
+            // so a script with a runtime error like an undefined function
+            // exited 0 and agents classified it as success).
+            self.script_had_error = true;
+            self.last_exit_code = 1;
         }
         block.clear();
         Ok(())
@@ -4310,7 +4437,10 @@ impl Shell {
                     return Ok(None);
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    // PLAN-081 T-01: single-line denial under agent surfaces.
+                    if !self.suppress_denial_print {
+                        eprintln!("Error: {}", e);
+                    }
                     self.last_exit_code = 1;
                     self.last_denial = Some(format!("{e}")); // Plan 072 M2
                     return Ok(None);
@@ -5327,6 +5457,62 @@ mod tests {
         assert!(out.starts_with('['), "ls --json should be a JSON array: {out}");
     }
 
+    // ---- PLAN-081 T-01: single-line denial under agent surfaces ----
+
+    #[test]
+    fn denial_error_carries_exactly_one_security_prefix() {
+        // Historic bug: execute_for_agent wrapped the reason (which already
+        // starts with "security: ") in another "security: ", producing
+        // "security: security: ..." on stderr (pinned by auto-ai's fixture as
+        // a *substring* tolerance — never a shape to reproduce).
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            deny: vec!["rm".into()],
+            ..Default::default()
+        });
+        let err = shell
+            .execute_for_agent("rm secret.txt", false, false)
+            .expect_err("denied command must error for agent callers");
+        let msg = format!("{err}");
+        assert!(msg.starts_with("security: "), "must keep the security: prefix: {msg}");
+        assert!(
+            !msg.starts_with("security: security:"),
+            "double prefix must be gone: {msg}"
+        );
+        // PLAN-081 (R3): the denial now carries the machine segment too.
+        assert_eq!(
+            msg,
+            "security: 'rm' is denied by --deny [rule=deny-list]"
+        );
+        // Denial must still mark failure for the -c exit-code path.
+        assert_eq!(shell.last_exit_code(), 1);
+    }
+
+    #[test]
+    fn denial_suppress_flag_resets_after_agent_call() {
+        // After execute_for_agent clears the suppression flag, interactive
+        // execute() must record denials again (flag restored to false).
+        let mut shell = Shell::new();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            deny: vec!["rm".into()],
+            ..Default::default()
+        });
+        let _ = shell.execute_for_agent("rm a.txt", false, false);
+        // Flag is private; observable behavior: a subsequent interactive
+        // denial still records last_denial and Ok(None) — and execute_for_agent
+        // on the SAME denial string stays single-prefixed.
+        let _ = shell.execute("rm b.txt");
+        assert_eq!(
+            shell.last_denial.as_deref(),
+            Some("security: 'rm' is denied by --deny [rule=deny-list]")
+        );
+        let err = shell.execute_for_agent("rm c.txt", false, false).unwrap_err();
+        assert_eq!(
+            format!("{err}"),
+            "security: 'rm' is denied by --deny [rule=deny-list]"
+        );
+    }
+
     #[test]
     fn set_json_output_persists_across_execute_calls() {
         // Plan 007: `ash -s --json` / `ash script.at --json` set the flag once
@@ -5535,6 +5721,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // ---- PLAN-081 (R1): multi-root writable whitelist ----
+
+    #[test]
+    fn writable_root_allows_write_inside() {
+        // Core R1 semantics: writes inside ANY listed root succeed.
+        let mut shell = Shell::new();
+        let dir_a = sandbox_tmp("wr-a");
+        let dir_b = sandbox_tmp("wr-b");
+        shell.current_dir = dir_a.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            writable_roots: vec![dir_a.clone(), dir_b.clone()],
+            ..Default::default()
+        });
+        let resolved = shell.resolve_path("new_file.txt", true).unwrap();
+        assert!(resolved.starts_with(dir_a.canonicalize().unwrap()));
+        // Reads stay open regardless of the whitelist.
+        let _ = shell.resolve_path("also_new.txt", false).unwrap();
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
+    }
+
+    #[test]
+    fn writable_root_denies_write_outside() {
+        // Write outside every root → denied with the R1 reason.
+        let mut shell = Shell::new();
+        let allowed = sandbox_tmp("wr-in");
+        let outside = sandbox_tmp("wr-out");
+        shell.current_dir = outside.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            writable_roots: vec![allowed.clone()],
+            ..Default::default()
+        });
+        let err = shell.resolve_path("out.txt", true).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not under any --writable root"),
+            "unexpected denial message: {msg}"
+        );
+        // Reads outside the whitelist remain allowed (read-open by design).
+        let _ = shell.resolve_path("out.txt", false).unwrap();
+        let _ = std::fs::remove_dir_all(&allowed);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn sandbox_and_writable_intersect() {
+        // Orthogonal switches: a write must satisfy BOTH. sandbox=dirA,
+        // writable=dirB → writes to dirB are denied by the sandbox arm.
+        let mut shell = Shell::new();
+        let dir_a = sandbox_tmp("wr-sbox");
+        let dir_b = sandbox_tmp("wr-wr");
+        shell.current_dir = dir_b.clone();
+        shell.set_policy(ash_core::security::SecurityPolicy {
+            sandbox_dir: Some(dir_a.clone()),
+            writable_roots: vec![dir_b.clone()],
+            ..Default::default()
+        });
+        let err = shell.resolve_path("f.txt", true).unwrap_err();
+        assert!(
+            format!("{err}").contains("outside sandbox"),
+            "sandbox arm must fire first: {err}"
+        );
+        // Write inside the sandbox root (also whitelisted? no — dir_a is not
+        // in writable_roots) → passes sandbox, denied by whitelist.
+        shell.current_dir = dir_a.clone();
+        let err = shell.resolve_path("g.txt", true).unwrap_err();
+        assert!(
+            format!("{err}").contains("not under any --writable root"),
+            "whitelist arm must fire: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(&dir_b);
+    }
+
     #[test]
     fn resolve_path_no_policy_is_pass_through() {
         // Default policy: any path resolves (canonicalized), no restrictions.
@@ -5602,6 +5862,40 @@ mod tests {
         let _ = shell.execute_script_content(script);
         assert!(shell.script_exit_requested(), "exit() must set the flag");
         assert_eq!(shell.script_exit_code(), 7);
+    }
+
+    // ---- PLAN-081 T-02: script failure must latch (was exit 0) ----
+
+    #[test]
+    fn script_undefined_function_latches_error() {
+        // Historic bug: a runtime error in an AutoLang block was swallowed by
+        // flush_auto_block — the process exited 0 and auto-ai classified the
+        // run as RanOk. The latch must now be observable.
+        let mut shell = Shell::new();
+        let script = "no_such_fn_xyz()\n";
+        let result = shell.execute_script_content(script);
+        assert!(result.is_ok(), "the script loop still runs to completion");
+        assert!(shell.script_had_error(), "undefined fn must latch script_had_error");
+        assert_eq!(shell.last_exit_code(), 1);
+    }
+
+    #[test]
+    fn script_failing_shell_line_latches_error() {
+        // `> cmd` whose external is missing used to be swallowed as well.
+        let mut shell = Shell::new();
+        let script = "> definitely_not_a_cmd_xyz_081\n";
+        let _ = shell.execute_script_content(script);
+        assert!(shell.script_had_error(), "missing external must latch");
+    }
+
+    #[test]
+    fn script_success_does_not_latch() {
+        // A clean script must stay error-free (exit 0 contract).
+        let mut shell = Shell::new();
+        let script = "var x = 1\n> echo ok\n";
+        let _ = shell.execute_script_content(script);
+        assert!(!shell.script_had_error(), "clean script must not latch");
+        assert_eq!(shell.last_exit_code(), 0);
     }
 }
 

@@ -29,6 +29,8 @@ pub mod host;
 pub mod job;
 // Plan 037 M2.2: `menu` moved to the ash-tui crate (only the TUI REPL consumes it).
 pub mod plugin;
+// PLAN-081 (R2): JSON policy-file loading (schema v1) + merge-over-base rules.
+pub mod policy_file;
 pub mod prompt;
 pub mod repl_mode;
 pub mod shell;

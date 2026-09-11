@@ -66,6 +66,14 @@ pub struct SecurityPolicy {
     /// cd) are confined to this directory (after canonicalization). Symlinks
     /// that resolve outside the sandbox are refused. CLI `--sandbox <dir>`.
     pub sandbox_dir: Option<PathBuf>,
+    /// PLAN-081 (R1): multi-root writable whitelist. When non-empty, write
+    /// operations (the `resolve_path(for_write=true)` surface) are denied by
+    /// default and allowed only inside one of these roots; reads stay open.
+    /// Orthogonal to `sandbox_dir` (full confinement): when both are set a
+    /// write must satisfy both. Roots are canonicalized by the enforcing
+    /// Shell before prefix comparison (same `\\?\` form as targets). CLI
+    /// `--writable <dir>` (repeatable); policy-file `writable` array.
+    pub writable_roots: Vec<PathBuf>,
 }
 
 /// The outcome of a policy check for a single command.
@@ -76,6 +84,45 @@ pub enum Decision {
     /// Command is a write/spawn operation and `dry_run` is on — the caller
     /// should print intent and skip actual execution.
     DryRun,
+}
+
+/// PLAN-081 (R3): a structured policy-denial reason. `message` keeps the
+/// historic human text verbatim (auto-ai's DENIED_MARKERS substring contract
+/// reads `Error: security:` / `Error: sandbox:` off stderr); `Display`
+/// appends a machine-parseable segment `[rule=<id> path=<p>]` so an agent can
+/// remediate at the path level. The same fields serialize into the future
+/// `ash agent` envelope's `denied_reasons` (Plan 028 schema).
+#[derive(Debug, Clone)]
+pub struct DeniedReason {
+    /// Stable rule id, e.g. `deny-list`, `no-network`, `sandbox-outside`,
+    /// `writable-outside`. See designs/038 §5.3 for the table.
+    pub rule_id: &'static str,
+    /// The offending path when the rule is path-scoped (write target,
+    /// sandbox boundary crossing, ...).
+    pub path: Option<PathBuf>,
+    /// Human-readable reason, historic wording preserved.
+    pub message: String,
+}
+
+impl std::fmt::Display for DeniedReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} [rule={}", self.message, self.rule_id)?;
+        if let Some(ref p) = self.path {
+            write!(f, " path={}", p.display())?;
+        }
+        write!(f, "]")
+    }
+}
+
+impl std::error::Error for DeniedReason {}
+
+/// Build a structured denial report (PLAN-081 R3).
+fn denied(rule_id: &'static str, path: Option<PathBuf>, message: String) -> miette::Report {
+    miette::miette!(DeniedReason {
+        rule_id,
+        path,
+        message
+    })
 }
 
 impl SecurityPolicy {
@@ -91,6 +138,7 @@ impl SecurityPolicy {
             || self.dry_run
             || self.audit_file.is_some()
             || self.sandbox_dir.is_some()
+            || !self.writable_roots.is_empty()
     }
 
     /// Check a command against the policy **before** it runs.
@@ -110,42 +158,60 @@ impl SecurityPolicy {
     ) -> miette::Result<Decision> {
         // ② Dangerous patterns (always checked, highest priority).
         if is_dangerous(cmd_name, args) {
-            miette::bail!(
-                "security: refused dangerous command '{} {}' (matches dangerous-pattern list)",
-                cmd_name,
-                args.join(" ")
-            );
+            return Err(denied(
+                "dangerous-pattern",
+                None,
+                format!(
+                    "security: refused dangerous command '{} {}' (matches dangerous-pattern list)",
+                    cmd_name,
+                    args.join(" ")
+                ),
+            ));
         }
 
         // ③ allow/deny.
         if self.deny.iter().any(|d| d == cmd_name) {
-            miette::bail!("security: '{}' is denied by --deny", cmd_name);
+            return Err(denied(
+                "deny-list",
+                None,
+                format!("security: '{}' is denied by --deny", cmd_name),
+            ));
         }
         if !self.allow.is_empty() && !self.allow.iter().any(|a| a == cmd_name) {
-            miette::bail!(
-                "security: '{}' not in allow-list (default-deny active)",
-                cmd_name
-            );
+            return Err(denied(
+                "allow-list",
+                None,
+                format!(
+                    "security: '{}' not in allow-list (default-deny active)",
+                    cmd_name
+                ),
+            ));
         }
 
         // ④ Capability switches.
         if self.no_exec && is_external {
-            miette::bail!(
-                "security: external command '{}' blocked by --no-exec",
-                cmd_name
-            );
+            return Err(denied(
+                "no-exec",
+                None,
+                format!("security: external command '{}' blocked by --no-exec", cmd_name),
+            ));
         }
         if self.no_network && is_network(cmd_name, is_external) {
-            miette::bail!(
-                "security: network command '{}' blocked by --no-network",
-                cmd_name
-            );
+            return Err(denied(
+                "no-network",
+                None,
+                format!(
+                    "security: network command '{}' blocked by --no-network",
+                    cmd_name
+                ),
+            ));
         }
         if self.read_only && is_write_command(cmd_name) {
-            miette::bail!(
-                "security: write command '{}' blocked by --read-only",
-                cmd_name
-            );
+            return Err(denied(
+                "read-only",
+                None,
+                format!("security: write command '{}' blocked by --read-only", cmd_name),
+            ));
         }
 
         // ⑤ dry-run: short-circuit writing/spawning commands.
@@ -191,6 +257,7 @@ impl SecurityPolicy {
             dry_run: self.dry_run,
             sandboxed: self.sandbox_dir.is_some(),
             audit_enabled: self.audit_file.is_some(),
+            writable_roots_count: self.writable_roots.len(),
         }
     }
 }
@@ -356,6 +423,9 @@ pub struct PolicySummary {
     pub sandboxed: bool,
     /// `--audit <file>` active: every command logged (file not exposed).
     pub audit_enabled: bool,
+    /// PLAN-081 (R1): number of writable whitelist roots (paths not exposed,
+    /// same capability-only principle as `sandboxed`).
+    pub writable_roots_count: usize,
 }
 
 #[cfg(test)]
@@ -646,6 +716,7 @@ mod tests {
         assert!(!s.dry_run);
         assert!(!s.sandboxed);
         assert!(!s.audit_enabled);
+        assert_eq!(s.writable_roots_count, 0);
     }
 
     #[test]
@@ -666,5 +737,80 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("/sandbox"), "summary leaked sandbox path: {}", json);
         assert!(!json.contains("\"rm\""), "summary leaked deny-list contents: {}", json);
+    }
+
+    // ---- PLAN-081 (R1): writable_roots policy model ----
+
+    #[test]
+    fn check_denial_carries_machine_rule_segment() {
+        // R3: every policy denial's stderr line ends with a machine-parseable
+        // [rule=<id>] segment; the human prefix stays verbatim (auto-ai's
+        // DENIED_MARKERS contains-check depends on it).
+        let p = crate::security::SecurityPolicy {
+            deny: vec!["rm".into()],
+            ..Default::default()
+        };
+        let err = p.check("rm", &[], false).unwrap_err();
+        let msg = format!("{err}");
+        assert_eq!(msg, "security: 'rm' is denied by --deny [rule=deny-list]");
+        // Regex-style extraction contract: \[rule=(\S+?)(?: path=(.+?))?\]
+        let start = msg.find("[rule=").unwrap();
+        assert!(msg[start..].starts_with("[rule=deny-list]"));
+
+        let p = crate::security::SecurityPolicy {
+            no_network: true,
+            ..Default::default()
+        };
+        let msg = format!("{}", p.check("curl", &[], true).unwrap_err());
+        assert!(msg.starts_with("security: network command 'curl' blocked by --no-network"));
+        assert!(msg.ends_with("[rule=no-network]"), "{msg}");
+    }
+
+    #[test]
+    fn denied_reason_display_with_path() {
+        let r = crate::security::DeniedReason {
+            rule_id: "writable-outside",
+            path: Some(std::path::PathBuf::from("/tmp/x/f.txt")),
+            message: "sandbox: write to '/tmp/x/f.txt' denied".into(),
+        };
+        assert_eq!(
+            format!("{r}"),
+            "sandbox: write to '/tmp/x/f.txt' denied [rule=writable-outside path=/tmp/x/f.txt]"
+        );
+        let r = crate::security::DeniedReason {
+            rule_id: "no-exec",
+            path: None,
+            message: "security: blocked".into(),
+        };
+        assert_eq!(format!("{r}"), "security: blocked [rule=no-exec]");
+    }
+
+
+    #[test]
+    fn writable_only_policy_is_active() {
+        // Same principle as 072 S-6 (sandbox-only must be active): a
+        // whitelist-only policy must not be silently dropped as inactive.
+        let p = crate::security::SecurityPolicy {
+            writable_roots: vec![std::path::PathBuf::from("/tmp/proj")],
+            ..Default::default()
+        };
+        assert!(p.active(), "writable-only policy must count as active");
+    }
+
+    #[test]
+    fn summarize_exposes_only_writable_count() {
+        let p = crate::security::SecurityPolicy {
+            writable_roots: vec![
+                std::path::PathBuf::from("/tmp/a"),
+                std::path::PathBuf::from("/tmp/b"),
+            ],
+            ..Default::default()
+        };
+        let s = p.summarize();
+        assert_eq!(s.writable_roots_count, 2);
+        // Root paths must NOT leak into the capability summary.
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("/tmp/a"), "summary leaked writable root: {}", json);
+        assert!(!json.contains("/tmp/b"), "summary leaked writable root: {}", json);
     }
 }
