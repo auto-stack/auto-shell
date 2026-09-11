@@ -213,7 +213,7 @@ ash -c "ls" --json
 
 ## 相关文档
 
-- [SKILL.md](../SKILL.md) —— 给 Agent 读的完整技能说明
+- [SKILL.md](../skills/ash-shell/SKILL.md) —— 给 Agent 读的完整技能说明
 - [Plan 028 设计](../designs/028-agent-execution-engine.md)（已删除，委托 auto-ai）—— Agent 引擎的原始设计
 - [快速上手](quickstart.md) —— ash 基础
 

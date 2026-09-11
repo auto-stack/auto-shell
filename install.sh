@@ -72,3 +72,18 @@ else
     echo "✓ ash installed to ~/.cargo/bin (cargo's default install root)."
     echo "  make sure ~/.cargo/bin is on your PATH, then run \`ash\`."
 fi
+
+# ── agent skills ────────────────────────────────────────────────────────────
+# Ship the bundled agent skills (skills/<name>/SKILL.md) to the AutoOS skill
+# directory that agent front-ends scan (~/.config/autoos/skills).
+SKILLS_SRC="$TMPDIR/auto-shell/skills"
+if [ -d "$SKILLS_SRC" ]; then
+    SKILLS_DST="${HOME}/.config/autoos/skills"
+    echo "install: copying agent skills to $SKILLS_DST"
+    mkdir -p "$SKILLS_DST"
+    for skill_dir in "$SKILLS_SRC"/*/; do
+        [ -f "${skill_dir}SKILL.md" ] || continue
+        cp -R "${skill_dir%/}" "$SKILLS_DST/"
+        echo "  skill: $(basename "${skill_dir%/}")"
+    done
+fi

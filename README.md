@@ -56,7 +56,7 @@ ash agent check "rm -rf /old"     # Dry-run：会被允许吗？
 ash agent run "ls -la" --json     # 执行，拿结构化信封
 ```
 
-→ 详细用法见 [docs/for-agents.md](docs/for-agents.md) · [SKILL.md](SKILL.md)（给 Agent 读的）
+→ 详细用法见 [docs/for-agents.md](docs/for-agents.md) · [SKILL.md](skills/ash-shell/SKILL.md)（给 Agent 读的）
 
 ### 💻 终端用户（替代 bash / pwsh）
 
@@ -212,7 +212,8 @@ ash agent run "<cmd>"        # 执行 + 结构化信封
 | [docs/installation.md](docs/installation.md) | 详细安装 |
 | [docs/roadmap.md](docs/roadmap.md) | 项目路线图 |
 | [examples/](examples/) | 脚本实例库 |
-| [SKILL.md](SKILL.md) | 给 AI Agent 的技能说明 |
+| [skills/ash-shell/SKILL.md](skills/ash-shell/SKILL.md) | 给 AI Agent 的技能说明（命令模式） |
+| [skills/ash-scripting/SKILL.md](skills/ash-scripting/SKILL.md) | 给 AI Agent 的技能说明（.ash 脚本模式） |
 
 ---
 

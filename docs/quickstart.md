@@ -147,7 +147,7 @@ ash --audit /var/log/ash.jsonl -c "your command"
 - [bash → ash 速查表](bash-to-ash.md) —— 从 bash 迁移
 - [实例库](../examples/) —— 30+ 可抄的脚本
 - [for-developers.md](for-developers.md) —— 深入功能
-- [SKILL.md](../SKILL.md) —— 给 AI Agent 的完整说明
+- [SKILL.md](../skills/ash-shell/SKILL.md) —— 给 AI Agent 的完整说明
 
 ---
 

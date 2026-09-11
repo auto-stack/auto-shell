@@ -57,7 +57,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# ── verify + cleanup ────────────────────────────────────────────────────────
+# ── verify ──────────────────────────────────────────────────────────────────
 Write-Host 'install: verifying'
 $ashCmd = Get-Command ash -ErrorAction SilentlyContinue
 if ($ashCmd) {
@@ -67,4 +67,22 @@ if ($ashCmd) {
     Write-Host '✓ ash installed to ~\.cargo\bin (cargo''s default install root).'
     Write-Host '  make sure %USERPROFILE%\.cargo\bin is on your PATH, then run `ash`.'
 }
+
+# ── agent skills ────────────────────────────────────────────────────────────
+# Ship the bundled agent skills (skills\<name>\SKILL.md) to the AutoOS skill
+# directory that agent front-ends scan (~/.config/autoos/skills).
+$skillsSrc = Join-Path $tmp 'auto-shell\skills'
+if (Test-Path $skillsSrc) {
+    $skillsDst = Join-Path $env:USERPROFILE '.config\autoos\skills'
+    Write-Host "install: copying agent skills to $skillsDst"
+    New-Item -ItemType Directory -Force -Path $skillsDst | Out-Null
+    Get-ChildItem -Directory -Path $skillsSrc | ForEach-Object {
+        if (Test-Path (Join-Path $_.FullName 'SKILL.md')) {
+            Copy-Item -Path $_.FullName -Destination $skillsDst -Recurse -Force
+            Write-Host "  skill: $($_.Name)"
+        }
+    }
+}
+
+# ── cleanup ─────────────────────────────────────────────────────────────────
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

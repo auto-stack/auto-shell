@@ -11,7 +11,9 @@ A modern shell where **commands exchange structured data** (not just text), `sho
 
 - **Viewing a file** with syntax highlighting: `show file.rs`
 - **Searching a codebase**: `grep -rn "pattern" src/`
-- **Working with structured data**: `show data.json | where age > 18 | select name | to_csv`
+- **Working with structured data**: `cat data.json | from_json | where age > 18 | select name | to_csv`
+
+> For writing `.ash` scripts (AutoLang script mode: variables, loops, exit codes), see the **`ash-scripting`** skill — it is the companion to this one.
 - **Listing/inspecting files**: `ls -l`, `find . -n "*.rs"`, `wc -l file.txt`
 - **Any standard shell task**: most POSIX commands (cat, grep, sort, cut, tr, cp, mv, ...) work as you'd expect
 
@@ -59,17 +61,18 @@ Flags:
 This is ash's superpower. Unlike bash where `|` passes raw text, ash pipelines carry **structured data**. Commands like `ls`, `find`, `show data.json`, and `grep` emit structured records (arrays of objects), and downstream commands can filter, select, and transform by **field name** — no `awk`/`cut` text slicing needed.
 
 ```bash
-# List .rs files, keep only the name field
-find . -n "*.rs" | select name
+# List .rs files, keep only the path field (find records carry path+type)
+find . -n "*.rs" | select path
 
-# Show a JSON file, filter rows, extract columns, export as CSV
-show users.json | where age ">" 18 | select name email | to_csv
+# Parse a JSON file, filter rows, extract columns, export as CSV
+# (piped `show` emits TEXT — use cat + from_json for structured access)
+cat users.json | from_json | where age > 18 | select name email | to_csv
 
 # grep output is structured — pipe into field selection
 grep -rn "TODO" src/ | select file line_number
 
-# Count files by type
-ls | select type | sort | uniq -c
+# Count files by type (each emits raw values → text sort/uniq apply)
+ls | each type | sort | uniq -c
 ```
 
 ### Structured-data commands (the killer feature)
@@ -98,7 +101,7 @@ Operators for `where`: `==` `!=` `<` `>` `<=` `>=`
 | `from_yaml` / `to_yaml` | text ↔ Value | |
 | `from_xml` / `to_xml` | Value → text | `-r` root element, `-i` indent |
 
-Pattern: `show file.json | <transform> | to_csv > output.csv`
+Pattern: `cat file.json | from_json | <transform> | to_csv > output.csv`
 
 ---
 
@@ -114,7 +117,7 @@ ash -c "ls src/" --json
 ash -c "grep -rn 'fn ' src/" --json
 
 # Pipeline result serialized as JSON
-ash -c "show data.json | where score '>' 80 | select name" --json
+ash -c "cat data.json | from_json | where score > 80 | select name" --json
 ```
 
 `--json` may appear anywhere on the command line. With `-c` it outputs one JSON value; with `-s` (stdin script) or a script file it emits NDJSON (one JSON value per command).
@@ -173,7 +176,7 @@ Operate on numeric arrays/values in the pipeline:
 | `math-min` / `math-max` | Min/max (optional `field` arg for arrays of objects) |
 | `math-round` | Round; `--floor`, `--ceil`, `--abs`; optional precision |
 
-Pattern: `show prices.json | each price | math-sum`
+Pattern: `cat prices.json | from_json | each price | math-sum`
 
 ---
 
