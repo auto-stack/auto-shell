@@ -6,7 +6,7 @@
 
 - 下一个可用编号:**082**
 - 近期在册:
-  - 081 ash 多路径可写白名单 + 项目/会话级策略关联(R1-R5;designs/038;跨仓契约 auto-ai PLAN-033) — drafting
+  - 081 ash 多路径可写白名单 + 项目/会话级策略关联(R1-R5;designs/038;跨仓契约 auto-ai PLAN-033) — 已归档
   - 080 Auto 单源化迁移——设计+路线图+地基(三方对齐框架+quote 试点) — 已归档
   - 079 AI 模式 UX——恢复对话回放 + 工具结果摘要去表头 — 已归档
   - 078 吸收 auto-ai API 漂移(ToolOutput 分离 + StreamEvent 回合臂)— 已归档

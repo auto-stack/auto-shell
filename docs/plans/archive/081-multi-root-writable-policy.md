@@ -1,6 +1,7 @@
 ---
 plan_id: PLAN-081
-status: reviewed
+status: archived
+completion_kind: delivered
 feature_name: ash 多路径可写白名单 + 项目/会话级策略关联
 author: [agent]
 created_at: 2026-09-11T00:00:00Z
@@ -377,6 +378,27 @@ auto-ai 033(消费方,archived)。详见 designs/038 §3。
     (MSYS 不转换文件内容)已在 for-agents.md 明示,auto-ai 接入时注意。
   - next: merge(auto-plan-merge;worktree `.worktrees/plan-081-dev` 与
     分支 plan-081-dev 由 merge 流程守卫与清理)。
+
+### 合并收据 PLAN-081:r1
+
+- `prepared`:reviewed 基线 = worktree `57eef86`(base e930134,7 commits,
+  working tree clean)+ auto-lang `d8971f4b1`;delta 载体 = designs/038
+  (已在 main e930134)+ docs/for-agents.md(随 worktree 分支)+ 代码 7 文件;
+  无 docs/specs 体系(080 先例),frontmatter 三 spec 字段留空有书面说明。
+- `landed`:merge commit **`c05d690`**(main,--no-ff,`57eef86` 经
+  merge-base --is-ancestor 确认完全并入);main 集成冒烟:ash-core
+  417/0 + 活体 4 项(writable-in exit 0 / writable-out exit 1 /
+  脚本失败 exit 1 / 拒绝 stderr 恰 1 行)全过 → main known-good。
+- `ledger_refreshed`:目标 = 本仓 designs/038 + docs/for-agents.md
+  (main 上核对:writable 语义矩阵/契约段在案)+ 代码载体
+  (security.rs `writable_roots` 在 main);无独立 ledger 服务/文件
+  (仓库无 docs/specs 与 ledger 基础设施),派生视图即上述载体 +
+  NEXT.md 登记。
+- 依赖归属:auto-lang `d8971f4b1`(T-07)已在其 master,消费方 c05d690
+  依赖经 junction 生效;该提交在其仓未推送,推送归属 auto-lang 仓惯例
+  (非本仓 merge 射程)。
+- `archived`:见下(本次提交)。
+- `cleaned`:见后续补记。
 
 ## 10. 待澄清事项
 
