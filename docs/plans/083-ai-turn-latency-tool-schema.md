@@ -1,12 +1,12 @@
 ---
 plan_id: PLAN-083
-status: drafting
+status: executing
 feature_name: AI 回合提速 + 工具 schema 兜底（thinking 控制 / 命令工具真 schema / 思考流可见 / 循环纠偏 / 错误分类）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
-updated_at: 2026-09-24T00:00:00+08:00
+updated_at: 2026-09-24T16:00:00+08:00
 plan_revision: 1
-current_step: 0
+current_step: 7
 total_steps: 7
 supersedes_spec_components: []
 new_spec_components:
@@ -228,25 +228,37 @@ model id)`，不再落到 default_provider 透传。
 
 ## 8. 执行步骤
 
-- **T-01**（ash）AshCommandTool 真 schema：Signature 字段 + parameters()/
+- **T-01**（ash）[x] AshCommandTool 真 schema：Signature 字段 + parameters()/
   description() 生成 + register_ash_tools 传参 + 生成快照单测。
-  验证：`cargo test -p auto-shell ash_command_tool`。→ AC-02
-- **T-02**（ash）thinking 控制：两入口 override + ASH_AI_THINKING 环境变
-  量；实测 off/low 各 ≥3 prompt 计时并定默认档（结论记 designs/040）。
-  验证：计时脚本对比。→ AC-01
-- **T-03**（ash）思考流可见：LineKind::Thinking + 折叠计数（REPL 与 ask）。
-  验证：手测思考开/关两态。→ AC-03
-- **T-04**（ash）错误 footer 分类。验证：注入 LoopDetected 与连接错误两态。
-  → AC-04
-- **T-05**（auto-ai .at）循环纠偏两段语义 + 单测 + retranspile。
-  验证：其仓 `cargo test -p auto-ai-agent`。→ AC-05
-- **T-06**（auto-ai .at）daemon 未知 model 400 + 单测 + retranspile。
-  验证：其仓 `cargo test -p auto-ai-daemon` + curl 探针。→ AC-06
-- **T-07** 端到端验收 + 回归 + 文档（designs/040 成稿、for-agents.md）。
-  → AC-01/02/07
+  验证：`cargo test -p auto-shell ash_command_tool` → 29/29（含
+  json_args_to_cli 既有用例）。✅ 已完成 commit `907dc0b`。→ AC-02
+- **T-02**（ash）[x] thinking 控制：build/clear/ask 三入口 override +
+  ASH_AI_THINKING 环境变量；实测 off 5.88/2.20/6.22s vs low
+  10.02/10.79/11.66s vs 默认 30-42s → **默认档 off**（结论记 designs/040
+  §2/§3.1）。✅ commit `f9f4cdb`。→ AC-01
+- **T-03**（ash）[x] 思考流可见：LineKind::Thinking + 折叠计数（REPL 尾部
+  视口流式 `·· ` 行 + 冻结折叠 `· 思考 N 字`；ask 内联灰显 + 回合尾折叠）。
+  验证：tail_chat 11 测试（+4）；ask 手测开/关两态（low 可见+折叠 341 字；
+  off 零输出）。✅ commit `f9f4cdb`。→ AC-03
+- **T-04**（ash）[x] 错误 footer 分类 wants_api_key_footer。
+  验证：2 测试（连接/初始化 6 例附 footer；loop/quota/tool/config 5 例裸
+  打印）。✅ commit `f9f4cdb`。→ AC-04
+- **T-05**（auto-ai .at）[x] 循环纠偏两段语义 + 单测 + retranspile。
+  验证：rust-ref 118 过/1 挂（roles 预存）、mvp_harness 25/25（+3）、
+  a2r transpiled_harness 30/30（+2）；顺带修复 a2r 树计数不回传潜伏缺陷
+  （bump_seen 以值传 Map）。✅ auto-ai commit `c789841`。→ AC-05
+- **T-06**（auto-ai .at）[x] daemon 未知 model 400 + 单测 + retranspile。
+  验证：`cargo test -p auto-ai-daemon` 73/73（+2）+ curl 探针（mid→400
+  unknown model；tier:mid→200）。✅ auto-ai commit `79ff93a`。→ AC-06
+- **T-07** [x] 端到端验收 + 回归 + 文档（designs/040 成稿、for-agents.md）。
+  验证：落地后 auto-ai main 复测 7.33/4.95/5.13s 中位 **5.13s ≤10s**、du
+  首调 input 均含 path；ask 回归 5.9s；dump_agent_payload.rs 为验收载体。
+  ✅ commit `03550b3`。→ AC-01/02/07
 
 依赖：T-01/T-02 独立先行（同仓）；T-03/T-04 随后；T-05/T-06 独立
 （auto-ai 仓，可与 T-01..04 并行）；T-07 收口。跨仓节奏见 §10-Q3。
+**执行顺序实录**：T-01→T-02→T-03/T-04（同仓同分支）→ T-05→T-06（auto-ai
+worktree）→ 落 auto-ai main → T-07（junction 跟进后复测）。
 
 ## 9. 复审记录
 
@@ -255,15 +267,39 @@ model id)`，不再落到 default_provider 透传。
   复已随本起草并入 PLAN-082（其 revision 2）。outcome: **pass**（授权明
   确：五项修复 + daemon 健壮性 + 10s 目标）；next: **work**（T-01/T-05 可
   立即并行起步）。待定项仅 §10-Q1 默认档位（T-02 内闭环，不阻塞开工）。
+- 2026-09-24 stage: work | plan_id: PLAN-083 | plan_revision: 1 |
+  outcome: **pass** | code_commit: auto-shell worktree `plan-083-dev` @
+  `03550b3`（base 28e8796，4 commits：28e8796 前置 WIP 路由 / 907dc0b
+  T-01 / f9f4cdb T-02..04 / 03550b3 T-07）；auto-ai main @ `79ff93a`
+  （c789841 T-05 / 79ff93a T-06，已落其仓 main，junction 跟进复测通过）|
+  task_ids: T-01..T-07 全部 [x] | evidence:
+  AC-01 e2e 中位 5.13s≤10s（3 次取中位，落地后复测）；AC-02 du 首调
+  input 含 path+flags（dump_agent_payload + 探针）；AC-03 tail_chat 11 测
+  + ask 手测开/关两态；AC-04 wants_api_key_footer 2 测（注入式 REPL 手测
+  未做，以单测覆盖两态——记 §10-Q4）；AC-05 rust-ref/mvp_harness/a2r 三
+  树单测；AC-06 daemon 73/73 + curl 400 探针；AC-07 ask 回归 5.9s、
+  designs/040 与 for-agents.md 随 worktree 待 merge 合入。| blockers: 无
+  （3 处预存测试失败与本计划无关，证据在 designs/040 §5；主检出遗留 WIP
+  已路由 fix-lang-feature-defaults 并落地 main 28e8796）| next:
+  **review**（auto-plan-review；worktree plan-083-dev 保留供复审与 merge）。
+  附:执行中发现并修复 auto-ai a2r 树循环计数不回传潜伏缺陷（designs/040
+  §3.3）；wire 字段名为 thinking_level（探针传 thinking 被静默忽略，已记
+  契约）。
 
 ## 10. 待澄清事项
 
-- **Q1 thinking 默认档**：倾向工具回合 off（实测 4.3s）+ 环境变量可调；
-  若希望"简单问题也保留轻思考"则 low（T-02 实测后定，需用户认可结论）。
-  owner: 用户；next: T-02 结束时确认。
-- **Q2 循环纠偏语义**：本计划给模型一次纠偏机会（阈值 3 → 纠偏，4 → 终
-  止）。若希望保持"达阈值立即终止"的保守语义，T-05 降级为仅改进错误信
-  息。owner: 用户；next: T-05 开工前默认按纠偏方案执行。
-- **Q3 跨仓合入**：auto-ai `.at` 源改动落其仓 master 后 retranspile，ash
-  junction 跟进并在本计划登记 commit id（PLAN-081 判例）。owner: work 执行
-  者；next: T-05/T-06 提交时登记。
+- **Q1 thinking 默认档**：已按倾向执行 **off**（实测：off 中位 5.88s /
+  low 10.79s / 默认 30-42s；low 不达 10s 目标），`ASH_AI_THINKING` 可调、
+  `inherit` 可回 provider 默认——结论记 designs/040 §2。owner: 用户；
+  next: review 时认可（如需"简单问题保留轻思考"可改 low，属一行改动）。
+- **Q2 循环纠偏语义**：已按默认纠偏方案执行（阈值 3 → 注入一次纠偏
+  tool_result，4 → 终止），rust-ref/a2r/mvp_harness 三树测试锁定。若复审
+  希望回到"达阈值立即终止"，T-05 回退面为 agent.at 两段块 + 3 个测试。
+  owner: 用户；next: review。
+- **Q3 跨仓合入**：已完成——auto-ai `c789841`/`79ff93a` 落其仓 main
+  （retranspile 全量重转），ash junction 跟进后复测通过，commit id 已
+  登记 designs/040 §7 与本计划 §8。owner: work 执行者；next: 已闭环。
+- **Q4（新增）AC-03/AC-04 的 REPL 交互路径手测**：非交互环境无法驱动
+  F3 进入 REPL AI 模式，两处以单测覆盖（LineKind 折叠/计数 4 测、footer
+  分类 2 测）+ ask 路径真跑验证；REPL 尾部视口的思考流实机观感建议复审
+  时人工过一遍。owner: 复审者；next: review。
