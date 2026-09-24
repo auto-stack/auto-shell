@@ -95,6 +95,10 @@ pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Resul
     let tx = shell_thread.sender();
 
     let mut agent = Agent::new(AutoLangCoder, client);
+    // PLAN-083 T-02: pin the thinking level (default off) — code-gen turns
+    // are tool-call loops; deep thinking measured 10x the latency for no
+    // quality gain here.
+    agent.set_thinking_level_override(crate::ai::thinking_override());
 
     // Inject the live shell context (cwd / last command / aliases) so the
     // model knows the environment.
@@ -111,7 +115,12 @@ pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Resul
     }
 
     // Stream events: show the generated code + tool results inline.
-    let on_event: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|ev| match ev {
+    // PLAN-083 T-03: thinking chunks print dimmed inline (so a thinking-on
+    // run is visibly alive instead of silent), and the turn folds them into
+    // one count line at the end. Thinking off → no output at all.
+    let thinking_chars = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let thinking_for_cb = thinking_chars.clone();
+    let on_event: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |ev| match ev {
         StreamEvent::Delta { text } => {
             use std::io::Write;
             print!("{text}");
@@ -130,7 +139,12 @@ pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Resul
         }
         StreamEvent::Warning { text } => println!("\n  \x1b[2m\u{26a0}\u{fe0f} {text}\x1b[0m"),
         StreamEvent::Done { .. } => {}
-        StreamEvent::Thinking { .. } => {}
+        StreamEvent::Thinking { text } => {
+            use std::io::Write;
+            thinking_for_cb.fetch_add(text.chars().count(), std::sync::atomic::Ordering::Relaxed);
+            print!("\x1b[2m{text}\x1b[0m");
+            let _ = std::io::stdout().flush();
+        }
         StreamEvent::TurnStart { .. } | StreamEvent::TurnEnd { .. } => {}
         StreamEvent::Error { message } => println!("\n  [error] {message}"),
         StreamEvent::Cancelled { .. } => println!("\n  [cancelled]"),
@@ -143,6 +157,16 @@ pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Resul
     .map_err(|e| miette::miette!("ask failed: {}", e))?;
 
     println!(); // newline after the streamed reply
+    // PLAN-083 T-03: fold the thinking stream into a single count line.
+    let thought = thinking_chars.load(std::sync::atomic::Ordering::Relaxed);
+    if thought > 0 {
+        let shown = if thought >= 1000 {
+            format!("{:.1}k", thought as f64 / 1000.0)
+        } else {
+            format!("{thought}")
+        };
+        println!("  \x1b[2m\u{b7} 思考 {shown} 字\x1b[0m");
+    }
     let _ = agent_result;
     Ok(())
 }

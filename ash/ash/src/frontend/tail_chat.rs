@@ -23,6 +23,9 @@ pub const CHAT_TAIL_HEIGHT: u16 = 10;
 pub enum LineKind {
     /// Streaming reply text (plain).
     Reply,
+    /// Model thinking stream (PLAN-083 T-03) — dimmed, prefixed `·· ` and
+    /// folded into a single count line when the turn freezes.
+    Thinking,
     /// Tool start/result, warnings — dimmed.
     Tool,
     /// Stream error — red.
@@ -33,6 +36,7 @@ impl LineKind {
     fn ratatui_style(self) -> Style {
         match self {
             LineKind::Reply => Style::default().fg(Color::Gray),
+            LineKind::Thinking => Style::default().fg(Color::DarkGray),
             LineKind::Tool => Style::default().fg(Color::DarkGray),
             LineKind::Error => Style::default().fg(Color::Red),
         }
@@ -42,6 +46,7 @@ impl LineKind {
     fn ansi_prefix(self) -> &'static str {
         match self {
             LineKind::Reply => "",
+            LineKind::Thinking => "\x1b[2m",
             LineKind::Tool => "\x1b[2m",
             LineKind::Error => "\x1b[31m",
         }
@@ -65,6 +70,19 @@ pub struct TurnTailState {
     partial: String,
     /// Total reply characters emitted (status line metric).
     chars: usize,
+    /// The current not-yet-newlined thinking fragment (PLAN-083 T-03).
+    thinking_partial: String,
+    /// Total thinking characters emitted (fold-line metric).
+    thinking_chars: usize,
+}
+
+/// Format a character count for the frozen thinking fold line (6.1k 字).
+fn fmt_chars(n: usize) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        format!("{n}")
+    }
 }
 
 impl TurnTailState {
@@ -76,6 +94,9 @@ impl TurnTailState {
     /// lines, the remainder stays partial until the next delta or flush.
     pub fn push_delta(&mut self, text: &str) {
         self.chars += text.chars().count();
+        // Thinking resumed-then-reply: flush the pending thinking fragment
+        // first so the frozen transcript keeps arrival order.
+        self.flush_thinking_partial();
         let mut pieces = text.split('\n');
         if let Some(first) = pieces.next() {
             self.partial.push_str(first);
@@ -87,9 +108,28 @@ impl TurnTailState {
         }
     }
 
+    /// PLAN-083 T-03: streaming thinking text — same newline handling as
+    /// [`Self::push_delta`], but lines are dimmed with a `·· ` prefix and the
+    /// whole block folds into one count line at freeze. No-op while thinking
+    /// is off (no Thinking events arrive).
+    pub fn push_thinking(&mut self, text: &str) {
+        self.thinking_chars += text.chars().count();
+        self.flush_partial();
+        let mut pieces = text.split('\n');
+        if let Some(first) = pieces.next() {
+            self.thinking_partial.push_str(first);
+        }
+        for piece in pieces {
+            let complete = std::mem::take(&mut self.thinking_partial);
+            self.lines.push((format!("·· {complete}"), LineKind::Thinking));
+            self.thinking_partial.push_str(piece);
+        }
+    }
+
     /// A complete non-reply line (tool/warning/error): flushes the pending
     /// partial first so the arrival order is preserved.
     pub fn push_line(&mut self, text: impl Into<String>, kind: LineKind) {
+        self.flush_thinking_partial();
         self.flush_partial();
         self.lines.push((text.into(), kind));
     }
@@ -102,9 +142,22 @@ impl TurnTailState {
         }
     }
 
+    /// Flush the pending partial thinking fragment as a complete dimmed line.
+    fn flush_thinking_partial(&mut self) {
+        if !self.thinking_partial.is_empty() {
+            let complete = std::mem::take(&mut self.thinking_partial);
+            self.lines.push((format!("·· {complete}"), LineKind::Thinking));
+        }
+    }
+
     /// Total reply characters emitted so far.
     pub fn reply_chars(&self) -> usize {
         self.chars
+    }
+
+    /// Total thinking characters emitted so far (PLAN-083 T-03).
+    pub fn thinking_chars(&self) -> usize {
+        self.thinking_chars
     }
 
     /// Trailing lines (+ pending partial as the last line) for the live view.
@@ -112,6 +165,8 @@ impl TurnTailState {
         let mut v: Vec<(String, LineKind)> = self.lines.clone();
         if !self.partial.is_empty() {
             v.push((self.partial.clone(), LineKind::Reply));
+        } else if !self.thinking_partial.is_empty() {
+            v.push((format!("·· {}", self.thinking_partial), LineKind::Thinking));
         }
         if v.len() > n {
             v.split_off(v.len() - n)
@@ -122,9 +177,29 @@ impl TurnTailState {
 
     /// The complete arrival-order transcript for the frozen linear print.
     /// Flushes the partial into the returned list (call at turn end).
+    ///
+    /// PLAN-083 T-03: individual thinking lines are NOT replayed (079 精神:
+    /// 工具/思考噪音不回放); they collapse into a single count line at the
+    /// position where thinking first started.
     pub fn frozen_lines(&mut self) -> Vec<(String, LineKind)> {
         self.flush_partial();
-        std::mem::take(&mut self.lines)
+        self.flush_thinking_partial();
+        let mut out: Vec<(String, LineKind)> = Vec::with_capacity(self.lines.len());
+        let mut folded = false;
+        for (text, kind) in std::mem::take(&mut self.lines) {
+            if kind == LineKind::Thinking {
+                if !folded {
+                    folded = true;
+                    out.push((
+                        format!("· 思考 {} 字", fmt_chars(self.thinking_chars)),
+                        LineKind::Thinking,
+                    ));
+                }
+                continue;
+            }
+            out.push((text, kind));
+        }
+        out
     }
 }
 
@@ -252,5 +327,61 @@ mod tests {
         let mut s = TurnTailState::new();
         assert!(s.visible_tail(8).is_empty());
         assert!(s.frozen_lines().is_empty());
+    }
+
+    // ── PLAN-083 T-03: thinking stream ─────────────────────────────────
+
+    #[test]
+    fn thinking_streams_dimmed_and_folds_to_one_count_line() {
+        let mut s = TurnTailState::new();
+        s.push_thinking("用户想统计目");
+        s.push_thinking("录磁盘占用…\n调用 du 工具");
+        // Live view shows the streaming thinking fragment.
+        let v = s.visible_tail(10);
+        assert_eq!(v[0].0, "·· 用户想统计目录磁盘占用…");
+        assert_eq!(v[0].1, LineKind::Thinking);
+        assert_eq!(v[1].0, "·· 调用 du 工具");
+        // Freeze: all thinking lines collapse into one count line.
+        s.push_delta("好的，下面是结果");
+        let frozen = s.frozen_lines();
+        assert_eq!(frozen[0].0, "· 思考 21 字", "6+6+newline+8 chars counted");
+        assert_eq!(frozen[0].1, LineKind::Thinking);
+        assert_eq!(frozen[1].0, "好的，下面是结果");
+        assert_eq!(frozen.len(), 2, "individual thinking lines dropped");
+    }
+
+    #[test]
+    fn thinking_fold_uses_k_suffix_for_thousands() {
+        let mut s = TurnTailState::new();
+        let chunk = "x".repeat(1500);
+        s.push_thinking(&chunk);
+        s.push_delta("done");
+        let frozen = s.frozen_lines();
+        assert_eq!(frozen[0].0, "· 思考 1.5k 字");
+    }
+
+    #[test]
+    fn interleaved_thinking_reply_tool_keeps_arrival_order() {
+        let mut s = TurnTailState::new();
+        s.push_thinking("先想一下\n");
+        s.push_line("  ⚙ du .", LineKind::Tool);
+        s.push_delta("结论如下");
+        let frozen = s.frozen_lines();
+        let texts: Vec<&str> = frozen.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["· 思考 5 字", "  ⚙ du .", "结论如下"],
+            "fold line lands at the first thinking position, order preserved"
+        );
+    }
+
+    #[test]
+    fn no_thinking_no_fold_line() {
+        // Thinking off → zero new output (PLAN-083 AC-03 regression guard).
+        let mut s = TurnTailState::new();
+        s.push_delta("直接回答");
+        let frozen = s.frozen_lines();
+        assert_eq!(frozen, [("直接回答".to_string(), LineKind::Reply)]);
+        assert_eq!(s.thinking_chars(), 0);
     }
 }

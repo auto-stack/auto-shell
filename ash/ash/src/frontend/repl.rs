@@ -606,7 +606,24 @@ impl Repl {
                         );
                     }
                     auto_ai_agent::agent::StreamEvent::Done { .. } => {} // keep chat output clean
-                    auto_ai_agent::agent::StreamEvent::Thinking { .. } => {}
+                    // PLAN-083 T-03: thinking streams into the tail (dimmed,
+                    // `·· ` prefix) and folds into a count line at freeze;
+                    // without the tail lease it prints dimmed inline. No
+                    // output at all while thinking is off.
+                    auto_ai_agent::agent::StreamEvent::Thinking { text } => {
+                        match &state_for_cb {
+                            Some(st) => {
+                                if let Ok(mut s) = st.lock() {
+                                    s.push_thinking(&text);
+                                }
+                            }
+                            None => {
+                                use std::io::Write;
+                                print!("\x1b[2m{text}\x1b[0m");
+                                let _ = std::io::stdout().flush();
+                            }
+                        }
+                    }
                     auto_ai_agent::agent::StreamEvent::TurnStart { .. }
                     | auto_ai_agent::agent::StreamEvent::TurnEnd { .. } => {}
                     auto_ai_agent::agent::StreamEvent::Error { message } => {
@@ -694,11 +711,20 @@ impl Repl {
                 let _ = session.save();
             }
             Err(e) => {
-                eprintln!(
-                    "  AI error: {}\n  (set ZHIPU_API_KEY / ANTHROPIC_API_KEY / \
-                     OPENAI_API_KEY or start the aaid daemon)",
-                    e
-                );
+                // PLAN-083 T-04: the API-key/daemon footer only helps when the
+                // failure IS a connection/initialization problem. Turn-level
+                // errors (loop detection, upstream refusal, quota) printed the
+                // footer too, which misdirected diagnosis — the du reproduction
+                // read as an auth problem when it was a loop cutoff.
+                if wants_api_key_footer(&e) {
+                    eprintln!(
+                        "  AI error: {}\n  (set ZHIPU_API_KEY / ANTHROPIC_API_KEY / \
+                         OPENAI_API_KEY or start the aaid daemon)",
+                        e
+                    );
+                } else {
+                    eprintln!("  AI error: {e}");
+                }
             }
         }
         // Plan 072 M2 (S-3): approval gate — anything the agent proposed
@@ -1271,6 +1297,23 @@ impl Repl {
     }
 }
 
+/// PLAN-083 T-04: does this turn-error text point at a connection or
+/// initialization problem, i.e. would the API-key/daemon footer help?
+///
+/// Matched against the lowercase error string. Turn-logic failures (loop
+/// detection, max turns, tool errors, upstream quota/refusals) return false —
+/// their message already says what went wrong, and the footer misdirected
+/// diagnosis in the 2026-09-24 du reproduction.
+fn wants_api_key_footer(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("daemon unavailable")
+        || lower.contains("ai client init")
+        || lower.contains("connection refused")
+        || lower.contains("api key")
+        || lower.contains("unauthorized")
+        || lower.contains("401")
+}
+
 /// Check if a line has unclosed quotes (single or double).
 ///
 /// Counts quote characters outside of the other quote type.
@@ -1554,6 +1597,40 @@ mod startup_legend_tests {
         let l = startup_legend();
         for key in ["F1", "F2", "F3", "Ctrl+O", "Tab", "Ctrl+R"] {
             assert!(l.contains(key), "legend should mention {key}: {l}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod wants_api_key_footer_tests {
+    use super::wants_api_key_footer;
+
+    // PLAN-083 T-04: only connection/init errors carry the footer.
+
+    #[test]
+    fn connect_and_init_errors_get_footer() {
+        for e in [
+            "client error: daemon unavailable",
+            "AI client init: missing key",
+            "client error: HTTP error: connection refused",
+            "API error: invalid api key",
+            "upstream returned unauthorized",
+            "auth failed (401)",
+        ] {
+            assert!(wants_api_key_footer(e), "should get footer: {e}");
+        }
+    }
+
+    #[test]
+    fn turn_logic_errors_print_bare() {
+        for e in [
+            "loop detected: tool 'du' called with identical args repeatedly",
+            "max turns (8) exceeded without completion",
+            "tool error: refused: command matches danger pattern",
+            "API error: upstream quota exceeded (429)",
+            "config error: role malformed",
+        ] {
+            assert!(!wants_api_key_footer(e), "should print bare: {e}");
         }
     }
 }

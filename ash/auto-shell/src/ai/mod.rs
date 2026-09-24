@@ -240,6 +240,30 @@ pub fn parse_slash_command(line: &str) -> Option<SlashCommand> {
     }
 }
 
+/// PLAN-083 T-02: resolve the thinking-level override applied to every agent
+/// this session builds.
+///
+/// Default is `"off"`: the zhipu anthropic endpoint enables deep thinking
+/// whenever the request omits `thinking_level`, which measured at 42.6s to
+/// first tool call on the du reproduction vs 4.3s with thinking off (tool
+/// turns don't benefit from long reasoning). `ASH_AI_THINKING` restores or
+/// raises it: `off`/`low`/`high`/`max` pin that level; `inherit` drops the
+/// override entirely (follow the role → provider default). Anything unset or
+/// unrecognized falls back to the default.
+pub fn thinking_override() -> Option<String> {
+    resolve_thinking_override(std::env::var("ASH_AI_THINKING").ok().as_deref())
+}
+
+/// Pure core of [`thinking_override`], factored out for testing without
+/// touching process-global env state.
+fn resolve_thinking_override(env: Option<&str>) -> Option<String> {
+    match env {
+        Some("inherit") => None,
+        Some(level @ ("off" | "low" | "high" | "max")) => Some(level.to_string()),
+        _ => Some("off".to_string()),
+    }
+}
+
 /// Path to the persisted chat history: `~/.auto-shell-ai-chat.json`.
 pub fn history_path() -> PathBuf {
     history_file_under(&dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
@@ -451,6 +475,9 @@ impl ChatSession {
         // the signatures here, not inside register_ash_tools.
         let command_signatures = crate::shell::Shell::new().registry().params();
         let mut agent = Agent::new(Assistant, client.clone());
+        // PLAN-083 T-02: pin the thinking level (default off) so tool-call
+        // turns don't pay the provider's default-on deep-thinking latency.
+        agent.set_thinking_level_override(thinking_override());
         register_ash_tools(&mut agent, &command_signatures, tx, proposals.clone());
         // Replay persisted text turns into the agent's memory. preload skips
         // tool-role messages, so it's safe even with mixed histories.
@@ -525,6 +552,9 @@ impl ChatSession {
     pub fn clear(&mut self) {
         let tx = self.shell_thread.sender();
         let mut agent = Agent::new(Assistant, self.client.clone());
+        // Same thinking policy as build() — a cleared conversation must not
+        // silently change latency behavior.
+        agent.set_thinking_level_override(thinking_override());
         // Reuse the cached signatures — rebuilding a Shell here would do
         // AutoLang VM init that can't run inside a tokio runtime (clear() may
         // be reached via an async test path).
@@ -578,6 +608,32 @@ pub mod suggest;
 mod tests {
     use super::*;
     use std::path::Path;
+
+    // ── PLAN-083 T-02 thinking override resolution ─────────────────────
+
+    #[test]
+    fn thinking_env_pins_valid_levels() {
+        for level in ["off", "low", "high", "max"] {
+            assert_eq!(
+                resolve_thinking_override(Some(level)),
+                Some(level.to_string()),
+                "explicit level passes through"
+            );
+        }
+    }
+
+    #[test]
+    fn thinking_default_is_off_and_inherit_drops_override() {
+        // Unset / unknown → default off (zhipu's provider default is
+        // deep-thinking-on, which measured 42.6s on the du reproduction).
+        assert_eq!(resolve_thinking_override(None), Some("off".to_string()));
+        assert_eq!(
+            resolve_thinking_override(Some("turbo")),
+            Some("off".to_string())
+        );
+        // inherit → None: follow the role (pre-PLAN-083 behavior).
+        assert_eq!(resolve_thinking_override(Some("inherit")), None);
+    }
 
     // ── Plan 079 extract_transcript ─────────────────────────────────────
 
