@@ -6,7 +6,7 @@
 
 - 下一个可用编号:**084**
 - 近期在册:
-  - 083 AI 回合提速 + 工具 schema 兜底(thinking 控制/命令工具真 schema/思考流可见/循环纠偏/错误分类;designs/040;跨仓 auto-ai) — drafting
+  - 083 AI 回合提速 + 工具 schema 兜底(thinking 控制/命令工具真 schema/思考流可见/循环纠偏/错误分类;designs/040;跨仓 auto-ai) — 已归档
   - 082 ash 脚本与 `>` 命令的结构化互操作(for-in 消费命令记录 + `> {}` 命令块;designs/039;跨仓 auto-lang;rev2 并入 du total 修复) — drafting
   - 081 ash 多路径可写白名单 + 项目/会话级策略关联(R1-R5;designs/038;跨仓契约 auto-ai PLAN-033) — 已归档
   - 080 Auto 单源化迁移——设计+路线图+地基(三方对齐框架+quote 试点) — 已归档
