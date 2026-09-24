@@ -28,6 +28,8 @@ ash examples/bigfiles/bigfiles.ash
 | [synctree](synctree/) | 增量同步目录(只复制更新的) |
 | [filestats](filestats/) | 按扩展名分组统计文件 |
 | [du-top](du-top/) | 目录大小排行 |
+| [dirdu-alert](dirdu-alert/) | 目录大小阈值告警（结构化捕获 + to_uint 比较） |
+| [query-block](query-block/) | `> {}` 多段命令块（语句位/捕获位） |
 
 ### 文本处理
 | 实例 | 说明 |

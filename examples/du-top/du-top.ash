@@ -1,26 +1,22 @@
 // examples/du-top/du-top.ash
-// 目录大小排行：显示当前目录下各子目录的磁盘占用，最大在前。
-// 展示: 结构化 pipeline(du 输出记录) + AutoLang 参数处理
+// 目录大小排行：当前目录（或 $1 指定目录）下各子目录的磁盘占用，最大在前。
+// 展示 PLAN-082 结构化互操作：for-in 消费 `>` 命令记录 + $rec.field 插值互调。
 //
 // 用法: ash du-top.ash [目录]
-// 实测: ash v0.1.0 (2026-09-24)，du 为内置命令，输出 {path size bytes} 记录
+// 实测: PLAN-082 起 `>` 五形态可用；du -h 短标志已修复（不再被 help 占用）
 
 fn main() {
     var dir = system("echo $1").trim()
     if dir.len() == 0 { dir = "." }
 
-    // du 记录含根目录 "." 和 "total" 行，先 where 掉再取需要的字段。
-    // 排序 du 内部已按 bytes 降序完成，无需再 sort。
-    // 注意: 短标志 -h 被 du 的 help 占用(v0.1.0 实测)，人类可读要用长标志。
-    var out = system("du --human-readable " + dir + " | where path != total | where path != . | select path size | to_json")
-    if out.trim().len() == 0 {
-        print("no subdirectories under " + dir)
-        exit(1)
+    // 形态 1：for-in 逐记录迭代 `>` 命令的结构化结果（ls 记录 {name type size modified}）
+    for d in > ls $dir | where type == dir | select name {
+        // 形态 3+4：循环体内以记录字段为参数再调另一个 `>` 命令；
+        // 未消费的 `>` 命令直接打印表格（体内与顶层一致）。
+        // $dir/$d.name 是字面量+$var+字段路径的混合插值；du 内部已按
+        // bytes 降序，where 掉 total 与根行即得排行。
+        > du -h $dir/$d.name | where path != total | where path != . | select path size
     }
-
-    // system() 返回 JSON 文本——结构化变换在管道里做，AutoLang 只做呈现。
-    // (AutoLang 尚无 from_json 内建，脚本侧拿到的是字符串。)
-    print(out)
     exit(0)
 }
 
