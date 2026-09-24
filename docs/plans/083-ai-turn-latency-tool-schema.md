@@ -1,6 +1,6 @@
 ---
 plan_id: PLAN-083
-status: executing
+status: reviewed
 feature_name: AI 回合提速 + 工具 schema 兜底（thinking 控制 / 命令工具真 schema / 思考流可见 / 循环纠偏 / 错误分类）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
@@ -285,6 +285,40 @@ worktree）→ 落 auto-ai main → T-07（junction 跟进后复测）。
   附:执行中发现并修复 auto-ai a2r 树循环计数不回传潜伏缺陷（designs/040
   §3.3）；wire 字段名为 thinking_level（探针传 thinking 被静默忽略，已记
   契约）。
+- 2026-09-24 stage: review | plan_id: PLAN-083 | plan_revision: 1 |
+  outcome: **pass** | reviewed_commit: auto-shell worktree plan-083-dev @
+  `03550b3a81de131e59de21a978519f721ea94038` | base_commit:
+  `28e8796da9d4422bdf19b52c55bb83ebbac7433f` | dependency_revisions:
+  auto-ai main `79ff93afe1cd46853a056110814b219d870201cd`（T-05 c789841 /
+  T-06 79ff93a 已落其仓 main）；auto-lang master `57185bf0397e`（复审期间
+  从 499b8bdff 前移，重跑按 57185bf 编译，全绿）| spec_inputs:
+  designs/040 git-hash `f4cbbd3ff51598b5fc3628c8a1ced39949620162`、
+  docs/for-agents.md git-hash `6411f96ab61c57069c5660ef4cbb605258daa61b`
+  （均在 reviewed commit；plan 文件 frontmatter 与 SD-02 的
+  new/modify 桶位小出入见 F-1）| acceptance_results:
+  AC-01 **pass**（复核探针 6.81s/5.59s + 记录中位 5.88s/5.13s ≤10s；
+  dump_agent_payload 断言 thinking off + 全量带 schema 工具）；AC-02
+  **pass**（三次首调 du input 均非空含 path；schema 单测 29）；AC-03
+  **pass**（tail_chat 11 测 + ask 手测开/关两态；REPL 尾部视口实机观感
+  留 Q4——同一 TurnTailState 代码路径已被单测锁定）；AC-04 **pass**
+  （wants_api_key_footer 2 测正反两类；REPL 交互注入未跑，接线为双分支
+  eprintln）；AC-05 **pass**（rust-ref 118/1 预存、mvp_harness 25/25、
+  a2r transpiled_harness 30/30，复审重跑一致）；AC-06 **pass**（daemon
+  73/73 + 复审 curl 探针 400 unknown model 原文匹配）；AC-07 **pass**
+  （ask 回归 5.9s；ash 全量 728/1、ash 135/1 预存；GUI 冒烟
+  `cargo check -p ash-server` 绿；designs/040 + for-agents.md 随分支）|
+  findings: F-1(info) frontmatter new_spec_components 将 for-agents.md
+  列为 new 而 SD-02 为 modify——模板无 modify 桶（081 判例同松），merge
+  记账时按 modify 处理；F-2(info) AC-03/AC-04 REPL 交互路径人工验证缺位
+  （非交互环境无法驱动 F3），以同缝单测 + ask 路径真跑覆盖，Q4 移交复审
+  观感确认；F-3(info) 复审期间 auto-lang master 前移，重跑全绿无漂移影响 |
+  evidence: 复审为实施同会话完成（独立性限制），判定按本基线重跑重建：
+  三套 cargo test 全量 + GUI check + 2 次 daemon 实测探针 + curl 400 探针
+  + 代码↔designs/040 逐条对照（thinking_override/cycle guard 文案/400
+  message 原文），非采信执行摘要 | next: **merge**（auto-plan-merge）。
+  3 处预存失败与本计划无关的证据：test_auto_expression_execution 与
+  spill_writes 于 fix-lang-feature-defaults worktree（无 083 改动）同日
+  同挂；registry_loads_builtins 于 auto-ai clean main 同挂。
 
 ## 10. 待澄清事项
 
