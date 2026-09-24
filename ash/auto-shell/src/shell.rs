@@ -1265,6 +1265,49 @@ impl Shell {
         result
     }
 
+    /// PLAN-082: Execute a `>` query pipeline and return its **final-stage
+    /// structured value** — records arrive as `Value::Array` of `Value::Obj`
+    /// (registry commands like `ls`/`du`), external-command output as an
+    /// array of per-line strings, plain text as a single string. This is the
+    /// "execute but don't render" sibling of the top-level `>` path: the
+    /// value is intercepted from the pipeline core *before* `format_output`.
+    pub fn execute_query(&mut self, input: &str) -> Result<auto_val::Value> {
+        let interpolated = self.interpolate_auto_vars(input.trim());
+        let expanded = self.expand_tilde(&interpolated);
+        let segments = parse_chain(&expanded);
+        if segments
+            .iter()
+            .any(|s| matches!(s.op, Some(ChainOp::And | ChainOp::Or)))
+        {
+            miette::bail!("`>` 查询暂不支持 &&/|| 逻辑链：{}", input.trim());
+        }
+        let commands: Vec<String> = segments.into_iter().map(|s| s.command).collect();
+        if commands.is_empty() {
+            return Ok(auto_val::Value::Array(auto_val::Array::new()));
+        }
+        let pipeline = self
+            .execute_pipeline_to_atom(&commands)?
+            .unwrap_or_else(AtomPipeline::empty);
+        Ok(pipeline.into_dsl_input())
+    }
+
+    /// PLAN-082: host-bridge arm of the bare `> cmd` form (`shell_run`).
+    /// Interpolates script args, executes through the normal shell path, and
+    /// routes output through the same print path as top-level `>` lines —
+    /// in-body commands print instead of silently dropping. Latches script
+    /// errors like the other script-line paths.
+    pub(crate) fn execute_host_run(&mut self, cmd: &str) {
+        let interpolated = self.interpolate_auto_vars(cmd);
+        match self.execute(&interpolated) {
+            Ok(Some(output)) => self.print_or_emit(&output),
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                self.script_had_error = true;
+            }
+        }
+    }
+
     /// Enable/disable JSON output for non-interactive script execution
     /// (Plan 007: `ash -s --json` / `ash script.ash --json`). Each command's
     /// output is serialized to a JSON line (NDJSON), since format_output
@@ -1399,6 +1442,19 @@ impl Shell {
 
     /// Execute a pipeline with Auto function support
     fn execute_pipeline_with_auto(&mut self, commands: &[String]) -> Result<Option<String>> {
+        Ok(self
+            .execute_pipeline_to_atom(commands)?
+            .map(|p| self.format_output(p)))
+    }
+
+    /// PLAN-082: the pipeline core of [`execute_pipeline_with_auto`], returning
+    /// the final-stage [`AtomPipeline`] instead of formatted text.
+    /// `execute_query` reads the structured value off this; the rendering
+    /// wrapper keeps the legacy behavior.
+    fn execute_pipeline_to_atom(
+        &mut self,
+        commands: &[String],
+    ) -> Result<Option<AtomPipeline>> {
         use crate::cmd::{auto, builtin, external};
 
         use crate::parser::quote::parse_args;
@@ -1481,7 +1537,7 @@ impl Shell {
                 pending_dsl_ops.push(op);
                 if is_last {
                     flush_dsl_ops!();
-                    return Ok(input_pipeline.map(|p| self.format_output(p)));
+                    return Ok(input_pipeline);
                 }
                 continue;
             }
@@ -1527,7 +1583,7 @@ impl Shell {
                     Ok(parsed_args) => {
                         // Auto --help generation (prints help, doesn't pipeline)
                         if parsed_args.help_requested {
-                            return Ok(Some(signature.format_help()));
+                            return Ok(Some(AtomPipeline::text(signature.format_help())));
                         }
                         let output = registered_cmd.run_atom(&parsed_args, input, self)?;
                         input_pipeline = Some(output);
@@ -1535,7 +1591,7 @@ impl Shell {
                     Err(e) => return Err(e),
                 }
                 if is_last {
-                    return Ok(input_pipeline.map(|p| self.format_output(p)));
+                    return Ok(input_pipeline);
                 }
                 continue;
             }
@@ -1562,7 +1618,7 @@ impl Shell {
                     external::spawn_external_chained(cmd, &self.current_dir, raw_stdout)?;
                 input_pipeline = Some(AtomPipeline::ExternalStream(new_stream));
                 if is_last {
-                    return Ok(input_pipeline.map(|p| self.format_output(p)));
+                    return Ok(input_pipeline);
                 }
                 continue;
             }
@@ -1614,7 +1670,7 @@ impl Shell {
 
             // If this is the last command, return the final output as text
             if is_last {
-                return Ok(input_pipeline.map(|p| self.format_output(p)));
+                return Ok(input_pipeline);
             }
         }
 
@@ -2819,8 +2875,10 @@ impl Shell {
     pub fn execute_script_content(&mut self, content: &str) -> Result<()> {
         let mut auto_block = String::new();
         let mut lines = content.lines().peekable();
-        // Plan 034 Bug 3: Track brace depth so `> cmd` inside fn/if/for
-        // bodies is rewritten to system() instead of flushing the block.
+        // Plan 034 Bug 3 lineage: brace depth tracks fn/if/for bodies so `>`
+        // forms inside bodies are rewritten into the AutoLang block instead
+        // of flushing it. PLAN-082: depth is counted from the *rewritten*
+        // lines (same braces as their originals).
         let mut brace_depth: i32 = 0;
 
         while let Some(line) = lines.next() {
@@ -2830,11 +2888,6 @@ impl Shell {
             if self.host.exit_requested() {
                 break;
             }
-
-            // ── Heredoc collection mode ──
-            // If a previous shell command contained <<MARKER, we've already
-            // extracted the marker. The loop below collects the heredoc body.
-            // (Heredocs are handled inline within the shell command section.)
 
             // Skip empty lines
             if trimmed.is_empty() {
@@ -2852,81 +2905,132 @@ impl Shell {
                 continue;
             }
 
-            // Plan 034 Bug 3: Track brace depth for non-shell lines.
-            // We count `{` and `}` in the trimmed line (rough but effective
-            // for typical AutoLang code). String literals with braces are
-            // rare in scripts and this is a heuristic, not a full parser.
-            if !trimmed.starts_with('>') {
-                let opens = trimmed.matches('{').count();
-                let closes = trimmed.matches('}').count();
-                brace_depth += opens as i32 - closes as i32;
-                if brace_depth < 0 { brace_depth = 0; }
-            }
+            // ── PLAN-082: the `>` forms ─────────────────────────────────
+            // Five shapes, all rewritten into AutoLang lines that go through
+            // the shell_query / shell_run natives (VM-side host bridge):
+            //   1. `for pat in > cmd {`        → `for pat in shell_query(...) {`
+            //   2. `var/let x = > cmd`         → `var x = shell_query(...)`
+            //   3. bare `> cmd` (any depth)    → `shell_run(...)` — prints
+            //      through the shell path (in-body commands no longer
+            //      silently drop; top-level no longer flushes the block —
+            //      ordering is preserved inside one VM program)
+            //   4. `$rec.field` interpolation inside any cmd text
+            //   5. `> { A; B; C }` blocks — statement position runs every
+            //      segment; capture positions (var/for) run the earlier
+            //      segments and take the LAST segment's records.
 
-            // Shell line: starts with >
-            if trimmed.starts_with('>') && brace_depth == 0 {
-                self.flush_auto_block(&mut auto_block)?;
-
-                let cmd = trimmed[1..].trim();
-                if cmd.is_empty() {
+            // Forms 1+5(for): `for pat in > <cmd|block> {`
+            if trimmed.starts_with("for ") {
+                if let Some((pat, cmd)) = Self::parse_for_in_gt(trimmed) {
+                    let emitted = if cmd.starts_with('{') {
+                        // Block in for-capture position: prior segments run,
+                        // the last one is the record query. The loop body's
+                        // `{` may follow the closing `}` on the same line
+                        // (consumed here) or on the next line (left to the
+                        // normal accumulate path).
+                        let (segs, tail) = Self::collect_gt_block(&cmd[1..], &mut lines);
+                        for seg in segs.iter().take(segs.len().saturating_sub(1)) {
+                            auto_block.push_str(&format!(
+                                "{}\n",
+                                Self::rewrite_shell_cmd_to_bridge(seg, "shell_run")
+                            ));
+                        }
+                        let last = segs.last().cloned().unwrap_or_default();
+                        let query =
+                            Self::rewrite_shell_cmd_to_bridge(&last, "shell_query");
+                        if tail.starts_with('{') {
+                            format!("for {} in {} {{\n", pat, query)
+                        } else {
+                            if !tail.is_empty() {
+                                eprintln!(
+                                    "ash: warning: `> {{` 块后多余文本被忽略：{}",
+                                    tail
+                                );
+                            }
+                            format!("for {} in {}\n", pat, query)
+                        }
+                    } else {
+                        let query = Self::rewrite_shell_cmd_to_bridge(&cmd, "shell_query");
+                        format!("for {} in {} {{\n", pat, query)
+                    };
+                    brace_depth += Self::count_net_braces(&emitted);
+                    auto_block.push_str(&emitted);
                     continue;
                 }
-                let cmd = self.interpolate_auto_vars(cmd);
+            }
 
-                match self.execute(&cmd) {
-                    Ok(Some(output)) => self.print_or_emit(&output),
-                    Ok(None) => {}
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        // PLAN-081 T-02: latch shell-line failures too (a
-                        // missing external used to leave the process at 0).
-                        self.script_had_error = true;
+            // Form 2+5(var): `var/let x = > <cmd|block>`
+            if let Some((keyword, var_name, cmd)) = Self::parse_capture_parts(trimmed) {
+                let emitted = if cmd.starts_with('{') {
+                    let (segs, tail) = Self::collect_gt_block(&cmd[1..], &mut lines);
+                    if !tail.is_empty() {
+                        eprintln!("ash: warning: `> {{` 块后多余文本被忽略：{}", tail);
                     }
-                }
-                continue;
-            }
-
-            // Plan 034 Bug 3: `> cmd` inside a fn/if/for body (brace_depth > 0).
-            // Rewrite it to `system(...)` and inject into the AutoLang block
-            // instead of flushing the incomplete block.
-            // Note: $var references are rewritten to AutoLang string concat
-            // (e.g. `cat $f` → system("cat " + f)) because the variable's value
-            // is only known at runtime when the loop runs, not at parse time.
-            if trimmed.starts_with('>') && brace_depth > 0 {
-                let cmd = trimmed[1..].trim();
-                if !cmd.is_empty() {
-                    let system_expr = Self::rewrite_shell_cmd_to_system(cmd);
-                    auto_block.push_str(&format!("{}\n", system_expr));
-                }
-                continue;
-            }
-
-            // Plan 303 Step 5: Assignment capture — let/var name = > cmd
-            //
-            // Two cases depending on brace_depth:
-            // - brace_depth > 0 (inside fn/if/for body): rewrite to
-            //   `var x = system("cmd")` and inject into the AutoLang block,
-            //   mirroring how bare `> cmd` is handled (Plan 034 Bug 3).
-            //   Flushing+executing separately would truncate the block body.
-            // - brace_depth == 0 (top level): execute the command now and
-            //   capture its stdout into the variable (original behavior).
-            if brace_depth > 0 {
-                if let Some((keyword, var_name, cmd)) = Self::parse_capture_parts(trimmed) {
-                    let system_expr = Self::rewrite_shell_cmd_to_system(&cmd);
-                    auto_block.push_str(&format!(
-                        "{} {} = {}\n", keyword, var_name, system_expr
+                    let mut out = String::new();
+                    for seg in segs.iter().take(segs.len().saturating_sub(1)) {
+                        out.push_str(&format!(
+                            "{}\n",
+                            Self::rewrite_shell_cmd_to_bridge(seg, "shell_run")
+                        ));
+                    }
+                    let last = segs.last().cloned().unwrap_or_default();
+                    out.push_str(&format!(
+                        "{} {} = {}\n",
+                        keyword,
+                        var_name,
+                        Self::rewrite_shell_cmd_to_bridge(&last, "shell_query")
                     ));
-                    continue;
-                }
-            } else if let Some(captured) = self.try_capture_assignment(trimmed) {
-                self.flush_auto_block(&mut auto_block)?;
-                // PLAN-081 T-02: a failing capture assignment also latches.
-                if let Err(e) = self.session_run(&captured) {
-                    eprintln!("Error: {}", e);
-                    self.script_had_error = true;
-                    self.last_exit_code = 1;
-                }
+                    out
+                } else {
+                    format!(
+                        "{} {} = {}\n",
+                        keyword,
+                        var_name,
+                        Self::rewrite_shell_cmd_to_bridge(&cmd, "shell_query")
+                    )
+                };
+                brace_depth += Self::count_net_braces(&emitted);
+                auto_block.push_str(&emitted);
                 continue;
+            }
+
+            // Forms 3+5(statement): bare `> cmd` / `> { A; B; C }`
+            if let Some(after_gt) = trimmed.strip_prefix('>') {
+                let after_gt = after_gt.trim_start();
+                let emitted = if after_gt.starts_with('{') {
+                    let (segs, tail) = Self::collect_gt_block(&after_gt[1..], &mut lines);
+                    if !tail.is_empty() {
+                        eprintln!("ash: warning: `> {{` 块后多余文本被忽略：{}", tail);
+                    }
+                    let mut out = String::new();
+                    for seg in &segs {
+                        out.push_str(&format!(
+                            "{}\n",
+                            Self::rewrite_shell_cmd_to_bridge(seg, "shell_run")
+                        ));
+                    }
+                    out
+                } else {
+                    let cmd = after_gt.trim();
+                    if cmd.is_empty() {
+                        continue;
+                    }
+                    format!(
+                        "{}\n",
+                        Self::rewrite_shell_cmd_to_bridge(cmd, "shell_run")
+                    )
+                };
+                brace_depth += Self::count_net_braces(&emitted);
+                auto_block.push_str(&emitted);
+                continue;
+            }
+
+            // ── Regular Auto line ────────────────────────────────────────
+            // Plan 034 Bug 3: Track brace depth (rough heuristic — string
+            // literals with braces are rare in scripts).
+            brace_depth += Self::count_net_braces(trimmed);
+            if brace_depth < 0 {
+                brace_depth = 0;
             }
 
             // ── Plan 304: Heredoc detection in shell/command lines ──
@@ -3082,6 +3186,9 @@ impl Shell {
         if block.trim().is_empty() {
             return Ok(());
         }
+        if std::env::var("ASH_DUMP_BLOCK").is_ok() {
+            eprintln!("--- auto_block ---\n{}------------------", block);
+        }
         // Plan 011 (MS3-B): session_run brackets the call with begin/end_run
         // so AutoLang natives (system/exit/export) can call back into Shell.
         let result = self.session_run(block);
@@ -3101,16 +3208,12 @@ impl Shell {
     // Plan 303 Step 5: Assignment capture (let x = > cmd)
     // -----------------------------------------------------------------------
 
-    /// Try to parse an assignment-capture line: `let x = > cmd` or `var x = > cmd`.
-    ///
-    /// Returns `Some(auto_code)` if the pattern matches, where `auto_code` is
-    /// an Auto `let`/`var` statement with the captured stdout as a string value.
-    /// Returns `None` if this is a regular Auto line.
     /// Parse a capture-assignment line (`var x = > cmd` / `let x = > cmd`)
-    /// into its parts: (keyword, var_name, raw_command). Unlike
-    /// `try_capture_assignment`, this does NOT execute the command — it
-    /// returns the raw command text so the caller can rewrite it (e.g. into
-    /// `system("cmd")` for injection into an AutoLang block body).
+    /// into its parts: (keyword, var_name, raw_command). PLAN-082: the
+    /// command is rewritten into a `shell_query(...)` expression by the
+    /// caller (top level and fn/if/for bodies share the one path — the old
+    /// parse-time execute-and-embed-text route was removed with
+    /// `try_capture_assignment`).
     fn parse_capture_parts(line: &str) -> Option<(&'static str, String, String)> {
         let (keyword, rest) = if let Some(r) = line.strip_prefix("let ") {
             ("let", r)
@@ -3150,26 +3253,100 @@ impl Shell {
         Some((keyword, var_name.to_string(), cmd.to_string()))
     }
 
-    /// Rewrite a shell command (from a `> cmd` line inside an AutoLang body)
-    /// into an AutoLang `system(...)` expression. `$var` references become
-    /// AutoLang string concatenation because the variable's value is only
-    /// known at runtime (loop iteration), not at parse time.
+    /// PLAN-082: net `{`/`}` balance of a line (Plan 034 Bug 3 heuristic —
+    /// string literals with braces are rare in scripts).
+    fn count_net_braces(s: &str) -> i32 {
+        s.matches('{').count() as i32 - s.matches('}').count() as i32
+    }
+
+    /// PLAN-082: parse a `for <pat> in > <cmd> {` line. `<pat>` may itself
+    /// contain spaces (`for (k, v) in > ...`); `<cmd>` runs to the loop
+    /// body's `{` (which must be the trailing brace of the line), or opens a
+    /// `> {` block when it starts with `{`. First-occurrence `" in >"`
+    /// matching — commands rarely contain that literal.
+    fn parse_for_in_gt(line: &str) -> Option<(String, String)> {
+        let rest = line.strip_prefix("for ")?;
+        let idx = rest.find(" in >")?;
+        let pat = rest[..idx].trim();
+        if pat.is_empty() {
+            return None;
+        }
+        let after = rest[idx + " in >".len()..].trim_end();
+        let cmd = after.strip_suffix('{')?.trim().to_string();
+        if cmd.is_empty() {
+            return None;
+        }
+        Some((pat.to_string(), cmd))
+    }
+
+    /// PLAN-082: collect a `> { ... }` block — `open_rest` is the text after
+    /// the opening `{`, `lines` supplies the rest. Returns the `;`/newline
+    /// separated command segments plus the text after the closing `}` on its
+    /// line (e.g. a for-loop body's `{`). Nested blocks are not allowed
+    /// (first unbalanced `}` closes); unterminated blocks warn at EOF.
+    fn collect_gt_block(
+        open_rest: &str,
+        lines: &mut std::iter::Peekable<std::str::Lines>,
+    ) -> (Vec<String>, String) {
+        let mut depth: i32 = 1;
+        let mut body = String::new();
+        let mut tail = String::new();
+        let mut pending: String = open_rest.to_string();
+        loop {
+            let mut closed = false;
+            for (i, c) in pending.char_indices() {
+                if c == '{' {
+                    depth += 1;
+                } else if c == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        body.push_str(&pending[..i]);
+                        tail = pending[i + 1..].trim().to_string();
+                        closed = true;
+                        break;
+                    }
+                }
+            }
+            if closed {
+                break;
+            }
+            body.push_str(&pending);
+            body.push('\n');
+            match lines.next() {
+                Some(l) => pending = l.to_string(),
+                None => {
+                    eprintln!("ash: warning: `> {{` 块 delimited by end-of-file");
+                    break;
+                }
+            }
+        }
+        let segments: Vec<String> = body
+            .split(|c| c == ';' || c == '\n')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        (segments, tail)
+    }
+
+    /// Rewrite a shell command (from a `>` form) into an AutoLang bridge
+    /// call expression. `$var` references become AutoLang string
+    /// concatenation because the variable's value is only known at runtime
+    /// (loop iteration), not at parse time. PLAN-082 extends the tokens to
+    /// field paths: `$d.name` → `d.name`.
     ///
-    /// Examples:
-    ///   `echo hello`        → `system("echo hello")`
-    ///   `cat $f`            → `system("cat " + f)`
-    ///   `ls $dir/$name`     → `system("ls " + dir + "/" + name)`
-    ///   `grep $pat $f`      → `system("grep " + pat + " " + f)`
-    fn rewrite_shell_cmd_to_system(cmd: &str) -> String {
+    /// Examples (callee = "shell_run" / "shell_query"):
+    ///   `echo hello`        → `shell_run("echo hello")`
+    ///   `cat $f`            → `shell_run("cat " + f)`
+    ///   `du $d.name`        → `shell_run("du " + d.name)`
+    ///   `grep $pat $f`      → `shell_run("grep " + pat + " " + f)`
+    fn rewrite_shell_cmd_to_bridge(cmd: &str, callee: &str) -> String {
         // Walk the command, splitting on $var references.
         // Literal segments are escaped and quoted; $var becomes `+ var +`.
         let chars: Vec<char> = cmd.chars().collect();
         let mut i = 0;
         let mut literal = String::new();
-        // Build a list of parts: alternating literal-strings and var-names.
-        // Then assemble the system(...) expression.
-        // We accumulate into an expression string.
-        let mut expr = String::from("system(");
+        let mut expr = String::from(callee);
+        expr.push('(');
         let mut first = true;
 
         macro_rules! flush_literal {
@@ -3198,6 +3375,18 @@ impl Shell {
                     name.push(chars[i]);
                     i += 1;
                 }
+                // PLAN-082: field paths — $d.name / $u.path.size
+                while i + 1 < chars.len()
+                    && chars[i] == '.'
+                    && (chars[i + 1].is_alphanumeric() || chars[i + 1] == '_')
+                {
+                    name.push('.');
+                    i += 1;
+                    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                        name.push(chars[i]);
+                        i += 1;
+                    }
+                }
                 if !first { expr.push_str(" + "); }
                 expr.push_str(&name);
                 first = false;
@@ -3215,80 +3404,6 @@ impl Shell {
 
         expr.push(')');
         expr
-    }
-
-    fn try_capture_assignment(&mut self, line: &str) -> Option<String> {
-        // Check for `let ` or `var ` prefix
-        let rest = if let Some(r) = line.strip_prefix("let ") {
-            r
-        } else if let Some(r) = line.strip_prefix("var ") {
-            r
-        } else {
-            return None;
-        };
-
-        // Plan 034 Bug 4: Find `=` followed by `>` with flexible whitespace.
-        // Old code used rest.find("= >") which required exact spacing.
-        // Now we scan for '=' then skip spaces and check for '>'.
-        let bytes = rest.as_bytes();
-        let mut eq_pos = None;
-        let mut gt_pos = None;
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'=' && eq_pos.is_none() {
-                eq_pos = Some(i);
-                i += 1;
-                // Skip whitespace after '='
-                while i < bytes.len() && bytes[i] == b' ' { i += 1; }
-                if i < bytes.len() && bytes[i] == b'>' {
-                    gt_pos = Some(i);
-                    break;
-                }
-                // Not a capture assignment, keep scanning for another '='
-                eq_pos = None;
-            }
-            i += 1;
-        }
-
-        let eq_pos = eq_pos?;
-        let gt_pos = gt_pos?;
-
-        let var_name = rest[..eq_pos].trim();
-
-        // Validate variable name
-        if var_name.is_empty() || var_name.chars().next()?.is_ascii_digit() {
-            return None;
-        }
-
-        // Extract the shell command after '>'
-        let cmd = rest[gt_pos + 1..].trim();
-        if cmd.is_empty() {
-            return None;
-        }
-
-        // Interpolate Auto variables in the command
-        let cmd = self.interpolate_auto_vars(cmd);
-
-        // Execute and capture stdout
-        let output = match self.execute(&cmd) {
-            Ok(Some(out)) => out,
-            Ok(None) => String::new(),
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                String::new()
-            }
-        };
-
-        // Escape the output for embedding in an Auto string literal
-        let escaped = output
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('\n', "\\n")
-            .replace('\r', "");
-
-        // Build the Auto assignment
-        let keyword = if line.starts_with("var") { "var" } else { "let" };
-        Some(format!("{} {} = \"{}\"", keyword, var_name, escaped))
     }
 
     // -----------------------------------------------------------------------

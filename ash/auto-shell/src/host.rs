@@ -169,4 +169,35 @@ impl auto_lang::host::ShellHost for ShellHostBridge {
     fn requested_exit_code(&self) -> i32 {
         self.state.lock().unwrap().exit_code
     }
+
+    /// PLAN-082: `shell_query(cmd)` bridge — run the pipeline through
+    /// [`Shell::execute_query`] and hand the final-stage structured value
+    /// (records) back to the VM. Failures degrade to an empty record array
+    /// after printing, mirroring `system()`'s error posture.
+    fn query(&self, cmd: &str) -> auto_val::Value {
+        let s = self.state.lock().unwrap();
+        // SAFETY: only non-null during session.run() on the owning thread.
+        unsafe {
+            match s.shell() {
+                Some(shell) => shell.execute_query(cmd).unwrap_or_else(|e| {
+                    eprintln!("Error: {}", e);
+                    auto_val::Value::Array(auto_val::Array::new())
+                }),
+                None => auto_val::Value::Array(auto_val::Array::new()),
+            }
+        }
+    }
+
+    /// PLAN-082: `shell_run(cmd)` bridge — execute through the shell's own
+    /// output path (interpolation + printing + error latching live in
+    /// [`Shell::execute_host_run`]).
+    fn run(&self, cmd: &str) {
+        let s = self.state.lock().unwrap();
+        // SAFETY: only non-null during session.run() on the owning thread.
+        unsafe {
+            if let Some(shell) = s.shell() {
+                shell.execute_host_run(cmd);
+            }
+        }
+    }
 }
