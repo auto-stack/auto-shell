@@ -4,8 +4,8 @@ status: drafting
 feature_name: ash 脚本与 `>` 命令的结构化互操作（for-in 消费命令记录 + `> {}` 命令块）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
-updated_at: 2026-09-24T00:00:00+08:00
-plan_revision: 1
+updated_at: 2026-09-24T12:30:00+08:00
+plan_revision: 2
 current_step: 0
 total_steps: 8
 supersedes_spec_components: []
@@ -38,7 +38,11 @@ AutoLang native，脚本预处理层把 `>` 语法糖改写到它们。
    修复当前体内静默丢弃的问题）。
 5. `> { A; B; C }` 命令块：分号/换行分段，语句位置逐段执行打印；
    表达式位置（var/for 捕获）前段照常执行、取**末段**结构化结果。
-6. 顺带修复 `du -h` 短标志被帮助占用的 bug（阻塞人类可读示例）。
+6. 顺带修复 `du` 的两个输出缺陷：`-h` 短标志被帮助占用的 bug（阻塞人类
+   可读示例），以及 **total 重复计数**（run() 把根行 `.`——已含全部内容——
+   与子目录行再次相加，total 约为实际两倍；2026-09-24 实测
+   `.`=16.08GB / 子目录和=16.08GB / total=32.17GB。该矛盾输出曾误导 AI
+   模型判其损坏并反复重试，见 PLAN-083 背景）。
 
 ### 非目标
 
@@ -238,6 +242,10 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
 - **AC-06** 兼容：`system()` 语义不变；examples 冒烟全绿；体内 `> cmd` 从静默
   变打印的输出差异逐脚本过目并记录。验证：冒烟脚本 + 人工核对清单。
 - **AC-07** `du -h` 输出人类可读大小而非帮助文本；`--help` 仍出帮助。
+- **AC-09**（rev2）du 输出自洽：`total` 行 bytes 等于根行 `.` 的 bytes（=
+  直接子项之和 + 根下直接文件），不再对子目录行重复累加。验证：真实目录
+  实跑 `ash -c "du | to_json"` 断言 total == "." 行 bytes，且 total ≈ 各
+  子目录 bytes 之和 + 根下文件（不再 ≈ 2×）。
 - **AC-08** designs/039、SKILL.md、bash-to-ash.md 更新合入，SKILL.md 无与实测
   相悖的陈述（含删除"`>` 不支持管道"过时条目）。
 
@@ -258,8 +266,10 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
 - **T-04**（auto-shell）预处理层五形态改写 + `$var.field` 插值增强 + 移除
   `try_capture_assignment` 旧路径。验证：AC-01..05 各自探针脚本。
   → AC-01..05
-- **T-05**（auto-shell）du/help 短标志冲突修复。验证：`ash -c "du -h"`、
-  `ash -c "du --help"`。→ AC-07
+- **T-05**（auto-shell）du 输出修复：help 短标志冲突（`-h`）+ total 重复
+  计数（run() 的 total 求和改为以根行为准，排除子目录行重复累加；单测覆盖
+  多层目录与空目录）。验证：`ash -c "du -h"`、`ash -c "du --help"`、
+  `ash -c "du | to_json"` 断言 total == `.` 行。→ AC-07、AC-09
 - **T-06** 示例落库：改造 examples/du-top + 新增示例 B/C + README。
   验证：三示例实跑 + `echo $?`。→ AC-01..05 载体
 - **T-07** 文档：designs/039 成稿 + SKILL.md + bash-to-ash.md。
@@ -275,6 +285,11 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
   实测锚点（probe 见会话记录）；outcome: **pass**（用户已授权范围：结构化
   for-in + 参数互调 + `> {}` 块；lazy 降级为非目标并留接口，见 §10-Q1）；
   next: **work**（/auto-plan:work 按 T-01 起步）。
+- 2026-09-24 plan_revision: 2 — 修订：T-05 从"du -h 短标志修复"扩展为
+  "du 输出修复"（并入 total 重复计数 bug，新增 AC-09）。触发源：AI 模式
+  du 工具调用失败问题的同日诊断（PLAN-083 §4）——实测发现 du 的 total 约
+  为实际两倍，是模型判定命令损坏的诱因之一。目标/验收阈值未变，无既有
+  进度作废（status 仍 drafting，未开步）。
 
 ## 10. 待澄清事项
 
