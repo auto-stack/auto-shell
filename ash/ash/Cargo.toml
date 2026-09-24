@@ -20,7 +20,7 @@ path = "src/main.rs"
 # dependencies; the module boundary (frontend/) provides the isolation the
 # old ash-tui crate used to give (Plan 071 Phase 2 fusion).
 auto-shell = { path = "../auto-shell" }
-auto-lang = { path = "../../../auto-lang/crates/auto-lang" }
+auto-lang = { path = "../../../auto-lang/crates/auto-lang", default-features = false, features = ["with-file-history"] }
 auto-val = { path = "../../../auto-lang/crates/auto-val" }
 auto-ai-client = { path = "../../../auto-ai/crates/auto-ai-client" }
 auto-ai-agent = { path = "../../../auto-ai/crates/auto-ai-agent" }

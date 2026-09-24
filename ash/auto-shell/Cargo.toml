@@ -13,7 +13,7 @@ license = "MIT"
 
 [dependencies]
 # AutoLang integration (Plan 330: paths point back to the auto-lang repo)
-auto-lang = { path = "../../../auto-lang/crates/auto-lang" }
+auto-lang = { path = "../../../auto-lang/crates/auto-lang", default-features = false, features = ["with-file-history"] }
 auto-val = { path = "../../../auto-lang/crates/auto-val" }
 
 # Plan 325: AI client for F3 AI mode (from auto-ai repo at ../../../auto-ai)
