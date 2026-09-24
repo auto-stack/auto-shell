@@ -70,19 +70,63 @@ if args == "$@" { args = "" }
 
 ## Running commands from a script
 
+Two bridges, pick by whether you want the **text** or the **records**:
+
 ```auto
-var out = system("ls | where type == file | to_json")   // returns stdout as a string
-> echo hello                                             // `> cmd` runs a command line
+var out = system("ls | where type == file | to_json")   // stdout as a STRING (bash-compat text)
+var rows = > ls | where type == file | select name      // RECORDS: Array of objects (PLAN-082+)
+> echo hello                                            // bare `> cmd`: run + print (any block depth)
 ```
 
-- Pipelines (`|`) only work **inside `system("...")`** — the bare `> $cmd` form does not
-  support pipes.
+- Bare `> cmd` **does** support pipes (v0.1.0 docs said otherwise — wrong even
+  then); it prints through ash's own renderer (tables for structured commands).
 - Unknown/delegated command names go to the OS shell. On Windows that's PowerShell: a
   `Missing name after filter keyword`-style parse error or a `sort: ... (os error 2)`
   means ash passed the name through (e.g. `filter` is **not** an ash builtin in v0.1.0 —
   use `where`; bare `sort size` reaches the system `sort.exe` — see the dot-form rule).
 - `ash agent ...` subcommands (describe-tools etc.) are **not implemented** in v0.1.0 —
   don't script against them.
+
+## Structured interop: the `>` forms (PLAN-082+, probe-verified)
+
+`>` command results are **structured records** in scripts — `ls` rows are
+`{name type size modified}`, `du` rows `{path size bytes}`. Five shapes:
+
+```auto
+// 1) iterate records
+for d in > ls | where type == dir | select name {
+    print(d.name)
+}
+
+// 2) capture the record array — fields/methods work (NOT a JSON string)
+var rows = > du | where path != total | where path != .
+if rows.len() == 0 { exit(1) }
+if rows[0].bytes.to_uint() > 1048576 { print("big: " + rows[0].path) }
+
+// 3) feed record fields into the next `>` command (mixed interpolation)
+for d in > ls | where type == dir | select name {
+    > du -h $dir/$d.name | where path != total | select path size   // prints
+}
+
+// 4) `> { A; B; C }` block — statement position runs every segment
+> { cd ../examples; ls | where type == dir | select name }
+//    capture position: earlier segments RUN (cd sticks), LAST segment's
+//    records are captured:
+var t = > { cd $dir; du | where path == total }    // t[0].bytes
+```
+
+Working notes (probe-verified):
+
+- Record fields arrive as **strings** — numeric logic needs `.to_uint()`
+  (`r.bytes.to_uint() > 1048576`), same as `from_csv` values.
+- `$rec.field.path` interpolation is rewritten to string concat; paths with
+  spaces are safe (no word splitting).
+- External (non-registry) commands in a capture yield one string per stdout
+  line, not objects.
+- `&&`/`||` are not allowed inside a `>` query pipeline; blocks don't nest
+  (first unmatched `}` closes).
+- Worked examples: `examples/du-top/`, `examples/dirdu-alert/`,
+  `examples/query-block/`.
 
 ## Structured pipeline cheat sheet (v0.1.0 verified)
 
@@ -155,12 +199,15 @@ fn main() {
     var dir = system("echo $1").trim()
     if dir.len() == 0 { dir = "." }
 
-    var rows = system("ls " + dir + " | where type == file | sort .size descending | select name size")
-    if rows.trim().len() == 0 {
+    // PLAN-082+: capture structured records instead of system() text
+    var rows = > ls $dir | where type == file | sort .size descending | select name size
+    if rows.len() == 0 {
         print("no files under " + dir)
         exit(1)
     }
-    print(rows.trim())
+    for r in rows {
+        print(r.name + "  " + r.size)
+    }
     exit(0)
 }
 main()

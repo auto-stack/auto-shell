@@ -83,8 +83,13 @@
 | bash | ash (AutoLang) |
 |------|----------------|
 | `for f in *.txt; do ...; done` | `for f in glob("*.txt") { ... }` |
+| `for f in $(ls); do ...; done` | `for f in > ls { ... }`（**结构化记录**，`f.name`/`f.size` 直接可用，PLAN-082+） |
 | `for i in $(seq 1 10); do ...; done` | `for i in range(1, 10) { ... }` |
 | `while true; do ...; done` | `while true { ... }` |
+
+bash 的 `for x in $(cmd)` 是文本分词（空格即崩）；ash 的 `for x in > cmd`
+迭代的是记录对象。字段插值互调与 `> { A; B; C }` 命令块见
+`designs/039` 与 `skills/ash-scripting`。
 
 ### 函数
 
