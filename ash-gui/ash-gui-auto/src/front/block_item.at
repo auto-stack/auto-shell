@@ -11,7 +11,7 @@ use types: Block
 // 单参展开会丢参(TS2554),不走 BlockList → App 回调链。
 use shell_store: ShellStore
 
-widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete: msg, on_toggle_collapse: msg, ai_steps_list: []str, ai_steps_styles: []str) {
+widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on_rerun: msg, on_stop: msg, on_delete_block: msg, on_toggle_collapse: msg, ai_steps_list: []str, ai_steps_styles: []str) {
     msg Msg { OpenPath(str), Rerun(str), Stop, CopyCommand(int), CopyOutput(int), ExportCsv(int), DeleteBlock(int), ToggleCollapse(int), Sort(int, int), Filter(str), RunAiStep(int), RunAllSteps(int) }
 
     // Plan 055 D5: collapsed 移到 block 数据(per-block,避免 VM 单根 state
@@ -619,7 +619,7 @@ widget BlockItem(block: Block, home: str, is_latest: bool, on_open_path: msg, on
                 }
             }
         }
-        // Plan 054 M3: 删除回调(空 handler — renderer emit on_delete 给父级)。
+        // Plan 054 M3: 删除回调(空 handler — renderer emit on_delete_block 给父级)。
         .DeleteBlock(id) -> { }
         .OpenPath(path) -> { }
     }

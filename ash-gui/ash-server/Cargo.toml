@@ -30,12 +30,11 @@ async-trait = "0.1"
 
 # 宿主桥协议:auto_lang::vm::backend_abi(cdylib 装载/事件注入 ABI)。
 # 跨仓 path 依赖锚定 D:\autostack 兄弟布局:主检出直接成立。
-auto-lang = { path = "../../../auto-lang/crates/auto-lang" }
+auto-lang = { path = "../../../auto-lang/crates/auto-lang", default-features = false, features = ["with-file-history", "ui-iced"] }
 
-# 特性统一对齐:auto-lang workspace 的图里 windows(default/std)经由
-# python/pyo3 等成员间接启用;本 workspace 缺它会令 wgpu-hal 的 dx12
-# 路径与 gpu-allocator 的 windows 类型不一致(编译期 mismatch)。直接
-# 依赖 default 特性把统一拉齐(版本对齐锁文件中的 0.58)。
+# ui-iced 会启用 wgpu-hal 的 DX12 后端。让 GUI host 与 wgpu-hal 使用相同
+# 的 Windows bindings；ash-server/Cargo.lock 同时将 gpu-allocator 对齐到 0.58，
+# 否则 DX12 类型来自不同版本的 windows/windows-core，无法互相传递。
 [target.'cfg(windows)'.dependencies]
 windows = "0.58"
 

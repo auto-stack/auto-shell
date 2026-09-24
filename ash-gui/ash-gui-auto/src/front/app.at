@@ -139,7 +139,7 @@ widget App {
                     on_open_path: .OpenPath,
                     on_rerun: .Rerun,
                     on_stop: .Stop,
-                    on_delete: .DeleteBlock,
+                    on_delete_block: .DeleteBlock,
                     on_toggle_collapse: .ToggleCollapse,
                     // Plan 063 T2: AI 建议分步(store 级数据,merged 模式
                     // renderer 构造的块不含新契约字段 —— 引擎边界,经 prop
