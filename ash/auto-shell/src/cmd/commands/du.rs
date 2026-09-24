@@ -50,8 +50,7 @@ impl Command for DuCommand {
             miette::bail!("du: cannot access '{}': No such file or directory", path_arg);
         }
 
-        let mut entries = Vec::new();
-        compute_du(&root, &root, 0, summarize, max_depth, human, &mut entries)?;
+        let (mut entries, root_bytes) = build_entries(&root, summarize, max_depth, human)?;
 
         // Sort by size descending
         entries.sort_by(|a, b| {
@@ -60,25 +59,15 @@ impl Command for DuCommand {
             sb.cmp(&sa)
         });
 
-        // Add total
-        let total_bytes: u64 = entries.iter()
-            .filter_map(|v| {
-                if let Value::Obj(obj) = v {
-                    if let Some(Value::Str(s)) = obj.get("bytes") {
-                        s.parse::<u64>().ok()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .sum();
-
+        // PLAN-082 T-05 (AC-09): total == the root row ("."), which already
+        // contains every subtree. The old sum() over ALL entries re-added the
+        // subdirectory rows on top of the root row (≈2× actual; 2026-09-24
+        // 实测 `.`=16.08GB / total=32.17GB — the contradiction that sent an
+        // AI model into a retry loop, see PLAN-083 §4).
         let mut total_obj = Obj::new();
         total_obj.set("path", Value::str("total"));
-        total_obj.set("size", Value::str(&format_size(total_bytes, human)));
-        total_obj.set("bytes", Value::Str(total_bytes.to_string().into()));
+        total_obj.set("size", Value::str(&format_size(root_bytes, human)));
+        total_obj.set("bytes", Value::Str(root_bytes.to_string().into()));
         entries.push(Value::Obj(Box::new(total_obj)));
 
         Ok(PipelineData::from_value(Value::Array(Array::from(entries))))
@@ -113,7 +102,22 @@ fn extract_size(v: &Value) -> u64 {
     }
 }
 
-/// Recursively compute disk usage.
+/// Build the per-subdirectory/root entry rows and return them together with
+/// the root's total bytes (PLAN-082 T-05: extracted so the total ==
+/// root-row invariant is unit-testable without a ShellContext).
+fn build_entries(
+    root: &Path,
+    summarize: bool,
+    max_depth: Option<usize>,
+    human: bool,
+) -> Result<(Vec<Value>, u64)> {
+    let mut entries = Vec::new();
+    let root_bytes = compute_du(root, root, 0, summarize, max_depth, human, &mut entries)?;
+    Ok((entries, root_bytes))
+}
+
+/// Recursively compute disk usage. Returns the bytes of `current`'s subtree
+/// (the root total at depth 0 — du's `total` row mirrors this value).
 fn compute_du(
     root: &Path,
     current: &Path,
@@ -122,10 +126,10 @@ fn compute_du(
     max_depth: Option<usize>,
     human: bool,
     entries: &mut Vec<Value>,
-) -> Result<()> {
+) -> Result<u64> {
     if let Some(max) = max_depth {
         if depth > max {
-            return Ok(());
+            return Ok(0);
         }
     }
 
@@ -134,7 +138,7 @@ fn compute_du(
     if current.is_dir() {
         let dir_entries = match std::fs::read_dir(current) {
             Ok(e) => e,
-            Err(_) => return Ok(()),
+            Err(_) => return Ok(0),
         };
 
         for entry in dir_entries {
@@ -178,7 +182,7 @@ fn compute_du(
         entries.push(Value::Obj(Box::new(obj)));
     }
 
-    Ok(())
+    Ok(total_bytes)
 }
 
 /// Inner helper: accumulate total bytes for a subtree.
@@ -261,5 +265,72 @@ mod tests {
         assert!(format_size(1024, true).contains("KB"));
         assert!(format_size(1048576, true).contains("MB"));
         assert!(format_size(1073741824, true).contains("GB"));
+    }
+
+    // ── PLAN-082 T-05 (AC-09): total == root row, never 2× ────────────
+
+    fn temp_tree(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ash-du-test-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub/deep")).unwrap();
+        std::fs::write(dir.join("file_a"), vec![0u8; 1000]).unwrap();
+        std::fs::write(dir.join("sub/file_b"), vec![0u8; 3000]).unwrap();
+        std::fs::write(dir.join("sub/deep/file_c"), vec![0u8; 5000]).unwrap();
+        dir
+    }
+
+    fn row_bytes(entries: &[Value], path: &str) -> u64 {
+        entries
+            .iter()
+            .find_map(|v| {
+                let obj = match v {
+                    Value::Obj(o) => o,
+                    _ => return None,
+                };
+                match (obj.get("path"), obj.get("bytes")) {
+                    (Some(Value::Str(p)), Some(Value::Str(b))) if p.as_str() == path => {
+                        b.parse::<u64>().ok()
+                    }
+                    _ => None,
+                }
+            })
+            .unwrap_or(u64::MAX)
+    }
+
+    #[test]
+    fn du_total_equals_root_row_multilevel() {
+        let dir = temp_tree("multi");
+        let (entries, root_bytes) =
+            build_entries(&dir, false, None, false).expect("build_entries");
+        // Root row "." already contains the whole subtree; the sub row is the
+        // nested files only. Old bug: total = sum(all rows) = 9000 + 8000.
+        assert_eq!(root_bytes, 9000);
+        assert_eq!(row_bytes(&entries, "."), 9000);
+        assert_eq!(row_bytes(&entries, "sub"), 8000);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn du_total_empty_dir() {
+        let dir = std::env::temp_dir().join(format!("ash-du-test-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (entries, root_bytes) =
+            build_entries(&dir, false, None, false).expect("build_entries");
+        assert_eq!(root_bytes, 0);
+        assert_eq!(row_bytes(&entries, "."), 0);
+        assert_eq!(entries.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn du_summarize_yields_only_root_row() {
+        let dir = temp_tree("sum");
+        let (entries, root_bytes) =
+            build_entries(&dir, true, None, false).expect("build_entries");
+        assert_eq!(root_bytes, 9000);
+        assert_eq!(entries.len(), 1, "summarize keeps only the root row");
+        assert_eq!(row_bytes(&entries, "."), 9000);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

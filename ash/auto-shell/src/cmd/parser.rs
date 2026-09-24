@@ -94,7 +94,13 @@ pub fn parse_args(signature: &Signature, raw_args: &[String]) -> Result<ParsedAr
 
     let mut arg_iter = raw_args.iter();
     while let Some(arg_str) = arg_iter.next() {
-        if arg_str == "--help" || arg_str == "-h" {
+        // PLAN-082 T-05 (AC-07): auto-help yields `-h` to commands that
+        // declare their own short flag for it (e.g. du -h = human-readable).
+        // `--help` always works; `-?` is the universal short fallback.
+        if arg_str == "--help"
+            || arg_str == "-?"
+            || (arg_str == "-h" && !short_aliases.contains_key(&'h'))
+        {
             parsed.help_requested = true;
             continue;
         }
@@ -210,4 +216,48 @@ pub fn parse_args(signature: &Signature, raw_args: &[String]) -> Result<ParsedAr
 
     parsed.positionals = positionals;
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PLAN-082 T-05 (AC-07): a command-declared `-h` short flag wins over
+    /// auto-help (du/ls spell human-readable as -h).
+    #[test]
+    fn help_yields_declared_h_short() {
+        let sig = Signature::new("t", "test")
+            .flag_with_short("human-readable", 'h', "human sizes");
+        let parsed = parse_args(&sig, &["-h".to_string()]).unwrap();
+        assert!(parsed.has_flag("human-readable"));
+        assert!(!parsed.help_requested);
+    }
+
+    /// Without a declared `-h`, auto-help keeps its classic meaning.
+    #[test]
+    fn help_h_fallback_without_declaration() {
+        let sig = Signature::new("t", "test").flag("verbose", "chatty");
+        let parsed = parse_args(&sig, &["-h".to_string()]).unwrap();
+        assert!(parsed.help_requested);
+    }
+
+    /// `--help` always wins, even when the command declares `-h`.
+    #[test]
+    fn help_long_form_universal() {
+        let sig = Signature::new("t", "test")
+            .flag_with_short("human-readable", 'h', "human sizes");
+        let parsed = parse_args(&sig, &["--help".to_string()]).unwrap();
+        assert!(parsed.help_requested);
+        assert!(!parsed.has_flag("human-readable"));
+    }
+
+    /// `-?` is the universal short help that never collides.
+    #[test]
+    fn help_question_mark_universal() {
+        let sig = Signature::new("t", "test")
+            .flag_with_short("human-readable", 'h', "human sizes");
+        let parsed = parse_args(&sig, &["-?".to_string()]).unwrap();
+        assert!(parsed.help_requested);
+        assert!(!parsed.has_flag("human-readable"));
+    }
 }
