@@ -1,12 +1,12 @@
 ---
 plan_id: PLAN-082
-status: drafting
+status: execution_done
 feature_name: ash 脚本与 `>` 命令的结构化互操作（for-in 消费命令记录 + `> {}` 命令块）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
-updated_at: 2026-09-24T12:30:00+08:00
+updated_at: 2026-09-24T18:40:00+08:00
 plan_revision: 2
-current_step: 0
+current_step: 8
 total_steps: 8
 supersedes_spec_components: []
 new_spec_components:
@@ -251,30 +251,30 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
 
 ## 8. 执行步骤
 
-- **T-01**（spike，跨仓）验证 VM 数据面三个前提：host shim 能把
+- **T-01** ✅（spike，跨仓）验证 VM 数据面三个前提：host shim 能把
   `Value::Array<Obj>` 压栈供 for-in 迭代；`Index`+`Dot`（`rows[0].name`）
   与 `.to_uint()` 在 host 构造的动态记录上可用。产出：探针脚本 + 结论记入
   designs/039 草稿。任一不成立 → 触发 revision（VM 侧补迭代/字段运行时）。
   验证：探针脚本实跑输出。→ AC-01/02 前置
-- **T-02**（auto-lang 仓）ShellHost `query/run` + native 1804/1805 + codegen/
+- **T-02** ✅（auto-lang 仓）ShellHost `query/run` + native 1804/1805 + codegen/
   engine 注册 + mock 单测。验证：`cargo test -p auto-lang` 相关用例绿。
   → AC-01/02/04 底座
-- **T-03**（auto-shell）`ShellHostImpl::query/run` + `execute_query`（终段
+- **T-03** ✅（auto-shell）`ShellHostImpl::query/run` + `execute_query`（终段
   Atom.value 拦截；外部命令回退策略定案并记录）。验证：临时探针
   `var x = shell_query("ls | to_json 化前的原始管道")` 直接调用断言。
   → AC-01/02
-- **T-04**（auto-shell）预处理层五形态改写 + `$var.field` 插值增强 + 移除
+- **T-04** ✅（auto-shell）预处理层五形态改写 + `$var.field` 插值增强 + 移除
   `try_capture_assignment` 旧路径。验证：AC-01..05 各自探针脚本。
   → AC-01..05
-- **T-05**（auto-shell）du 输出修复：help 短标志冲突（`-h`）+ total 重复
+- **T-05** ✅（auto-shell）du 输出修复：help 短标志冲突（`-h`）+ total 重复
   计数（run() 的 total 求和改为以根行为准，排除子目录行重复累加；单测覆盖
   多层目录与空目录）。验证：`ash -c "du -h"`、`ash -c "du --help"`、
   `ash -c "du | to_json"` 断言 total == `.` 行。→ AC-07、AC-09
-- **T-06** 示例落库：改造 examples/du-top + 新增示例 B/C + README。
+- **T-06** ✅ 示例落库：改造 examples/du-top + 新增示例 B/C + README。
   验证：三示例实跑 + `echo $?`。→ AC-01..05 载体
-- **T-07** 文档：designs/039 成稿 + SKILL.md + bash-to-ash.md。
+- **T-07** ✅ 文档：designs/039 成稿 + SKILL.md + bash-to-ash.md。
   → AC-08
-- **T-08** 回归：examples 全量冒烟 + 输出差异清单（AC-06）+ auto-lang
+- **T-08** ✅ 回归：examples 全量冒烟 + 输出差异清单（AC-06）+ auto-lang
   `cargo test`。→ AC-06
 
 依赖：T-01 → T-02 → T-03 → T-04 → T-06 → T-07/T-08；T-05 独立可并行。
@@ -303,3 +303,25 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
 - **Q3 跨仓合入节奏**：auto-lang 改动需先落其仓 master 再联动本仓 junction。
   owner: work 阶段执行者；next: T-02 提交时在计划中登记 auto-lang commit id
   （PLAN-081 判例）。
+
+- 2026-09-24 stage: work | PLAN-082:r2 | outcome: **pass** | code_commit:
+  auto-shell worktree `plan-082-dev` @ `59ff96f`（base `00c8775`，4 commits：
+  c801729 T-03/T-04 / 1ed8e3b T-05 / b40286a T-06 / 59ff96f T-07）；
+  auto-lang master @ `92ee98b8b`（T-01/T-02 原提交 d5890d64b，因 master 期间
+  被并行推进至 bdd5ee7db 而 rebase 后 ff 落入，纯文档提交无冲突；junction
+  跟进复测通过）| task_ids: T-01..T-08 全部 | evidence: ①T-01 spike 三前提
+  成立（tests/plan082_shell_query_tests 5/5 绿；两修复：根引用须裸堆 id
+  入栈 rc_push_id、codegen 须把 shell_query 标为 ObjectType::Array——否则
+  var 后 .len() 走 str.len 把 id 字符串化）；②§5.3 四例 + 三示例实跑 exit 0
+  （du-top/dirdu-alert/query-block）；③du -h 实测出人类可读表格、--help 仍
+  帮助、total==`.`行（1305638==1305638），du+parser 7 新单测绿、cmd 模块
+  434/434 绿；④回归：11 个只读示例新旧二进制逐字节同输出；synctree/
+  batch-rename 的预存失败（line-26 TypeError / 子目录盲区）经改动前主检出
+  二进制对照确认非本计划回归，唯一语义差异=体内 `>` 现打印（AC-04/06 预期，
+  mkdir 输出行可见）；⑤auto-lang 全量 5434 过/260 败——260 全部预存/环境性
+  （ui::* 231 个，pristine main 抽查同败；p656_scroll 顺序抖动单独跑双检出
+  均绿），零新增失败 | blockers: 无 | next: **review**（auto-plan-review；
+  worktree plan-082-dev 与 .wt/lang-082 组保留供复审与 merge）。
+  附:执行发现并记录未修（designs/039 §5）——du `--depth/-d` 以 flag 声明但
+  按 named 读取，`-d 2` 会把 2 当 positional；组级 junction 曾临时切至
+  .wt/lang-082/auto-lang 供 ash worktree 联编，auto-lang 落 main 后已切回。
