@@ -1,6 +1,7 @@
 ---
 plan_id: PLAN-083
-status: reviewed
+status: archived
+completion_kind: delivered
 feature_name: AI 回合提速 + 工具 schema 兜底（thinking 控制 / 命令工具真 schema / 思考流可见 / 循环纠偏 / 错误分类）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
@@ -319,6 +320,30 @@ worktree）→ 落 auto-ai main → T-07（junction 跟进后复测）。
   3 处预存失败与本计划无关的证据：test_auto_expression_execution 与
   spill_writes 于 fix-lang-feature-defaults worktree（无 083 改动）同日
   同挂；registry_loads_builtins 于 auto-ai clean main 同挂。
+- 2026-09-24 stage: merge | PLAN-083:r1 | 收据（checkpoint 逐项）:
+  - `prepared`:reviewed 基线 = worktree plan-083-dev @ `03550b3a`(base
+    `28e8796`,3 commits,依赖 auto-ai main `79ff93a`);canonical delta =
+    designs/040(git-hash f4cbbd3f)+ docs/for-agents.md(6411f96a),均已在
+    reviewed commit 内;规范载体先例 = PLAN-081 判例(其 archived 收据
+    `ledger_refreshed`:本仓无 docs/specs 与 ledger 基础设施,派生知识载体
+    即 designs/NNN + docs/for-agents.md);SD-02 按 modify 记账(F-1)。
+  - `landed`:worktree rebase onto main(d1ba094)后 --ff-only 落 main,
+    delivery commit = **`b12175e`**(无 merge commit);rebase 映射
+    907dc0b→`65d33e9`、f9f4cdb→`201c8b6`、03550b3→`b12175e`,
+    range-diff **3/3 全等**(安全重写证明);main 冒烟:ash_command_tool
+    29/29、tail_chat 11/11、thinking 2/2、designs/040 在位。
+  - `ledger_refreshed`:N/A(有据,081 同款)——本仓无 docs/specs/、无
+    ledger 服务或派生文件;canonical 载体 designs/040 + for-agents.md 已随
+    landed 上 main(b12175e)。
+  - `archived`:git mv docs/plans/083-ai-turn-latency-tool-schema.md →
+    docs/plans/archive/ + status: archived + completion_kind: delivered。
+  - `cleaned`:**完成**——ash worktree `.worktrees/plan-083-dev` + 分支
+    plan-083-dev(was b12175e)移除(wt-guard clean 前置);auto-ai worktree
+    `.worktrees/plan-083-dev` + 其分支 plan-083-dev(was 79ff93a)移除
+    (其 main `79ff93a` 已完全包含;移除前停掉占用 target 目录的 review
+    aaid 实例);两仓 `git worktree list` 均只剩主检出;组级 junction
+    `.worktrees/auto-ai`/`.worktrees/auto-lang` 保留(081 起)。
+  - outcome: **pass**(delivered);工作树与分支按 merge 收尾拆除。
 
 ## 10. 待澄清事项
 
