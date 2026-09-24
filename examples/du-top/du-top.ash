@@ -1,25 +1,27 @@
 // examples/du-top/du-top.ash
-// 目录大小排行:显示占用空间最大的 N 个子目录。
-// 展示: 结构化 pipeline + AutoLang 参数处理
+// 目录大小排行：显示当前目录下各子目录的磁盘占用，最大在前。
+// 展示: 结构化 pipeline(du 输出记录) + AutoLang 参数处理
 //
-// 用法: ash du-top.ash [目录] [显示数]
+// 用法: ash du-top.ash [目录]
+// 实测: ash v0.1.0 (2026-09-24)，du 为内置命令，输出 {path size bytes} 记录
 
 fn main() {
     var dir = system("echo $1").trim()
     if dir.len() == 0 { dir = "." }
-    var count = system("echo $2").trim()
-    if count.len() == 0 { count = "10" }
 
-    print("=== " + dir + " 下最大的 " + count + " 个子目录 ===")
-    print("")
+    // du 记录含根目录 "." 和 "total" 行，先 where 掉再取需要的字段。
+    // 排序 du 内部已按 bytes 降序完成，无需再 sort。
+    // 注意: 短标志 -h 被 du 的 help 占用(v0.1.0 实测)，人类可读要用长标志。
+    var out = system("du --human-readable " + dir + " | where path != total | where path != . | select path size | to_json")
+    if out.trim().len() == 0 {
+        print("no subdirectories under " + dir)
+        exit(1)
+    }
 
-    // ash 结构化: du 输出 → sort → head
-    // 对比 bash: du | sort -rn | head | 数值对齐很麻烦
-    var cmd = "du -s " + dir + "/*/ 2>/dev/null | sort -rn | head -n " + count
-    > $cmd
-
-    print("")
-    print("提示: ash 原生版可用 du | from_csv | sort .size | head")
+    // system() 返回 JSON 文本——结构化变换在管道里做，AutoLang 只做呈现。
+    // (AutoLang 尚无 from_json 内建，脚本侧拿到的是字符串。)
+    print(out)
+    exit(0)
 }
 
 main()

@@ -1,44 +1,43 @@
 # du-top —— 目录大小排行
 
-显示占用空间最大的 N 个子目录。展示 shell bridge + 结构化思路。
+显示当前目录下各子目录的磁盘占用，最大在前。展示结构化 pipeline。
 
 ## 运行
 
 ```bash
-# 默认当前目录,取前 10 个
+# 当前目录
 ash examples/du-top/du-top.ash
 
-# 指定目录和数量
-ash examples/du-top/du-top.ash /home 15
+# 指定目录
+ash examples/du-top/du-top.ash ash
 ```
 
 ## ash 版本亮点
 
-- 用 `du` 取数据 + AutoLang 排序,不依赖外部 `sort -rn`
-- 输出可结构化(改 `to_json` / `select` 即可变换输出形态)
-- 阈值、数量参数化,封装成可复用函数
+- `du` 是 ash 内置命令，直接输出结构化记录 `{path size bytes}`（内部已按 bytes 降序）
+- 过滤/选列在管道里完成（`where path != total`、`select path size`），不怕路径含空格
+- AutoLang 只负责参数处理和退出码，不做文本切片
 
 ## bash 对照
 
 ```bash
 # bash 需 du + sort + head 三段管道 + 文本解析
-du -s /home/* 2>/dev/null | sort -rn | head -15
+du -sh /home/*/ 2>/dev/null | sort -rh | head -15
 ```
 
 bash 的问题:
-- `du -s` 输出是文本(`大小\t路径`),必须 `sort -rn` 按数值排序
+
+- `du -sh` 输出是文本(`大小\t路径`)，必须 `sort -rh` 按数值排序
 - 路径里有空格会破坏 `du -s /home/*` 的分词
 - 想换输出格式(如只看大小、或转 JSON)要重写管道
-
-ash 的做法:
-- `du` 输出经 AutoLang 解析成结构化记录,按字段排序
-- 路径作为整体字段,不怕空格
-- 输出形态可一行切换(`select` / `to_json`)
 
 ## ash 脚本
 
 见 [du-top.ash](du-top.ash)
 
-## 依赖
+## 依赖与已知限制
 
-- ash v0.5+
+- ash v0.1.0 实测(2026-09-24)
+- du 短标志 `-h` 被帮助占用，人类可读大小需用长标志 `--human-readable`
+- `system()` 拿到的是 JSON 文本；结构化变换要在管道里做，脚本侧 AutoLang 尚无
+  from_json 内建(见 skills/ash-scripting)
