@@ -211,6 +211,29 @@ ash -c "ls" --json
 
 `ash agent describe-tools` 和 `ash agent run` 的输出格式**跟 MCP 兼容**（`tools/list` + `tools/call`）。未来 `ash agent mcp-serve`（独立 Plan）会在两者上加一层 stdio JSON-RPC 包装，让 Claude Desktop / Cursor 直接连。
 
+## AI 模式的工具参数与思考档位（Plan 083）
+
+ash 内置 AI 模式（REPL F3 对话 / `ash ask`）把 shell 命令注册为 agent 工具。
+给 Agent 侧（或自建客户端对接 aaid daemon）的两条关键契约：
+
+**工具参数形态**：每个命令工具带由命令 `Signature` 生成的 JSON-Schema
+（位置参数/flag/option 全部可见，含短标志与默认值）。推荐调用形态是
+**`{"args": ["-s", "--long-flag", "positional", ...]}`**——按命令行顺序的
+字符串数组；对象形态会被按值展开（键不回传），flag 会丢名。示例：
+
+```json
+{"tool": "du", "input": {"args": ["-h", "-d", "1"], "path": "."}}
+```
+
+**思考档位**：ash 默认对每个回合下发 `thinking_level: "off"`（zhipu 端点
+默认开深度思考，工具回合实测 42.6s → 4-6s）。环境变量
+`ASH_AI_THINKING=off|low|high|max|inherit` 可调；`inherit` 回到 provider
+默认。daemon wire 字段是 **`thinking_level`**（传 `thinking` 会被静默忽略）。
+模型思考流在 REPL/ask 中灰显可见，回合结束折叠为计数行，不影响转录。
+循环防护：同一 `(tool, args)` 连续第 3 次时注入纠偏提示（该次不执行），
+第 4 次才终止；错误提示仅连接/初始化类附 API-key footer。
+详见 [designs/040](../designs/040-ai-turn-latency-tool-schema.md)。
+
 ## 相关文档
 
 - [SKILL.md](../skills/ash-shell/SKILL.md) —— 给 Agent 读的完整技能说明
@@ -226,14 +249,15 @@ ash -c "ls" --json
 git worktree add .worktrees/plan-NNN -b plan-NNN
 ```
 
-注意：`ash/` 内的 path 依赖（auto-lang / auto-ai）按相对路径 `../../..` 解析到
-`D:/autostack/`，worktree 放在 `.worktrees/plan-NNN` 后层级多一层，解析会落到
-`.worktrees/` 下。构建前在 worktree 根建两个目录联接（junction）补齐层级：
+注意：`ash/` 内的 path 依赖（auto-lang / auto-ai）按相对路径 `../../..` 解析，
+worktree 在 `.worktrees/plan-NNN` 时会落到 `.worktrees/` 下。用**组级**
+目录联接（junction）补齐——建一次,跨计划复用（plan-081 起保留）：
 
 ```
 # Windows（Git Bash；Linux/macOS 用 ln -s）
-cmd //c "mklink /J .worktrees/plan-NNN/auto-lang D:/autostack/auto-lang"
-cmd //c "mklink /J .worktrees/plan-NNN/auto-ai  D:/autostack/auto-ai"
+cmd //c "mklink /J .worktrees/auto-lang D:/autostack/auto-lang"
+cmd //c "mklink /J .worktrees/auto-ai  D:/autostack/auto-ai"
 ```
 
-或者更简单：worktree 只作编辑区，构建与测试在主仓跑（切换分支即可）。
+跨仓改动（如 auto-ai 的 `.at` 源）需其仓自己的 worktree；依赖 worktree 同样
+放本仓 `.worktrees/` 组下，落地其仓主分支后组级 junction 自动跟进。
