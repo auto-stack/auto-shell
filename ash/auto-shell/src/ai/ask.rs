@@ -106,12 +106,7 @@ pub fn run(args: &[String], policy: ash_core::security::SecurityPolicy) -> Resul
     let signatures = Shell::new().registry().params();
     for sig in &signatures {
         if !sig.name.is_empty() {
-            let desc = if sig.description.is_empty() {
-                format!("ash command: {}", sig.name)
-            } else {
-                sig.description.clone()
-            };
-            agent.register_tool(AshCommandTool::new(sig.name.clone(), desc, tx.clone()));
+            agent.register_tool(AshCommandTool::new(sig.clone(), tx.clone()));
         }
     }
 

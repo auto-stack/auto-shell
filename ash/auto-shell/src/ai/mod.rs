@@ -290,25 +290,21 @@ fn register_ash_tools(
         if sig.name.is_empty() {
             continue;
         }
-        let desc = if sig.description.is_empty() {
-            format!("ash command: {}", sig.name)
-        } else {
-            sig.description.clone()
-        };
+        // PLAN-083 T-01: the full Signature travels with the tool so the
+        // model sees a real parameters schema (name+description alone left
+        // every command tool with the empty trait-default schema).
         // Plan 068(统一 agent):带 proposal sink 时非只读命令同名注册为
         // 提案工具 —— agent 调用不执行,产建议卡等用户审批;只读命令保持
         // 自主执行(探索能力)。None(CLI 旧路径)= 全部直接执行的旧行为。
         if let Some(sink) = proposals.clone() {
             if !is_readonly_command(&sig.name) {
-                agent.register_tool(crate::ash_command_tool::ProposeTool::new(
-                    sig.name.clone(),
-                    desc,
-                    sink,
-                ));
+                agent.register_tool(
+                    crate::ash_command_tool::ProposeTool::new(sig.clone(), sink),
+                );
                 continue;
             }
         }
-        agent.register_tool(AshCommandTool::new(sig.name.clone(), desc, tx.clone()));
+        agent.register_tool(AshCommandTool::new(sig.clone(), tx.clone()));
     }
 }
 
@@ -840,7 +836,10 @@ mod tests {
         s.clear();
         // Build a tool on the surviving shell thread and run it via a one-shot
         // runtime (mirrors how the sync REPL drives async tool calls).
-        let tool = AshCommandTool::new("pwd", "print cwd", s.shell_thread.sender());
+        let tool = AshCommandTool::new(
+            crate::cmd::Signature::new("pwd", "print cwd"),
+            s.shell_thread.sender(),
+        );
         let result = block_on_async(async {
             tool.execute(&serde_json::Value::Null).await
         });

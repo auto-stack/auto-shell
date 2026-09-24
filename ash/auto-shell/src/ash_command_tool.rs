@@ -27,6 +27,7 @@ use auto_ai_agent::{ToolError, ToolOutput};
 use serde_json::Value;
 use tokio::sync::oneshot;
 
+use crate::cmd::Signature;
 use crate::shell::Shell;
 
 /// Dangerous command patterns an Agent must never run directly. If a rebuilt
@@ -144,8 +145,13 @@ impl AshCommandShellThread {
 /// single [`AshCommandShellThread`] so they operate on the same session state
 /// (cwd, variables, history). See [`AshCommandShellThread`] for why a thread
 /// is needed.
+///
+/// The full [`Signature`] is kept so `parameters()` can generate a real
+/// JSON-Schema for the model (PLAN-083 §5.1: the trait-default empty schema
+/// left the model no way to know a command's arguments, producing no-arg
+/// call retry loops like the `du` reproduction).
 pub struct AshCommandTool {
-    name: String,
+    signature: Signature,
     description: String,
     tx: mpsc::Sender<CmdRequest>,
 }
@@ -153,14 +159,11 @@ pub struct AshCommandTool {
 impl AshCommandTool {
     /// Create a tool wrapping a single command. `tx` comes from
     /// [`AshCommandShellThread::sender`].
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        tx: mpsc::Sender<CmdRequest>,
-    ) -> Self {
+    pub fn new(signature: Signature, tx: mpsc::Sender<CmdRequest>) -> Self {
+        let description = command_description(&signature);
         Self {
-            name: name.into(),
-            description: description.into(),
+            signature,
+            description,
             tx,
         }
     }
@@ -169,15 +172,19 @@ impl AshCommandTool {
 #[async_trait::async_trait]
 impl Tool for AshCommandTool {
     fn name(&self) -> &str {
-        &self.name
+        &self.signature.name
     }
 
     fn description(&self) -> &str {
         &self.description
     }
 
+    fn parameters(&self) -> Value {
+        signature_parameters(&self.signature)
+    }
+
     async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
-        let cmd_str = json_args_to_cli(&self.name, args)?;
+        let cmd_str = json_args_to_cli(self.name(), args)?;
 
         // Refuse known-dangerous patterns before they reach the shell.
         let lower = cmd_str.to_lowercase();
@@ -212,20 +219,17 @@ impl Tool for AshCommandTool {
 /// 下一轮对话可见。用户点执行走普通命令路径,执行结果经会话上下文快照
 /// 回流(多轮闭环)。
 pub struct ProposeTool {
-    name: String,
+    signature: Signature,
     description: String,
     sink: mpsc::Sender<String>,
 }
 
 impl ProposeTool {
-    pub fn new(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        sink: mpsc::Sender<String>,
-    ) -> Self {
+    pub fn new(signature: Signature, sink: mpsc::Sender<String>) -> Self {
+        let description = command_description(&signature);
         Self {
-            name: name.into(),
-            description: description.into(),
+            signature,
+            description,
             sink,
         }
     }
@@ -234,17 +238,21 @@ impl ProposeTool {
 #[async_trait::async_trait]
 impl Tool for ProposeTool {
     fn name(&self) -> &str {
-        &self.name
+        &self.signature.name
     }
 
     fn description(&self) -> &str {
         &self.description
     }
 
+    fn parameters(&self) -> Value {
+        signature_parameters(&self.signature)
+    }
+
     async fn execute(&self, args: &Value) -> Result<ToolOutput, ToolError> {
         // Lenient conversion: the proposal card is human-reviewed in full, so
         // metacharacters are shown to the user instead of being refused.
-        let cmd_str = json_args_to_cli_lenient(&self.name, args)?;
+        let cmd_str = json_args_to_cli_lenient(self.name(), args)?;
         self.sink
             .send(cmd_str.clone())
             .map_err(|_| ToolError::Exec("proposal channel closed".into()))?;
@@ -256,6 +264,127 @@ impl Tool for ProposeTool {
             (给出操作指引/说明这条命令做什么),不要假设它已执行。"
         )))
     }
+}
+
+/// Model-facing description for a command tool: the signature description
+/// (with a fallback for empty ones), plus `extra_help` when present so the
+/// model-visible usage is no worse than the human `--help` output (PLAN-083
+/// §5.1).
+fn command_description(sig: &Signature) -> String {
+    let mut desc = if sig.description.is_empty() {
+        format!("ash command: {}", sig.name)
+    } else {
+        sig.description.clone()
+    };
+    if let Some(extra) = &sig.extra_help {
+        if !extra.is_empty() {
+            desc.push_str("\n\n");
+            desc.push_str(extra);
+        }
+    }
+    desc
+}
+
+/// Generate the tool's JSON-Schema `input` fragment from the command's
+/// [`Signature`] (PLAN-083 §5.1).
+///
+/// Shape rules:
+/// - positional argument (`!is_flag && !is_option`) → property `<name>`
+///   `{type: "string"}`; `required` ones land in the schema `required`
+///   array and their description annotates the positional order.
+/// - flag (`is_flag`) → property `<name>` `{type: "boolean"}`, description
+///   names the CLI form `--name` (or `(-s, --name)` with a short).
+/// - option (`is_option`) → property `<name>` `{type: "string"}`, described
+///   as `--name VALUE`; a default is called out when present.
+///
+/// The root description steers the model to the `{"args": [...]}` array
+/// form: `json_args_to_cli` flattens an object by *values only* (names are
+/// dropped), so named properties are documentation; the args array is the
+/// form that round-trips faithfully.
+fn signature_parameters(sig: &Signature) -> Value {
+    let mut properties = serde_json::Map::new();
+    let mut required: Vec<Value> = Vec::new();
+    let mut positional = 0usize;
+    for arg in &sig.arguments {
+        let (ty, desc) = if arg.is_flag {
+            let cli = match arg.short {
+                Some(s) => format!("(-{}, --{})", s, arg.name),
+                None => format!("--{}", arg.name),
+            };
+            let literal = match arg.short {
+                Some(s) => format!("\"-{s}\" or \"--{}\"", arg.name),
+                None => format!("\"--{}\"", arg.name),
+            };
+            (
+                "boolean",
+                format!(
+                    "Flag {cli}: {}. Pass inside the args array as {literal}.",
+                    arg.description
+                ),
+            )
+        } else if arg.is_option {
+            let cli = match arg.short {
+                Some(s) => format!("(-{}, --{})", s, arg.name),
+                None => format!("--{}", arg.name),
+            };
+            let mut desc = format!(
+                "Option {cli} VALUE: {}. Pass inside the args array as [\"--{}\", value].",
+                arg.description, arg.name
+            );
+            if let Some(default) = &arg.default {
+                desc.push_str(&format!(" Default: {default}."));
+            }
+            ("string", desc)
+        } else {
+            positional += 1;
+            let ordinal = match positional {
+                1 => "1st".to_string(),
+                2 => "2nd".to_string(),
+                3 => "3rd".to_string(),
+                n => format!("{n}th"),
+            };
+            (
+                "string",
+                format!(
+                    "{ordinal} positional argument: {}",
+                    arg.description
+                ),
+            )
+        };
+        properties.insert(
+            arg.name.clone(),
+            serde_json::json!({"type": ty, "description": desc}),
+        );
+        if arg.required {
+            required.push(Value::from(arg.name.clone()));
+        }
+    }
+    // Document the recommended args-array form alongside the named
+    // properties so either shape the model picks is at least described.
+    properties.insert(
+        "args".to_string(),
+        serde_json::json!({
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Recommended form: the command-line arguments in order, e.g. [\"--human-readable\", \".\"]. Flags and options go in as their literal CLI tokens."
+        }),
+    );
+    let mut root = serde_json::Map::new();
+    root.insert("type".to_string(), Value::from("object"));
+    root.insert(
+        "description".to_string(),
+        Value::from(format!(
+            "Arguments of the ash command '{}'. Preferred call shape: \
+             {{\"args\": [\"-s\", \"--long-flag\", \"positional\", ...]}} — \
+             values in command-line order.",
+            sig.name
+        )),
+    );
+    root.insert("properties".to_string(), Value::Object(properties));
+    if !required.is_empty() {
+        root.insert("required".to_string(), Value::Array(required));
+    }
+    Value::Object(root)
 }
 
 /// Rebuild a CLI string from the model's JSON arguments — **strict** form for
@@ -590,12 +719,116 @@ mod tests {
         );
     }
 
+    // ── schema generation from Signature (PLAN-083 T-01) ────────────────
+
+    #[test]
+    fn du_like_signature_produces_real_schema() {
+        // Mirrors the real du signature: optional positional + 3 short flags.
+        // This is the exact shape the 2026-09-24 no-args reproduction failed
+        // on (empty trait-default schema → model could not know the args).
+        let sig = Signature::new("du", "Display disk usage")
+            .optional("path", "Path to measure (default: current directory)")
+            .flag_with_short("summarize", 's', "Display only total")
+            .flag_with_short("human-readable", 'h', "Print sizes in KB/MB/GB")
+            .flag_with_short("depth", 'd', "Max display depth");
+        let tool = AshCommandTool::new(sig, {
+            let (tx, _rx) = mpsc::channel();
+            tx
+        });
+
+        let schema = tool.parameters();
+        let props = schema.get("properties").unwrap();
+        // All declared args plus the recommended args-array form.
+        for key in ["path", "summarize", "human-readable", "depth", "args"] {
+            assert!(props.get(key).is_some(), "property '{key}' missing");
+        }
+        // No required array: du has only an optional positional.
+        assert!(schema.get("required").is_none());
+        // Positional order is annotated.
+        let path_desc = props["path"]["description"].as_str().unwrap();
+        assert!(
+            path_desc.contains("1st positional"),
+            "path should be annotated as 1st positional: {path_desc}"
+        );
+        // Flags carry their CLI form incl. short, and the args-array form.
+        let hr = props["human-readable"]["description"].as_str().unwrap();
+        assert!(hr.contains("(-h, --human-readable)"), "got: {hr}");
+        assert!(hr.contains("\"-h\""), "got: {hr}");
+        // Flags are booleans, positionals/options strings.
+        assert_eq!(props["human-readable"]["type"], "boolean");
+        assert_eq!(props["path"]["type"], "string");
+        // Root steers toward the args array.
+        let root_desc = schema["description"].as_str().unwrap();
+        assert!(root_desc.contains("args"), "got: {root_desc}");
+        assert_eq!(tool.name(), "du");
+    }
+
+    #[test]
+    fn required_positional_lands_in_required_array_and_option_describes_default() {
+        let sig = Signature::new("fake", "A fake command")
+            .required("src", "Source path")
+            .optional_default("dst", "./out", "Destination path")
+            .flag("verbose", "Chatty output")
+            .option_with_short("level", 'l', "Compression level");
+        let schema = signature_parameters(&sig);
+        let props = schema.get("properties").unwrap();
+
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(required, ["src"], "only the required positional listed");
+
+        let dst = props["dst"]["description"].as_str().unwrap();
+        assert!(dst.contains("2nd positional"), "got: {dst}");
+        let level = props["level"]["description"].as_str().unwrap();
+        assert!(level.contains("(-l, --level) VALUE"), "got: {level}");
+        assert!(level.contains("[\"--level\", value]"), "got: {level}");
+        // A flag with no short shows only the long form.
+        let verbose = props["verbose"]["description"].as_str().unwrap();
+        assert!(verbose.contains("--verbose"), "got: {verbose}");
+        assert!(!verbose.contains("("), "no short parens expected: {verbose}");
+    }
+
+    #[test]
+    fn description_includes_extra_help_and_falls_back_for_empty() {
+        let mut sig = Signature::new("du", "")
+            .optional("path", "Path to measure")
+            .extra_help("Sizes are per-subdirectory.");
+        assert_eq!(
+            command_description(&sig),
+            "ash command: du\n\nSizes are per-subdirectory."
+        );
+        sig.description = "Display disk usage".into();
+        assert_eq!(
+            command_description(&sig),
+            "Display disk usage\n\nSizes are per-subdirectory."
+        );
+        sig.extra_help = None;
+        assert_eq!(command_description(&sig), "Display disk usage");
+    }
+
+    #[test]
+    fn empty_signature_still_documents_args_array_form() {
+        let schema = signature_parameters(&Signature::new("pwd", "print cwd"));
+        let props = schema.get("properties").unwrap();
+        assert_eq!(
+            props.as_object().unwrap().len(),
+            1,
+            "only the args guidance property"
+        );
+        assert!(props.get("args").is_some());
+        assert!(schema.get("required").is_none());
+    }
+
     // ── Tool execution via the dedicated thread ────────────────────────
 
     /// Helper: start a thread + build a tool on it.
     fn tool(name: &str, desc: &str) -> (AshCommandShellThread, AshCommandTool) {
         let thread = AshCommandShellThread::start();
-        let tool = AshCommandTool::new(name, desc, thread.sender());
+        let tool = AshCommandTool::new(Signature::new(name, desc), thread.sender());
         (thread, tool)
     }
 
@@ -618,7 +851,10 @@ mod tests {
         let _ = tool.execute(&json!({"args": [tmp_str.clone()]})).await.unwrap();
         // ...then pwd must reflect it (state survived across calls).
         // We need a pwd tool sharing the SAME thread (same Shell).
-        let pwd_tool = AshCommandTool::new("pwd", "print cwd", tool.tx_clone_for_test());
+        let pwd_tool = AshCommandTool::new(
+            Signature::new("pwd", "print cwd"),
+            tool.tx_clone_for_test(),
+        );
         let pwd = pwd_tool.execute(&Value::Null).await.unwrap();
 
         // Normalize both sides for comparison: lowercase, forward slashes,
@@ -655,7 +891,7 @@ mod tests {
             drop(r);
             t
         };
-        let tool = AshCommandTool::new("pwd", "print cwd", orphan_tx);
+        let tool = AshCommandTool::new(Signature::new("pwd", "print cwd"), orphan_tx);
         let result = tool.execute(&Value::Null).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("shell thread"));
@@ -736,7 +972,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let tool = AshCommandTool::new("pwd", "print cwd", thread.sender());
+        let tool = AshCommandTool::new(Signature::new("pwd", "print cwd"), thread.sender());
         let result = tool.execute(&Value::Null).await;
         assert!(
             result.is_err(),
