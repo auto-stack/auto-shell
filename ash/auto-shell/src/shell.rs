@@ -658,6 +658,15 @@ impl Shell {
         self.script_had_error
     }
 
+    /// PLAN-082 F2 follow-up: reset per-script bookkeeping (the error latch
+    /// and a pending `exit(code)` from a previous script) so REPL-driven
+    /// script runs — the F2 AutoScript editor — start clean. File mode never
+    /// reuses this: it exits the process per script instead.
+    pub fn reset_script_state(&mut self) {
+        self.script_had_error = false;
+        self.host.reset_exit_state();
+    }
+
     /// Plan 008: Classify whether a command name will resolve to an external
     /// process (i.e. not a registry command, legacy builtin, or Auto function).
     /// Used by the security policy to decide if `--no-exec` / `--no-network`
@@ -6015,3 +6024,36 @@ mod tests {
 }
 
 
+
+    // ---- PLAN-082 F2 follow-up: REPL-driven script runs (AutoScript editor) ----
+
+    #[test]
+    fn repl_script_runs_reset_state_between_runs() {
+        // Simulates the F2 AutoScript editor's repeated runs: each execution
+        // is reset_script_state() + execute_script_content(). A pending
+        // exit() and an error latch from a previous run must not leak into
+        // the next one.
+        let mut shell = Shell::new();
+
+        // Run 1: exit(3) — leaves a pending exit request.
+        let _ = shell.execute_script_content("exit(3)");
+        assert!(shell.script_exit_requested());
+        assert_eq!(shell.script_exit_code(), 3);
+
+        // Run 2: top-level `>` form works (the F2 regression the fix targets:
+        // this content used to reach the AutoLang parser raw and fail).
+        shell.reset_script_state();
+        assert!(!shell.script_exit_requested(), "reset must clear the pending exit — the script loop checks it before every line");
+        let script = "for d in > ls | where type == dir | select name {\n    print(d.name)\n}\nexit(0)";
+        let _ = shell.execute_script_content(script);
+        assert!(!shell.script_had_error(), "five-form script must run clean");
+        assert!(shell.script_exit_requested(), "exit(0) honored");
+        assert_eq!(shell.script_exit_code(), 0);
+
+        // Run 3: a failing command latches the error; reset clears it.
+        shell.reset_script_state();
+        let _ = shell.execute_script_content("> no-such-command-xyz\nprint(\"done\")");
+        assert!(shell.script_had_error(), "unknown command must latch");
+        shell.reset_script_state();
+        assert!(!shell.script_had_error());
+    }

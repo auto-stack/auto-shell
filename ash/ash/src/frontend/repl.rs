@@ -303,7 +303,12 @@ impl Repl {
         match crate::editor_overlay::run_editor("", "▌# AutoScript") {
             crate::editor_overlay::EditorOutcome::Run(text) => {
                 self.commit_script_echo("▌# AutoScript", &text, false);
-                let _ = self.execute_with_header(&text);
+                // PLAN-082 F2 follow-up: the AutoScript editor IS script mode —
+                // route through the preprocessing layer (`execute_script_content`)
+                // so the `>` five forms and top-level statements work here too,
+                // instead of the single-command path that the AutoLang parser
+                // rejects (`Expected term, got Gt`).
+                let _ = self.execute_script_with_header(&text);
                 self.after_editor_execute();
             }
             crate::editor_overlay::EditorOutcome::Cancelled(text) => {
@@ -786,6 +791,48 @@ impl Repl {
                 _ => println!("  已取消"),
             }
         }
+    }
+
+    /// PLAN-082 F2 follow-up: run AutoScript-editor content through the
+    /// script preprocessing layer (`execute_script_content`) — the `>` five
+    /// forms, top-level statements, and heredocs live there. Mirrors
+    /// [`Self::execute_with_header`]'s timing/failure-marker conventions;
+    /// command output prints from within the script path (print_or_emit),
+    /// so there is no returned snippet. Repeated runs reset the per-script
+    /// bookkeeping first (error latch + pending `exit`) — file mode exits the
+    /// process per script instead of reusing this.
+    fn execute_script_with_header(&mut self, content: &str) -> i32 {
+        let start = std::time::Instant::now();
+        self.shell.reset_script_state();
+        let result = self.shell.execute_script_content(content);
+        let elapsed = start.elapsed();
+        // Exit code contract mirrors main.rs's script mode: honor `exit(code)`,
+        // then the error latch, then the shell's last code.
+        let exit_code = match &result {
+            Ok(()) => {
+                if self.shell.script_exit_requested() {
+                    self.shell.script_exit_code()
+                } else if self.shell.script_had_error() {
+                    1
+                } else {
+                    self.shell.last_exit_code()
+                }
+            }
+            Err(_) => {
+                let code = self.shell.last_exit_code();
+                if code != 0 { code } else { 1 }
+            }
+        };
+        if let Err(e) = &result {
+            eprintln!("Error: {}", e);
+        }
+        let term_width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(0);
+        if let Some(status) =
+            crate::block_header::render_failure_status(exit_code, elapsed, term_width)
+        {
+            println!("{}", status);
+        }
+        exit_code
     }
 
     /// Plan 037 M3: execute a command and print its output, prefixed by a

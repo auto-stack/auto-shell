@@ -108,6 +108,15 @@ impl ShellHostImpl {
     pub fn exit_code(&self) -> i32 {
         self.state.lock().unwrap().exit_code
     }
+
+    /// PLAN-082 F2 follow-up: clear `exit()` bookkeeping between
+    /// REPL-driven script runs (`reset_script_state`) — the file-mode caller
+    /// exits the process instead of reusing the host.
+    pub fn reset_exit_state(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.exit_requested = false;
+        s.exit_code = 0;
+    }
 }
 
 /// The Send+Sync bridge stored on the VM. Forwards to the shared state.
