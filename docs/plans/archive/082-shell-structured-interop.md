@@ -4,7 +4,7 @@ status: archived
 feature_name: ash 脚本与 `>` 命令的结构化互操作（for-in 消费命令记录 + `> {}` 命令块）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
-updated_at: 2026-09-25T09:40:00+08:00
+updated_at: 2026-09-25T12:10:00+08:00
 plan_revision: 2
 current_step: 8
 total_steps: 8
@@ -377,3 +377,36 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
     完全包含)移除;auto-down detached 依赖快照 worktree 移除;组目录
     `.wt/lang-082/` 删除;`.worktrees/` 组级 junction(auto-lang/auto-ai)按
     083 判例保留。merge 全链收官:delivered。
+
+- 2026-09-25 stage: follow-up | PLAN-082:r2 | post-archive 补记——交付后同会话三笔
+  follow-up 落 main（均在工作区流程内完成，逐项记实）:
+  1. **顶层脚本形态示例化**（main `3ad6347`）——du-top 改为无 `fn main` 的顶层
+     形态（顶层语句即脚本体，bash 风格）；SKILL.md Skeleton 章节改双形态并列
+     （顶层 + fn main 包装），`exit(code)` 纪律两形态不变。验证：顶层语句本就是
+     预处理层一等公民（PLAN-082 探针多为顶层脚本），顶层版 du-top 三连跑稳定
+     （表格 12KB/exit 0），$1 实参/无参/坏路径行为与 fn main 版一致。中途一次
+     空输出经复跑 3/3 排除（一次性抖动，非脚本问题）。
+  2. **F2 AutoScript 编辑器五形态支持**（main `48b8ac5`，fix-f2-autoscript
+     worktree 全流程：build+单测+套件+ff-only 落 main+wt-guard clean 移除）——
+     原为 PLAN-082 §1 非目标（"REPL 交互态的 `>` 语法"），用户 F2 实测仍报
+     `Expected term, got Gt` 后授权修复。根因：F2 Run 分支走
+     `execute_with_header`→`shell.execute` 直送 execute_inner，不经
+     `execute_script_content` 预处理层。修复：Run 分支改调 repl.rs 新方法
+     `execute_script_with_header`（reset_script_state → execute_script_content
+     → exit 映射沿 main.rs 脚本契约 → render_failure_status 标记）；Shell/
+     ShellHostImpl 新增 `reset_script_state`/`reset_exit_state`（连续运行清
+     错误闩锁+遗留 exit 请求，防上个脚本 exit 使下个脚本首行中断）；exit(code)
+     反映到失败标记不杀 REPL；Ctrl+O 命令编辑器维持原路径。单测
+     `repl_script_runs_reset_state_between_runs` 锁三连跑序列；套件 736+136 绿
+     （within_limit_freezes 首跑抖动次跑过=tail_cmd 家族；test_auto_
+     expression_execution 为本计划复审已证预存失败）。**注意**：用户运行中的
+     TUI 锁 ash.exe 时 main 重链接 os error 5，退出 TUI 重编后生效。
+  3. **Cargo.lock 刷新与跨会话竞态插曲**（main `12f71d8`）——merge 冒烟在 main
+     构建时随 auto-lang master 前进（Plan 701/017-018 等）生成的锁刷新单独
+     提交。插曲：提交消息经 `/tmp/msg.txt` 中转 amend 时与另一并行会话发生
+     共享临时文件竞态（对方在 write 与 amend 之间覆盖同名文件），把 plan011
+     的提交说明误贴到本提交（内容自始仅 Cargo.lock+81，无损）；二次 amend
+     修正并在消息内注明。**教训**：跨会话 git 消息中转禁用固定名 /tmp 文件，
+     改唯一文件名或 -m 直传。另：期间 .git/index.lock 被用户 TUI 的 git 监视
+     进程瞬时持有，重试即过，无残留。
+  本会话非仓库产物：auto-shell 记忆三文件同步至 delivered+F2 已修终态。
