@@ -1,10 +1,10 @@
 ---
 plan_id: PLAN-082
-status: reviewed
+status: archived
 feature_name: ash 脚本与 `>` 命令的结构化互操作（for-in 消费命令记录 + `> {}` 命令块）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
-updated_at: 2026-09-25T09:20:00+08:00
+updated_at: 2026-09-25T09:40:00+08:00
 plan_revision: 2
 current_step: 8
 total_steps: 8
@@ -12,6 +12,7 @@ supersedes_spec_components: []
 new_spec_components:
   - designs/039-shell-structured-interop.md
   - skills/ash-scripting/SKILL.md
+  - docs/bash-to-ash.md
 touched_goals: []
 ---
 
@@ -350,3 +351,23 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
   expression_execution（预存）两处非回归；auto-lang 全量 5434/260 预存
   （pristine 抽查同败）；scoped：plan082 5/5、du+parser 7/7、cmd 434/434 |
   next: **merge**（用户已授权连续执行）。
+
+- 2026-09-25 stage: merge | PLAN-082:r2 | 收据（checkpoint 逐项）:
+  - `prepared`:reviewed 基线 = worktree plan-082-dev @ `59ff96fd`（r2 review
+    pass）；canonical delta = designs/039（新增）+ skills/ash-scripting/SKILL.md
+    + docs/bash-to-ash.md（SD-01..03，F-R2 补正 frontmatter 后三者齐列），
+    均已在 reviewed 提交内；规范载体先例 = PLAN-081 判例（本仓无 docs/specs/，
+    designs/+技能文档为契约）；delivery 无需额外文档提交 → reviewed tip 即
+    delivery 候选。
+  - `landed`:worktree rebase onto main（main 仅多两个计划簿记提交，零交集）
+    后 `--ff-only` 落 main，delivery commit = **`064f4d8`**（无 merge commit）；
+    rebase 映射 c801729→`fdd1ca8`、1ed8e3b→`fcef2ef`、b40286a→`e35d4af`、
+    59ff96f→`064f4d8`，range-diff **4/4 全等**（安全重写证明）；main 冒烟：
+    ac01 for-in 结构化 ✓、du -h 人类可读 ✓、du|to_json total==`.`（15==15）✓、
+    query-block 示例 total bytes 106894 ✓。
+  - `ledger_refreshed`:N/A 有据——PLAN-081/083 判例（本仓无 specs/ledger
+    体系，designs/039+SKILL.md+bash-to-ash.md 即载体）。
+  - `archived`:git mv → `docs/plans/archive/082-shell-structured-interop.md`，
+    status: archived，completion_kind: **delivered**。
+  - `cleaned`:随后执行（ash worktree `.worktrees/plan-082-dev` + 分支 +
+    auto-lang 组 `.wt/lang-082/{auto-lang,auto-down}`；junction 组级保留）。
