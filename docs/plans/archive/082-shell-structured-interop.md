@@ -371,3 +371,9 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
     status: archived，completion_kind: **delivered**。
   - `cleaned`:随后执行（ash worktree `.worktrees/plan-082-dev` + 分支 +
     auto-lang 组 `.wt/lang-082/{auto-lang,auto-down}`；junction 组级保留）。
+  - `cleaned`(补记):**完成**——ash worktree `.worktrees/plan-082-dev` + 分支
+    plan-082-dev(was 064f4d8)移除(wt-guard clean 前置);auto-lang worktree
+    `.wt/lang-082/auto-lang` + 分支 plan-082-dev(was 92ee98b8b,已被 master
+    完全包含)移除;auto-down detached 依赖快照 worktree 移除;组目录
+    `.wt/lang-082/` 删除;`.worktrees/` 组级 junction(auto-lang/auto-ai)按
+    083 判例保留。merge 全链收官:delivered。
