@@ -10,9 +10,18 @@ can't do: variables, branching, loops, functions, and exit codes. Everything bel
 probe-verified against **ash v0.1.0** (2026-09-11 build); where the `examples/` folder or
 older docs disagree, this skill wins.
 
-## Skeleton (always this shape)
+## Skeleton (two valid shapes)
 
 ```auto
+// bash-like top-level script — the file body IS the script (no fn needed)
+var dir = system("echo $1").trim()
+if dir.len() == 0 { dir = "." }
+... statements ...
+exit(0)              // ALWAYS end with an explicit exit(code)
+```
+
+```auto
+// wrapped form — use when you want reusable functions / structured exits
 // comments with //
 fn main() {
     ... statements ...
