@@ -1,10 +1,10 @@
 ---
 plan_id: PLAN-082
-status: execution_done
+status: reviewed
 feature_name: ash 脚本与 `>` 命令的结构化互操作（for-in 消费命令记录 + `> {}` 命令块）
 author: [agent]
 created_at: 2026-09-24T00:00:00+08:00
-updated_at: 2026-09-24T18:40:00+08:00
+updated_at: 2026-09-25T09:20:00+08:00
 plan_revision: 2
 current_step: 8
 total_steps: 8
@@ -325,3 +325,28 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
   附:执行发现并记录未修（designs/039 §5）——du `--depth/-d` 以 flag 声明但
   按 named 读取，`-d 2` 会把 2 当 positional；组级 junction 曾临时切至
   .wt/lang-082/auto-lang 供 ash worktree 联编，auto-lang 落 main 后已切回。
+
+- 2026-09-25 stage: review | PLAN-082:r2 | outcome: **pass** | reviewed_commit:
+  auto-shell worktree plan-082-dev @ `59ff96fd8d1a0f5ab5cc986be49515fb180089be`
+  （4 commits：c801729/1ed8e3b/b40286a/59ff96f，worktree 干净）|
+  base_commit: `00c8775`（main 现处 01eeff2 仅多计划簿记提交）|
+  dependency_revisions: auto-lang master `92ee98b8bcc0`（rebase 自 d5890d64b，
+  在 master 祖先链）| spec_inputs: designs/039（新增）、skills/ash-scripting/
+  SKILL.md、docs/bash-to-ash.md（SD-01..03）| acceptance_results: AC-01..09
+  全 pass——复审在实现同会话进行，已声明限制并全部重跑重建证据：
+  AC-01 `alpha;beta;gamma;`；AC-02 `alpha|3`；AC-03 循环体内捕获 found=2
+  （ASH_DUMP_BLOCK 核对改写产物与设计一致；首跑 0 系探针目录时序错误非代码
+  问题）；AC-04 fn 体内表格 alpha/beta/gamma 三行；AC-05 语句位块 x1/x2 +
+  捕获位块 T=1；AC-06 system() SYSTEM_OK + 11 只读示例新旧二进制逐字节同
+  输出 + synctree/batch-rename 预存失败经改动前主检出二进制对照相同；
+  AC-07 du -h 人类可读表格/--help 帮助/-? 兜底；AC-09 du|to_json 实值断言
+  total==`.`（15==15，deep 10+根文件 5 自洽）| findings: F-R1(test_auto_
+  expression_execution 预存失败——裸堆 id 渲染 `<obj#4000000>`，与 T-01
+  发现同族，干净 main 同败，非本计划范围)；F-R2(计划 frontmatter
+  new_spec_components 漏列 docs/bash-to-ash.md——SD 表权威且完整，merge 时
+  一并补正)；F-R3(du --depth flag/named 错配已登记 designs/039 §5)——均
+  non-blocking | evidence: workspace cargo test 871 例 → 735+136 绿 +
+  spill_writes（PLAN-083 收据已载环境抖动，本轮转绿）+ test_auto_
+  expression_execution（预存）两处非回归；auto-lang 全量 5434/260 预存
+  （pristine 抽查同败）；scoped：plan082 5/5、du+parser 7/7、cmd 434/434 |
+  next: **merge**（用户已授权连续执行）。
