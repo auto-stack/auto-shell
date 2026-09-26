@@ -410,3 +410,13 @@ var t = > { cd $dir; du | where path == total }   // t = [{path:"total",...}]
      改唯一文件名或 -m 直传。另：期间 .git/index.lock 被用户 TUI 的 git 监视
      进程瞬时持有，重试即过，无残留。
   本会话非仓库产物：auto-shell 记忆三文件同步至 delivered+F2 已修终态。
+  4. **F2 编辑器粘贴批量化**（main `cf3e42f`，fix-f2-paste worktree 全流程）——
+     用户报"文件模式能跑的脚本 F2 提交后卡住"。甄别链：文件模式 3.4s ✓、
+     无头直调 F2 方法 5s ✓（ASH_TRACE_F2 临时插桩,已还原）、静态审查无阻塞点、
+     winpty/SendKeys 真控制台驱动复现：**大段多行粘贴在编辑器消费输入时中途
+     停滞（CPU 归零）**,一行小脚本对照全链通过——根因是编辑器循环**逐事件全量
+     重绘**（粘贴=数百按键事件突发×每事件一帧 ratatui 全绘）。修复：提
+     apply_key + poll(0) 批量排空、每批一绘（帧日志验证整词批渲染）；套件绿
+     （spill_writes 两连挂经隔离双检出验证为既知顺序抖动）。驱动环境备注：
+     conhost 输入缓冲丢弃超长粘贴尾部系自动化工具限制,用户终端（ConPTY 流控）
+     不受此限。main exe 已重编生效。
