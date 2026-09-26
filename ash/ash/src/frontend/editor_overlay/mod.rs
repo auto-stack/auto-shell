@@ -25,7 +25,7 @@ mod view;
 pub use view::render_script_block;
 
 use ratatui_crossterm::crossterm::cursor;
-use ratatui_crossterm::crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui_crossterm::crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui_crossterm::crossterm::execute;
 use ratatui_textarea::{CursorMove, TextArea};
 use std::io;
@@ -127,6 +127,43 @@ pub fn run_editor(prefill: &str, mode_hint: &str) -> EditorOutcome {
     }
 }
 
+/// Apply one key event to the textarea; `Some(outcome)` when the event
+/// terminates the editor session (Submit/Escape/ExitThen).
+fn apply_key(textarea: &mut TextArea<'_>, key: KeyEvent) -> Option<EditorOutcome> {
+    if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        return None;
+    }
+    match route_key(key.code, key.modifiers) {
+        KeyAction::Submit => {
+            let text = textarea.lines().join("\n");
+            // Empty buffer + Ctrl+Enter: nothing to run — plain exit,
+            // no empty box echo, no empty command (finish-plan finding ②).
+            Some(if text.trim().is_empty() {
+                EditorOutcome::Exit
+            } else {
+                EditorOutcome::Run(text)
+            })
+        }
+        KeyAction::ExitThen(prefix) => Some(EditorOutcome::ExitThen(prefix)),
+        KeyAction::Escape => {
+            let text = textarea.lines().join("\n");
+            Some(if text.trim().is_empty() {
+                EditorOutcome::Exit
+            } else {
+                EditorOutcome::Cancelled(text)
+            })
+        }
+        KeyAction::Newline => {
+            textarea.insert_newline();
+            None
+        }
+        KeyAction::Edit => {
+            textarea.input(key);
+            None
+        }
+    }
+}
+
 fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome> {
     // Plan 073: the modal rides the unified tail lease (acquire → draw →
     // begin_freeze → Drop). Semantics identical to the old term.rs pair.
@@ -141,7 +178,7 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
         ratatui_core::style::Color::DarkGray,
     ));
 
-    let outcome = loop {
+    let outcome = 'editor: loop {
         let chunk = view::draw(lease.terminal(), &mut textarea, mode_hint, HINTS)?;
         // Hardware cursor: OFF by default. The textarea draws its own block
         // cursor — a second hardware cursor shows up as the offset underline
@@ -167,32 +204,23 @@ fn run_editor_inner(prefill: &str, mode_hint: &str) -> io::Result<EditorOutcome>
         let Event::Key(key) = read()? else {
             continue;
         };
-        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-            continue;
+        if let Some(out) = apply_key(&mut textarea, key) {
+            break 'editor out;
         }
-        match route_key(key.code, key.modifiers) {
-            KeyAction::Submit => {
-                let text = textarea.lines().join("\n");
-                // Empty buffer + Ctrl+Enter: nothing to run — plain exit,
-                // no empty box echo, no empty command (finish-plan finding ②).
-                break if text.trim().is_empty() {
-                    EditorOutcome::Exit
-                } else {
-                    EditorOutcome::Run(text)
-                };
-            }
-            KeyAction::ExitThen(prefix) => break EditorOutcome::ExitThen(prefix),
-            KeyAction::Escape => {
-                let text = textarea.lines().join("\n");
-                break if text.trim().is_empty() {
-                    EditorOutcome::Exit
-                } else {
-                    EditorOutcome::Cancelled(text)
-                };
-            }
-            KeyAction::Newline => textarea.insert_newline(),
-            KeyAction::Edit => {
-                textarea.input(key);
+        // PLAN-082 F2 paste fix: a clipboard paste arrives as a burst of
+        // hundreds of key events. The old per-event full redraw stalled the
+        // loop mid-burst in a real console (SendKeys repro: CPU frozen at
+        // zero with the tail of the paste still queued — the editor never
+        // reached the submit). Drain the remaining pending events in one
+        // batch and redraw once per batch instead of once per character.
+        while poll(std::time::Duration::from_millis(0))? {
+            match read()? {
+                Event::Key(k) => {
+                    if let Some(out) = apply_key(&mut textarea, k) {
+                        break 'editor out;
+                    }
+                }
+                _ => {}
             }
         }
     };
